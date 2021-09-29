@@ -1,35 +1,6 @@
-#![crate_name = "ka_ching"]
-#![crate_type = "lib"]
-
-//! # ka-ching
+//! # Drivers
 //!
-//! ka-ching TODO:
-//!
-//! ## Get started
-//!
-//! First of you need to add **ka-ching** to your project dependencies:
-//!
-//! ```toml
-//! ka-ching = "0.7.0"
-//! ```
-//!
-//! TODO: features and protocols
-//!
-//! ## Usage
-//!
-//! Here is a basic usage example:
-//!
-//! ```rust
-//! ```
-//!
-
-#![doc(html_playground_url = "https://play.rust-lang.org")]
-#![doc(
-    html_favicon_url = "https://raw.githubusercontent.com/veeso/ka-ching/main/assets/images/cargo/ka-ching-128.png"
-)]
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/veeso/ka-ching/main/assets/images/cargo/ka-ching-512.png"
-)]
+//! This module contains the driver implementation for a remote file system based on a certain protocol
 
 /**
  * MIT License
@@ -54,19 +25,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-// -- crates
-extern crate chrono;
-#[macro_use]
-extern crate log;
-#[cfg(target_family = "windows")]
-extern crate path_slash;
-extern crate thiserror;
-#[cfg(target_family = "unix")]
-extern crate users;
-extern crate wildmatch;
 
-// -- export
-pub use fs::{Directory, Entry, File};
-// -- modules
-pub mod fs;
-mod utils;
+// -- drivers
+#[cfg(feature = "ssh")]
+pub mod ssh;

@@ -1,35 +1,6 @@
-#![crate_name = "ka_ching"]
-#![crate_type = "lib"]
-
-//! # ka-ching
+//! ## SSH
 //!
-//! ka-ching TODO:
-//!
-//! ## Get started
-//!
-//! First of you need to add **ka-ching** to your project dependencies:
-//!
-//! ```toml
-//! ka-ching = "0.7.0"
-//! ```
-//!
-//! TODO: features and protocols
-//!
-//! ## Usage
-//!
-//! Here is a basic usage example:
-//!
-//! ```rust
-//! ```
-//!
-
-#![doc(html_playground_url = "https://play.rust-lang.org")]
-#![doc(
-    html_favicon_url = "https://raw.githubusercontent.com/veeso/ka-ching/main/assets/images/cargo/ka-ching-128.png"
-)]
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/veeso/ka-ching/main/assets/images/cargo/ka-ching-512.png"
-)]
+//! implements the file transfer for SSH based protocols: SFTP and SCP
 
 /**
  * MIT License
@@ -54,19 +25,25 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-// -- crates
-extern crate chrono;
-#[macro_use]
-extern crate log;
-#[cfg(target_family = "windows")]
-extern crate path_slash;
-extern crate thiserror;
-#[cfg(target_family = "unix")]
-extern crate users;
-extern crate wildmatch;
-
-// -- export
-pub use fs::{Directory, Entry, File};
+// -- ext
+use std::path::Path;
 // -- modules
-pub mod fs;
-mod utils;
+// mod scp;
+// mod sftp;
+// -- export
+// pub use scp::ScpFileTransfer;
+// pub use sftp::SftpFileTransfer;
+
+// -- Ssh key storage
+
+/// ## SshKeyStorage
+///
+/// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
+/// You must provide the SFTP/SCP file transfer with a struct implementing this trait.
+/// If you can't/dont' want to support ssh key storage, just implement a struct which always returns `None`.
+pub trait SshKeyStorage {
+    /// ### resolve
+    ///
+    /// Return RSA key path from host and username
+    fn resolve(&self, host: &str, username: &str) -> Option<&Path>;
+}
