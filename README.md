@@ -16,7 +16,7 @@
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
 <p align="center">Current version: 0.7.0 (FIXME: 31/08/2021)</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-teal.svg)](https://opensource.org/licenses/MIT) [![Stars](https://img.shields.io/github/stars/veeso/remotefs.svg)](https://github.com/veeso/remotefs) [![Downloads](https://img.shields.io/crates/d/remotefs.svg)](https://crates.io/crates/remotefs) [![Crates.io](https://img.shields.io/badge/crates.io-v0.7.0-orange.svg)](https://crates.io/crates/remotefs)  
+[![License: MIT](https://img.shields.io/badge/License-MIT-teal.svg)](https://opensource.org/licenses/MIT) [![Stars](https://img.shields.io/github/stars/veeso/remotefs.svg)](https://github.com/veeso/remotefs) [![Downloads](https://img.shields.io/crates/d/remotefs.svg)](https://crates.io/crates/remotefs) [![Crate Version](https://img.shields.io/crates/v/remotefs.svg)](https://crates.io/crates/remotefs)
 
 [![Linux](https://github.com/veeso/remotefs-rs/workflows/Linux/badge.svg)](https://github.com/veeso/remotefs-rs/actions) [![MacOs](https://github.com/veeso/remotefs-rs/workflows/MacOS/badge.svg)](https://github.com/veeso/remotefs-rs/actions) [![Windows](https://github.com/veeso/remotefs-rs/workflows/Windows/badge.svg)](https://github.com/veeso/remotefs-rs/actions) [![FreeBSD](https://github.com/veeso/remotefs-rs/workflows/FreeBSD/badge.svg)](https://github.com/veeso/remotefs-rs/actions) [![Coverage Status](https://coveralls.io/repos/github/veeso/remotefs-rs/badge.svg)](https://coveralls.io/github/veeso/remotefs-rs) [![Docs](https://docs.rs/remotefs/badge.svg)](https://docs.rs/remotefs)
 
