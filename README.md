@@ -13,7 +13,7 @@
   <a href="https://docs.rs/remotefs" target="_blank">Documentation</a>
 </p>
 
-<p align="center">Developed by <a href="https://veeso.github.io/">@veeso</a></p>
+<p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
 <p align="center">Current version: 0.7.0 (FIXME: 31/08/2021)</p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-teal.svg)](https://opensource.org/licenses/MIT) [![Stars](https://img.shields.io/github/stars/veeso/remotefs.svg)](https://github.com/veeso/remotefs) [![Downloads](https://img.shields.io/crates/d/remotefs.svg)](https://crates.io/crates/remotefs) [![Crates.io](https://img.shields.io/badge/crates.io-v0.7.0-orange.svg)](https://crates.io/crates/remotefs)  
