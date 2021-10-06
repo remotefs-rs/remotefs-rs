@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea to improve ka-ching
+about: Suggest an idea to improve remotefs
 title: "[Feature Request] - FEATURE_TITLE"
 labels: "new feature"
 assignees: veeso

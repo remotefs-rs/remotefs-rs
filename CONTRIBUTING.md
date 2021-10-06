@@ -27,7 +27,7 @@ Open an issue when:
 
 - You have questions or concerns regarding the project or the application itself.
 - You have a bug to report.
-- You have a feature or a suggestion to improve ka-ching to submit.
+- You have a feature or a suggestion to improve remotefs to submit.
 
 ### Questions
 
@@ -37,12 +37,12 @@ Check the issue is always assigned to `veeso`.
 
 ### Bug reports
 
-If you want to report an issue or a bug you've encountered while using ka-ching, open an issue using the `Bug report` template.
+If you want to report an issue or a bug you've encountered while using remotefs, open an issue using the `Bug report` template.
 The `Bug` label should already be set and the issue should already be assigned to `veeso`.
 Don't set other labels to your issue, not even priority.
 
 When you open a bug try to be the most precise as possible in describing your issue. I'm not saying you should always be that precise, since sometimes it's very easy for maintainers to understand what you're talking about. Just try to be reasonable to understand sometimes we might not know what you're talking about or we just don't have the technical knowledge you might think.
-Please always provide the environment you're working on and consider that we don't provide any support for older version of ka-ching, at least for those not classified as LTS (if we'll ever have them).
+Please always provide the environment you're working on and consider that we don't provide any support for older version of remotefs, at least for those not classified as LTS (if we'll ever have them).
 If you can, provide the log file or the snippet involving your issue. You can find in the [user manual](docs/man.md) the location of the log file.
 Last but not least: the template I've written must be used. Full stop.
 
@@ -56,7 +56,7 @@ Maintainers will may add additional labels to your issue:
 ### Feature requests
 
 Whenever you have a good idea which chould improve the project, it is a good idea to submit it to the project owner.
-The first thing you should do though, is not starting to write the code, but is to become concern about how ka-ching works, what kind
+The first thing you should do though, is not starting to write the code, but is to become concern about how remotefs works, what kind
 of contribution I appreciate and what kind of contribution I won't consider.
 Said so, follow these steps:
 
@@ -66,7 +66,7 @@ Said so, follow these steps:
 - Open an issue using the `feature request` template describing with accuracy your suggestion
 - Wait for the maintainer feedback on your idea
 
-If you want to implement the feature by yourself and your suggestion gets approved, start writing the code. Remember that on [docs.rs](https://docs.rs/ka-ching) there is the documentation for the project. Open a PR related to your issue. See [Pull request process for more details](#pull-request-process)
+If you want to implement the feature by yourself and your suggestion gets approved, start writing the code. Remember that on [docs.rs](https://docs.rs/remotefs) there is the documentation for the project. Open a PR related to your issue. See [Pull request process for more details](#pull-request-process)
 
 It is very important to follow these steps, since it will prevent you from working on a feature that will be rejected and trust me, none of us wants to deal with this situation.
 
@@ -78,7 +78,7 @@ Always mind that your suggestion, may be rejected: I'll always provide a feedbac
 
 At the moment, these kind of contributions are more appreciated and should be preferred:
 
-- Fix for issues described in [Known Issues](./README.md#known-issues-) or [issues reported by the community](https://github.com/veeso/ka-ching/issues)
+- Fix for issues described in [Known Issues](./README.md#known-issues-) or [issues reported by the community](https://github.com/veeso/remotefs/issues)
 - New file transfers: for further details see [Implementing File Transfer](#implementing-file-transfers)
 - Code optimizations: any optimization to the code is welcome
 
@@ -104,7 +104,7 @@ Let's make it simple and clear:
 
 In addition to the process described for the PRs, I've also decided to introduce a list of guidelines to follow when writing the code, that should be followed:
 
-1. **Let's stop the NPM apocalypse**: personally I'm against the abuse of dependencies we make in software projects and I think that NodeJS has opened the way to this drama (and has already gone too far). Nowadays nobody cares about adding hundreds of dependencies to their projects. Don't misunderstand me: I think that package managers are cool, but I'm totally against the abuse we're making of them. I think when we work on a project, we should try to use the minor quantity of dependencies as possible, especially because it's not hard to see how many libraries are getting abandoned right now, causing compatibility issues after a while. So please, when working on ka-ching, try not to add useless dependencies.
+1. **Let's stop the NPM apocalypse**: personally I'm against the abuse of dependencies we make in software projects and I think that NodeJS has opened the way to this drama (and has already gone too far). Nowadays nobody cares about adding hundreds of dependencies to their projects. Don't misunderstand me: I think that package managers are cool, but I'm totally against the abuse we're making of them. I think when we work on a project, we should try to use the minor quantity of dependencies as possible, especially because it's not hard to see how many libraries are getting abandoned right now, causing compatibility issues after a while. So please, when working on remotefs, try not to add useless dependencies.
 2. **All protocols must be optional**: If you're implementing a new file transfer, remember to create a feature to make your file transfer optional.
 3. **Test units matter**: Whenever you implement something new to this project, always implement test units which cover the most cases as possible.
 4. **Comments are useful**: Many people say that the code should be that simple to talk by itself about what it does, and comments should then be useless. I personally don't agree. I'm not saying they're wrong, but I'm just saying that this approach has, in my personal opinion, many aspects which are underrated:

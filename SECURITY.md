@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-Only latst version of ka-ching has the latest security updates.
-Because of that, **you should always consider updating ka-ching to the latest version**.
+Only latst version of remotefs has the latest security updates.
+Because of that, **you should always consider updating remotefs to the latest version**.
 
 ## Reporting a Vulnerability
 

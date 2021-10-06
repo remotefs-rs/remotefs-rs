@@ -1,16 +1,16 @@
-#![crate_name = "ka_ching"]
+#![crate_name = "remotefs"]
 #![crate_type = "lib"]
 
-//! # ka-ching
+//! # remotefs
 //!
-//! ka-ching TODO:
+//! remotefs TODO:
 //!
 //! ## Get started
 //!
-//! First of you need to add **ka-ching** to your project dependencies:
+//! First of you need to add **remotefs** to your project dependencies:
 //!
 //! ```toml
-//! ka-ching = "0.7.0"
+//! remotefs = "0.7.0"
 //! ```
 //!
 //! TODO: features and protocols
@@ -25,16 +25,16 @@
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 #![doc(
-    html_favicon_url = "https://raw.githubusercontent.com/veeso/ka-ching/main/assets/images/cargo/ka-ching-128.png"
+    html_favicon_url = "https://raw.githubusercontent.com/veeso/remotefs/main/assets/images/cargo/remotefs-128.png"
 )]
 #![doc(
-    html_logo_url = "https://raw.githubusercontent.com/veeso/ka-ching/main/assets/images/cargo/ka-ching-512.png"
+    html_logo_url = "https://raw.githubusercontent.com/veeso/remotefs/main/assets/images/cargo/remotefs-512.png"
 )]
 
 /**
  * MIT License
  *
- * ka-ching - Copyright (c) 2021 Christian Visintin
+ * remotefs - Copyright (c) 2021 Christian Visintin
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -69,4 +69,4 @@ extern crate wildmatch;
 pub use fs::{Directory, Entry, File};
 // -- modules
 pub mod fs;
-mod utils;
+// mod utils; TODO: add when available
