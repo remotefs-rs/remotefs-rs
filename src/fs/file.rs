@@ -29,8 +29,6 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// ## Entry
-///
 /// Entry represents a generic entry in a directory
 
 #[derive(Clone, Debug)]
@@ -39,8 +37,6 @@ pub enum Entry {
     File(File),
 }
 
-/// ## Directory
-///
 /// Directory provides an interface to file system directories
 
 #[derive(Clone, Debug)]
@@ -75,8 +71,6 @@ pub struct File {
     pub unix_pex: Option<(UnixPex, UnixPex, UnixPex)>, // UNIX only
 }
 
-/// ## UnixPex
-///
 /// Describes the permissions on POSIX system.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct UnixPex {
@@ -86,8 +80,6 @@ pub struct UnixPex {
 }
 
 impl UnixPex {
-    /// ### new
-    ///
     /// Instantiates a new `UnixPex`
     pub fn new(read: bool, write: bool, execute: bool) -> Self {
         Self {
@@ -97,29 +89,21 @@ impl UnixPex {
         }
     }
 
-    /// ### can_read
-    ///
     /// Returns whether user can read
     pub fn can_read(&self) -> bool {
         self.read
     }
 
-    /// ### can_write
-    ///
     /// Returns whether user can write
     pub fn can_write(&self) -> bool {
         self.write
     }
 
-    /// ### can_execute
-    ///
     /// Returns whether user can execute
     pub fn can_execute(&self) -> bool {
         self.execute
     }
 
-    /// ### as_byte
-    ///
     /// Convert permission to byte as on POSIX systems
     pub fn as_byte(&self) -> u8 {
         ((self.read as u8) << 2) + ((self.write as u8) << 1) + (self.execute as u8)
@@ -137,8 +121,6 @@ impl From<u8> for UnixPex {
 }
 
 impl Entry {
-    /// ### get_abs_path
-    ///
     /// Get absolute path from `Entry`
     pub fn get_abs_path(&self) -> &Path {
         match self {
@@ -147,8 +129,6 @@ impl Entry {
         }
     }
 
-    /// ### get_name
-    ///
     /// Get file name from `Entry`
     pub fn get_name(&self) -> &'_ str {
         match self {
@@ -157,8 +137,6 @@ impl Entry {
         }
     }
 
-    /// ### get_last_change_time
-    ///
     /// Get last change time from `Entry`
     pub fn get_last_change_time(&self) -> SystemTime {
         match self {
@@ -167,8 +145,6 @@ impl Entry {
         }
     }
 
-    /// ### get_last_access_time
-    ///
     /// Get access time from `Entry`
     pub fn get_last_access_time(&self) -> SystemTime {
         match self {
@@ -177,8 +153,6 @@ impl Entry {
         }
     }
 
-    /// ### get_creation_time
-    ///
     /// Get creation time from `Entry`
     pub fn get_creation_time(&self) -> SystemTime {
         match self {
@@ -187,8 +161,6 @@ impl Entry {
         }
     }
 
-    /// ### get_size
-    ///
     /// Get size from `Entry`. For directories is always 4096
     pub fn get_size(&self) -> usize {
         match self {
@@ -197,8 +169,6 @@ impl Entry {
         }
     }
 
-    /// ### get_ftype
-    ///
     /// Get file type from `Entry`. For directories is always None
     pub fn get_ftype(&self) -> Option<&'_ str> {
         match self {
@@ -207,8 +177,6 @@ impl Entry {
         }
     }
 
-    /// ### get_user
-    ///
     /// Get uid from `Entry`
     pub fn get_user(&self) -> Option<u32> {
         match self {
@@ -217,8 +185,6 @@ impl Entry {
         }
     }
 
-    /// ### get_group
-    ///
     /// Get gid from `Entry`
     pub fn get_group(&self) -> Option<u32> {
         match self {
@@ -227,8 +193,6 @@ impl Entry {
         }
     }
 
-    /// ### get_unix_pex
-    ///
     /// Get unix pex from `Entry`
     pub fn get_unix_pex(&self) -> Option<(UnixPex, UnixPex, UnixPex)> {
         match self {
@@ -237,8 +201,6 @@ impl Entry {
         }
     }
 
-    /// ### is_symlink
-    ///
     /// Returns whether the `Entry` is a symlink
     pub fn is_symlink(&self) -> bool {
         match self {
@@ -247,29 +209,21 @@ impl Entry {
         }
     }
 
-    /// ### is_dir
-    ///
     /// Returns whether a Entry is a directory
     pub fn is_dir(&self) -> bool {
         matches!(self, Entry::Directory(_))
     }
 
-    /// ### is_file
-    ///
     /// Returns whether a Entry is a File
     pub fn is_file(&self) -> bool {
         matches!(self, Entry::File(_))
     }
 
-    /// ### is_hidden
-    ///
     /// Returns whether Entry is hidden
     pub fn is_hidden(&self) -> bool {
         self.get_name().starts_with('.')
     }
 
-    /// ### get_realfile
-    ///
     /// Return the real file pointed by a `Entry`
     pub fn get_realfile(&self) -> &Entry {
         match self {
@@ -284,8 +238,6 @@ impl Entry {
         }
     }
 
-    /// ### unwrap_file
-    ///
     /// Unwrap Entry as File
     pub fn unwrap_file(self) -> File {
         match self {
@@ -294,8 +246,6 @@ impl Entry {
         }
     }
 
-    /// ### unwrap_dir
-    ///
     /// Unwrap Entry as Directory
     pub fn unwrap_dir(self) -> Directory {
         match self {

@@ -43,13 +43,9 @@ pub mod params;
 // -- export
 pub use file::{Directory, Entry, File, UnixPex};
 
-/// ## RemoteResult
-///
 /// Result type returned by a `FileTransfer` implementation
 pub type RemoteResult<T> = Result<T, RemoteError>;
 
-/// ## RemoteError
-///
 /// RemoteError defines the possible errors available for a file transfer
 #[derive(Debug)]
 pub struct RemoteError {
@@ -57,8 +53,6 @@ pub struct RemoteError {
     msg: Option<String>,
 }
 
-/// ## RemoteErrorType
-///
 /// RemoteErrorType defines the possible errors available for a file transfer
 #[derive(Error, Debug, Clone, Copy, PartialEq)]
 pub enum RemoteErrorType {
@@ -89,15 +83,11 @@ pub enum RemoteErrorType {
 }
 
 impl RemoteError {
-    /// ### new
-    ///
     /// Instantiates a new RemoteError
     pub fn new(code: RemoteErrorType) -> RemoteError {
         RemoteError { code, msg: None }
     }
 
-    /// ### new_ex
-    ///
     /// Instantiates a new RemoteError with message
     pub fn new_ex(code: RemoteErrorType, msg: String) -> RemoteError {
         let mut err: RemoteError = RemoteError::new(code);
@@ -105,8 +95,6 @@ impl RemoteError {
         err
     }
 
-    /// ### kind
-    ///
     /// Returns the error kind
     pub fn kind(&self) -> RemoteErrorType {
         self.code
@@ -122,101 +110,63 @@ impl fmt::Display for RemoteError {
     }
 }
 
-/// ## RemoteFileSystem
-///
 /// Defines the methods which must be implemented in order to setup a Remote file system
 pub trait RemoteFileSystem {
-    /// ### connect
-    ///
     /// Connect to the remote server and authenticate
     /// Can return banner / welcome message on success
     fn connect(&mut self, params: &RemoteParams) -> RemoteResult<Option<String>>;
 
-    /// ### disconnect
-    ///
     /// Disconnect from the remote server
     fn disconnect(&mut self) -> RemoteResult<()>;
 
-    /// ### is_connected
-    ///
     /// Indicates whether the client is connected to remote
     fn is_connected(&self) -> bool;
 
-    /// ### pwd
-    ///
     /// Print working directory
     fn pwd(&mut self) -> RemoteResult<PathBuf>;
 
-    /// ### change_dir
-    ///
     /// Change working directory.
     /// Returns the realpath of new directory
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
 
-    /// ### list_dir
-    ///
     /// List directory entries at `path`
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<Entry>>;
 
-    /// ### stat
-    ///
     /// Stat file at `path` and return Entry
     fn stat(&mut self, path: &Path) -> RemoteResult<Entry>;
 
-    /// ### exists
-    ///
     /// Returns whether file at `path` exists.
     fn exists(&mut self, path: &Path) -> RemoteResult<bool>;
 
-    /// ### remove_file
-    ///
     /// Remove file at `path`
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()>;
 
-    /// ### remove_dir
-    ///
     /// Remove directory at `path`
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
 
-    /// ### create_dir
-    ///
     /// Create a directory at `path`
     fn create_dir(&mut self, path: &Path) -> RemoteResult<()>;
 
-    /// ### copy
-    ///
     /// Copy `src` to `dest`
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// ### mov
-    ///
     /// move file/directory from `src` to `dest`
     fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// ### exec
-    ///
     /// Execute a command on remote host if supported by host.
     /// Returns command exit code and output
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
 
-    /// ### append_file
-    ///
     /// Open file at `path` for appending data.
     fn append_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Write>>;
 
-    /// ### create_file
-    ///
     /// Create file at path for write.
     /// If the file already exists, its content will be overwritten
     fn create_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Write>>;
 
-    /// ### open_file
-    ///
     /// Open file at path for read.
     fn open_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>>;
 
-    /// ### on_written
-    ///
     /// Finalize `create_file` and `append_file` methods.
     /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
     /// The purpose of this method is to finalize the connection with the peer when writing data.
@@ -227,8 +177,6 @@ pub trait RemoteFileSystem {
         Ok(())
     }
 
-    /// ### on_read
-    ///
     /// Finalize `open_file` method.
     /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
     /// The purpose of this method is to finalize the connection with the peer when reading data.
@@ -239,8 +187,6 @@ pub trait RemoteFileSystem {
         Ok(())
     }
 
-    /// ### append_file_block
-    ///
     /// Append content of `file` to remote `path` blocking.
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
@@ -257,8 +203,6 @@ pub trait RemoteFileSystem {
         }
     }
 
-    /// ### create_file_block
-    ///
     /// Create a file on remote blocking.
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
@@ -275,8 +219,6 @@ pub trait RemoteFileSystem {
         }
     }
 
-    /// ### open_file_block
-    ///
     /// Receive a file from remote WITHOUT using streams. So this function is blocking
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// (since it would work thanks to the default implementation)
@@ -296,8 +238,6 @@ pub trait RemoteFileSystem {
         }
     }
 
-    /// ### find
-    ///
     /// Find files from current directory (in all subdirectories) whose name matches the provided search
     /// Search supports wildcards ('?', '*')
     fn find(&mut self, search: &str) -> RemoteResult<Vec<Entry>> {
@@ -313,8 +253,6 @@ pub trait RemoteFileSystem {
         }
     }
 
-    /// ### iter_search
-    ///
     /// Search recursively in `dir` for file matching the wildcard.
     /// NOTE: DON'T RE-IMPLEMENT THIS FUNCTION, unless the file transfer provides a faster way to do so
     /// NOTE: don't call this method from outside; consider it as private

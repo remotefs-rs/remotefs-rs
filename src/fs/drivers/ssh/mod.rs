@@ -36,14 +36,10 @@ use std::path::Path;
 
 // -- Ssh key storage
 
-/// ## SshKeyStorage
-///
 /// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
 /// You must provide the SFTP/SCP file transfer with a struct implementing this trait.
 /// If you can't/dont' want to support ssh key storage, just implement a struct which always returns `None`.
 pub trait SshKeyStorage {
-    /// ### resolve
-    ///
     /// Return RSA key path from host and username
     fn resolve(&self, host: &str, username: &str) -> Option<&Path>;
 }

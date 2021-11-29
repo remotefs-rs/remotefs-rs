@@ -36,8 +36,6 @@ pub enum RemoteParams {
     AwsS3(AwsS3Params),
 }
 
-/// ## GenericParams
-///
 /// Protocol params used by most common protocols
 #[derive(Debug, Clone)]
 pub struct GenericParams {
@@ -47,8 +45,6 @@ pub struct GenericParams {
     pub password: Option<String>,
 }
 
-/// ## AwsS3Params
-///
 /// Connection parameters for AWS S3 protocol
 #[derive(Debug, Clone)]
 #[cfg(feature = "s3")]
@@ -65,8 +61,6 @@ impl Default for RemoteParams {
 }
 
 impl RemoteParams {
-    /// ### generic_params
-    ///
     /// Retrieve generic parameters from protocol params if any
     #[allow(unreachable_patterns)]
     pub fn generic_params(&self) -> Option<&GenericParams> {
@@ -76,8 +70,6 @@ impl RemoteParams {
         }
     }
 
-    /// ### mut_generic_params
-    ///
     /// Retrieve mutable generic parameters from protocol params if any
     #[allow(unreachable_patterns)]
     pub fn mut_generic_params(&mut self) -> Option<&mut GenericParams> {
@@ -87,8 +79,6 @@ impl RemoteParams {
         }
     }
 
-    /// ### s3_params
-    ///
     /// Retrieve AWS S3 parameters if any
     #[cfg(feature = "s3")]
     pub fn s3_params(&self) -> Option<&AwsS3Params> {
@@ -98,8 +88,6 @@ impl RemoteParams {
         }
     }
 
-    /// ### mut_s3_params
-    ///
     /// Retrieve AWS S3 parameters if any
     #[cfg(feature = "s3")]
     pub fn mut_s3_params(&mut self) -> Option<&mut AwsS3Params> {
@@ -124,32 +112,24 @@ impl Default for GenericParams {
 }
 
 impl GenericParams {
-    /// ### address
-    ///
     /// Set address to params
     pub fn address<S: AsRef<str>>(mut self, address: S) -> Self {
         self.address = address.as_ref().to_string();
         self
     }
 
-    /// ### port
-    ///
     /// Set port to params
     pub fn port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
-    /// ### username
-    ///
     /// Set username for params
     pub fn username<S: AsRef<str>>(mut self, username: Option<S>) -> Self {
         self.username = username.map(|x| x.as_ref().to_string());
         self
     }
 
-    /// ### password
-    ///
     /// Set password for params
     pub fn password<S: AsRef<str>>(mut self, password: Option<S>) -> Self {
         self.password = password.map(|x| x.as_ref().to_string());
@@ -161,8 +141,6 @@ impl GenericParams {
 
 #[cfg(feature = "s3")]
 impl AwsS3Params {
-    /// ### new
-    ///
     /// Instantiates a new `AwsS3Params` struct
     pub fn new<S: AsRef<str>>(bucket: S, region: S, profile: Option<S>) -> Self {
         Self {
