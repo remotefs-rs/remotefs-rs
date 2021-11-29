@@ -24,14 +24,9 @@ A clear and concise description of what you expected to happen.
 - OS: [e.g. GNU/Linux Debian 10]
 - Architecture [Arm, x86_64, ...]
 - Rust version
-- termscp version
+- remotefs version
 - Protocol used
 - Remote server version and name
-
-## Log
-
-Report the snippet of the log file containing the unexpected behaviour (if any).
-If there is any information you consider to be confidential, shadow it.
 
 ## Additional information
 

@@ -14,6 +14,6 @@ jobs:
       - name: Build
         run: cargo build --all-features
       - name: Run tests
-        run: cargo test --verbose --lib --all-features -- --test-threads 1
+        run: cargo test --verbose --lib --no-default-features --features ssh ftp s3 github-actions with-containers --no-fail-fast
       - name: Clippy
-        run: cargo clippy
+        run: cargo clippy -- -Dwarnings

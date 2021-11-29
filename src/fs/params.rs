@@ -68,6 +68,7 @@ impl RemoteParams {
     /// ### generic_params
     ///
     /// Retrieve generic parameters from protocol params if any
+    #[allow(unreachable_patterns)]
     pub fn generic_params(&self) -> Option<&GenericParams> {
         match self {
             RemoteParams::Generic(params) => Some(params),
@@ -75,6 +76,10 @@ impl RemoteParams {
         }
     }
 
+    /// ### mut_generic_params
+    ///
+    /// Retrieve mutable generic parameters from protocol params if any
+    #[allow(unreachable_patterns)]
     pub fn mut_generic_params(&mut self) -> Option<&mut GenericParams> {
         match self {
             RemoteParams::Generic(params) => Some(params),
@@ -195,6 +200,7 @@ mod test {
     #[test]
     fn generic_references() {
         let mut params = RemoteParams::default();
+        #[cfg(feature = "s3")]
         assert!(params.s3_params().is_none());
         assert!(params.generic_params().is_some());
         assert!(params.mut_generic_params().is_some());

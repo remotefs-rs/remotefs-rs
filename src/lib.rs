@@ -10,7 +10,7 @@
 //! First of you need to add **remotefs** to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "0.7.0"
+//! remotefs = "0.1.0"
 //! ```
 //!
 //! TODO: features and protocols
@@ -55,15 +55,8 @@
  * SOFTWARE.
  */
 // -- crates
-extern crate chrono;
 #[macro_use]
 extern crate log;
-#[cfg(target_family = "windows")]
-extern crate path_slash;
-extern crate thiserror;
-#[cfg(target_family = "unix")]
-extern crate users;
-extern crate wildmatch;
 
 // -- export
 pub use fs::{Directory, Entry, File};

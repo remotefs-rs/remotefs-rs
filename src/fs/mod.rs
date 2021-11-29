@@ -43,6 +43,11 @@ pub mod params;
 // -- export
 pub use file::{Directory, Entry, File, UnixPex};
 
+/// ## RemoteResult
+///
+/// Result type returned by a `FileTransfer` implementation
+pub type RemoteResult<T> = Result<T, RemoteError>;
+
 /// ## RemoteError
 ///
 /// RemoteError defines the possible errors available for a file transfer
@@ -57,29 +62,29 @@ pub struct RemoteError {
 /// RemoteErrorType defines the possible errors available for a file transfer
 #[derive(Error, Debug, Clone, Copy, PartialEq)]
 pub enum RemoteErrorType {
-    #[error("Authentication failed")]
+    #[error("authentication failed")]
     AuthenticationFailed,
-    #[error("Bad address syntax")]
+    #[error("bad address syntax")]
     BadAddress,
-    #[error("Connection error")]
+    #[error("connection error")]
     ConnectionError,
     #[error("SSL error")]
     SslError,
-    #[error("Could not stat directory")]
+    #[error("could not stat directory")]
     DirStatFailed,
-    #[error("Directory already exists")]
+    #[error("directory already exists")]
     DirectoryAlreadyExists,
-    #[error("Failed to create file")]
+    #[error("failed to create file")]
     FileCreateDenied,
-    #[error("No such file or directory")]
+    #[error("no such file or directory")]
     NoSuchFileOrDirectory,
-    #[error("Not enough permissions")]
+    #[error("not enough permissions")]
     PexError,
-    #[error("Protocol error")]
+    #[error("protocol error")]
     ProtocolError,
-    #[error("Uninitialized session")]
-    UninitializedSession,
-    #[error("Unsupported feature")]
+    #[error("not connected yet")]
+    NotConnected,
+    #[error("unsupported feature")]
     UnsupportedFeature,
 }
 
@@ -117,18 +122,13 @@ impl fmt::Display for RemoteError {
     }
 }
 
-/// ## RemoteResult
-///
-/// Result type returned by a `FileTransfer` implementation
-pub type RemoteResult<T> = Result<T, RemoteError>;
-
 /// ## RemoteFileSystem
 ///
 /// Defines the methods which must be implemented in order to setup a Remote file system
 pub trait RemoteFileSystem {
     /// ### connect
     ///
-    /// Connect to the remote server
+    /// Connect to the remote server and authenticate
     /// Can return banner / welcome message on success
     fn connect(&mut self, params: &RemoteParams) -> RemoteResult<Option<String>>;
 
@@ -207,6 +207,7 @@ pub trait RemoteFileSystem {
     /// ### create_file
     ///
     /// Create file at path for write.
+    /// If the file already exists, its content will be overwritten
     fn create_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Write>>;
 
     /// ### open_file
@@ -245,21 +246,14 @@ pub trait RemoteFileSystem {
     /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn append_file_block(
-        &mut self,
-        path: &Path,
-        file: &mut FsFile,
-        mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
-        match self.is_connected() {
-            true => {
-                let mut stream = self.append_file(path)?;
-                io::copy(&mut reader, &mut stream).map_err(|e| {
-                    RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string())
-                })?;
-                self.on_written(stream)
-            }
-            false => Err(RemoteError::new(RemoteErrorType::UninitializedSession)),
+    fn append_file_block(&mut self, path: &Path, mut reader: Box<dyn Read>) -> RemoteResult<()> {
+        if self.is_connected() {
+            let mut stream = self.append_file(path)?;
+            io::copy(&mut reader, &mut stream)
+                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            self.on_written(stream)
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
 
@@ -270,21 +264,14 @@ pub trait RemoteFileSystem {
     /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn create_file_block(
-        &mut self,
-        path: &Path,
-        file: &mut FsFile,
-        mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
-        match self.is_connected() {
-            true => {
-                let mut stream = self.create_file(path)?;
-                io::copy(&mut reader, &mut stream).map_err(|e| {
-                    RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string())
-                })?;
-                self.on_written(stream)
-            }
-            false => Err(RemoteError::new(RemoteErrorType::UninitializedSession)),
+    fn create_file_block(&mut self, path: &Path, mut reader: Box<dyn Read>) -> RemoteResult<()> {
+        if self.is_connected() {
+            let mut stream = self.create_file(path)?;
+            io::copy(&mut reader, &mut stream)
+                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            self.on_written(stream)
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
 
@@ -298,15 +285,14 @@ pub trait RemoteFileSystem {
     /// For safety reasons this function doesn't accept the `Write` trait, but the destination path.
     /// By default this function uses the streams function to copy content from reader to writer
     fn open_file_block(&mut self, src: &Path, dest: &mut FsFile) -> RemoteResult<()> {
-        match self.is_connected() {
-            true => {
-                let mut stream = self.open_file(src)?;
-                io::copy(&mut stream, dest).map(|_| ()).map_err(|e| {
-                    RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string())
-                })?;
-                self.on_read(stream)
-            }
-            false => Err(RemoteError::new(RemoteErrorType::UninitializedSession)),
+        if self.is_connected() {
+            let mut stream = self.open_file(src)?;
+            io::copy(&mut stream, dest)
+                .map(|_| ())
+                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            self.on_read(stream)
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
 
@@ -323,7 +309,7 @@ pub trait RemoteFileSystem {
                     Err(err) => Err(err),
                 }
             }
-            false => Err(RemoteError::new(RemoteErrorType::UninitializedSession)),
+            false => Err(RemoteError::new(RemoteErrorType::NotConnected)),
         }
     }
 
@@ -366,8 +352,6 @@ pub trait RemoteFileSystem {
     }
 }
 
-trait IterSearch: RemoteFileSystem {}
-
 #[cfg(test)]
 mod tests {
 
@@ -384,60 +368,57 @@ mod tests {
         assert_eq!(*err.msg.as_ref().unwrap(), String::from("non va una mazza"));
         assert_eq!(
             format!("{}", err),
-            String::from("No such file or directory (non va una mazza)")
+            String::from("no such file or directory (non va una mazza)")
         );
         assert_eq!(
             format!(
                 "{}",
                 RemoteError::new(RemoteErrorType::AuthenticationFailed)
             ),
-            String::from("Authentication failed")
+            String::from("authentication failed")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::BadAddress)),
-            String::from("Bad address syntax")
+            String::from("bad address syntax")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::ConnectionError)),
-            String::from("Connection error")
+            String::from("connection error")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::DirStatFailed)),
-            String::from("Could not stat directory")
+            String::from("could not stat directory")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::FileCreateDenied)),
-            String::from("Failed to create file")
+            String::from("failed to create file")
         );
         assert_eq!(
             format!(
                 "{}",
                 RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)
             ),
-            String::from("No such file or directory")
+            String::from("no such file or directory")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::PexError)),
-            String::from("Not enough permissions")
+            String::from("not enough permissions")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::ProtocolError)),
-            String::from("Protocol error")
+            String::from("protocol error")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::SslError)),
             String::from("SSL error")
         );
         assert_eq!(
-            format!(
-                "{}",
-                RemoteError::new(RemoteErrorType::UninitializedSession)
-            ),
-            String::from("Uninitialized session")
+            format!("{}", RemoteError::new(RemoteErrorType::NotConnected)),
+            String::from("not connected yet")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::UnsupportedFeature)),
-            String::from("Unsupported feature")
+            String::from("unsupported feature")
         );
         let err = RemoteError::new(RemoteErrorType::UnsupportedFeature);
         assert_eq!(err.kind(), RemoteErrorType::UnsupportedFeature);

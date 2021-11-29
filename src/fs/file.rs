@@ -26,7 +26,7 @@
  * SOFTWARE.
  */
 // -- ext
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// ## Entry
@@ -140,10 +140,10 @@ impl Entry {
     /// ### get_abs_path
     ///
     /// Get absolute path from `Entry`
-    pub fn get_abs_path(&self) -> PathBuf {
+    pub fn get_abs_path(&self) -> &Path {
         match self {
-            Entry::Directory(dir) => dir.abs_path.clone(),
-            Entry::File(file) => file.abs_path.clone(),
+            Entry::Directory(dir) => dir.abs_path.as_path(),
+            Entry::File(file) => file.abs_path.as_path(),
         }
     }
 
@@ -200,10 +200,10 @@ impl Entry {
     /// ### get_ftype
     ///
     /// Get file type from `Entry`. For directories is always None
-    pub fn get_ftype(&self) -> Option<String> {
+    pub fn get_ftype(&self) -> Option<&'_ str> {
         match self {
             Entry::Directory(_) => None,
-            Entry::File(file) => file.ftype.clone(),
+            Entry::File(file) => file.ftype.as_deref(),
         }
     }
 
@@ -271,15 +271,15 @@ impl Entry {
     /// ### get_realfile
     ///
     /// Return the real file pointed by a `Entry`
-    pub fn get_realfile(&self) -> Entry {
+    pub fn get_realfile(&self) -> &Entry {
         match self {
             Entry::Directory(dir) => match &dir.symlink {
                 Some(symlink) => symlink.get_realfile(),
-                None => self.clone(),
+                None => self,
             },
             Entry::File(file) => match &file.symlink {
                 Some(symlink) => symlink.get_realfile(),
-                None => self.clone(),
+                None => self,
             },
         }
     }
@@ -290,18 +290,17 @@ impl Entry {
     pub fn unwrap_file(self) -> File {
         match self {
             Entry::File(file) => file,
-            _ => panic!("unwrap_file: not a file"),
+            _ => panic!("unwrap_file: not a File"),
         }
     }
 
-    #[cfg(test)]
     /// ### unwrap_dir
     ///
     /// Unwrap Entry as Directory
     pub fn unwrap_dir(self) -> Directory {
         match self {
             Entry::Directory(dir) => dir,
-            _ => panic!("unwrap_dir: not a directory"),
+            _ => panic!("unwrap_dir: not a Directory"),
         }
     }
 }
@@ -367,7 +366,7 @@ mod tests {
         assert_eq!(entry.get_last_change_time(), t_now);
         assert_eq!(entry.get_creation_time(), t_now);
         assert_eq!(entry.get_size(), 8192);
-        assert_eq!(entry.get_ftype(), Some(String::from("txt")));
+        assert_eq!(entry.get_ftype(), Some("txt"));
         assert_eq!(entry.get_user(), Some(0));
         assert_eq!(entry.get_group(), Some(0));
         assert_eq!(
@@ -542,7 +541,7 @@ mod tests {
         });
         assert_eq!(entry_root.is_symlink(), true);
         // get real file
-        let real_file: Entry = entry_root.get_realfile();
+        let real_file: &Entry = entry_root.get_realfile();
         // real file must be projects in /home/cvisintin
         assert_eq!(
             real_file.get_abs_path(),
