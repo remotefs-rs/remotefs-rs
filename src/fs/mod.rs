@@ -26,8 +26,9 @@
  * SOFTWARE.
  */
 // -- local
+use file::Metadata;
 // -- ext
-use std::fs::File as FsFile;
+use std::fs::File as StdFile;
 use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -78,7 +79,7 @@ pub trait RemoteFileSystem {
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
 
     /// Create a directory at `path`
-    fn create_dir(&mut self, path: &Path) -> RemoteResult<()>;
+    fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
 
     /// Copy `src` to `dest`
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
@@ -91,14 +92,14 @@ pub trait RemoteFileSystem {
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
 
     /// Open file at `path` for appending data.
-    fn append_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Write>>;
+    fn append_file(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
     /// Create file at path for write.
     /// If the file already exists, its content will be overwritten
-    fn create_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Write>>;
+    fn create_file(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
     /// Open file at path for read.
-    fn open_file(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>>;
+    fn open_file(&mut self, path: &Path) -> RemoteResult<(Box<dyn Read>, Metadata)>;
 
     /// Finalize `create_file` and `append_file` methods.
     /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
@@ -125,9 +126,14 @@ pub trait RemoteFileSystem {
     /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn append_file_block(&mut self, path: &Path, mut reader: Box<dyn Read>) -> RemoteResult<()> {
+    fn append_file_block(
+        &mut self,
+        path: &Path,
+        metadata: &Metadata,
+        mut reader: Box<dyn Read>,
+    ) -> RemoteResult<()> {
         if self.is_connected() {
-            let mut stream = self.append_file(path)?;
+            let mut stream = self.append_file(path, metadata)?;
             io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_written(stream)
@@ -141,9 +147,14 @@ pub trait RemoteFileSystem {
     /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn create_file_block(&mut self, path: &Path, mut reader: Box<dyn Read>) -> RemoteResult<()> {
+    fn create_file_block(
+        &mut self,
+        path: &Path,
+        metadata: &Metadata,
+        mut reader: Box<dyn Read>,
+    ) -> RemoteResult<()> {
         if self.is_connected() {
-            let mut stream = self.create_file(path)?;
+            let mut stream = self.create_file(path, metadata)?;
             io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_written(stream)
@@ -159,13 +170,14 @@ pub trait RemoteFileSystem {
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// For safety reasons this function doesn't accept the `Write` trait, but the destination path.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn open_file_block(&mut self, src: &Path, dest: &mut FsFile) -> RemoteResult<()> {
+    fn open_file_block(&mut self, src: &Path, dest: &mut StdFile) -> RemoteResult<Metadata> {
         if self.is_connected() {
-            let mut stream = self.open_file(src)?;
+            let (mut stream, metadata) = self.open_file(src)?;
             io::copy(&mut stream, dest)
                 .map(|_| ())
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
-            self.on_read(stream)
+            self.on_read(stream)?;
+            Ok(metadata)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
