@@ -31,7 +31,7 @@ use std::time::SystemTime;
 
 /// Entry represents a generic entry in a directory
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Entry {
     Directory(Directory),
     File(File),
@@ -39,7 +39,7 @@ pub enum Entry {
 
 /// Directory provides an interface to file system directories
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Directory {
     pub name: String,
     pub abs_path: PathBuf,
@@ -56,7 +56,7 @@ pub struct Directory {
 ///
 /// File provides an interface to file system files
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct File {
     pub name: String,
     pub abs_path: PathBuf,
@@ -72,7 +72,7 @@ pub struct File {
 }
 
 /// Describes the permissions on POSIX system.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UnixPex {
     read: bool,
     write: bool,
@@ -262,7 +262,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn fsentry_dir() {
+    fn should_create_fs_dir() {
         let t_now: SystemTime = SystemTime::now();
         let entry: Entry = Entry::Directory(Directory {
             name: String::from("foo"),
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn fsentry_file() {
+    fn should_create_fs_file() {
         let t_now: SystemTime = SystemTime::now();
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn fsentry_bad_unwrap() {
+    fn should_fail_unwrapping_directory() {
         let t_now: SystemTime = SystemTime::now();
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn fsentry_dir_bad_unwrap() {
+    fn should_fail_unwrapping_file() {
         let t_now: SystemTime = SystemTime::now();
         let entry: Entry = Entry::Directory(Directory {
             name: String::from("foo"),
@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn fsentry_hidden_files() {
+    fn should_return_is_hidden_for_hidden_files() {
         let t_now: SystemTime = SystemTime::now();
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn fsentry_realfile_none() {
+    fn should_not_have_realfile() {
         let t_now: SystemTime = SystemTime::now();
         // With file...
         let entry: Entry = Entry::File(File {
@@ -450,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn fsentry_realfile_some() {
+    fn should_resolve_realfile() {
         let t_now: SystemTime = SystemTime::now();
         // Prepare entries
         // root -> child -> target
@@ -500,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn unix_pex() {
+    fn should_create_unix_pex() {
         let pex: UnixPex = UnixPex::from(4);
         assert_eq!(pex.can_read(), true);
         assert_eq!(pex.can_write(), false);

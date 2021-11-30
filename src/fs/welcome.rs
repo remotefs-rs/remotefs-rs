@@ -1,6 +1,6 @@
-//! ## SSH
+//! ## Welcome
 //!
-//! implements the file transfer for SSH based protocols: SFTP and SCP
+//! welcome data type
 
 /**
  * MIT License
@@ -25,21 +25,40 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-// -- ext
-use std::path::Path;
-// -- modules
-// mod scp;
-// mod sftp;
-// -- export
-// pub use scp::ScpFileTransfer;
-// pub use sftp::SftpFileTransfer;
 
-// -- Ssh key storage
+/// Structure holding all data related to a successful connection and authentication
+/// on remote host.
+#[derive(Debug)]
+pub struct Welcome {
+    /// Welcome message / banner
+    pub banner: Option<String>,
+}
 
-/// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
-/// You must provide the SFTP/SCP file transfer with a struct implementing this trait.
-/// If you can't/dont' want to support ssh key storage, just implement a struct which always returns `None`.
-pub trait SshKeyStorage {
-    /// Return RSA key path from host and username
-    fn resolve(&self, host: &str, username: &str) -> Option<&Path>;
+impl Default for Welcome {
+    fn default() -> Self {
+        Self { banner: None }
+    }
+}
+
+impl Welcome {
+    /// Set welcome message or banner
+    pub(crate) fn banner<S: AsRef<str>>(mut self, banner: S) -> Self {
+        self.banner = Some(banner.as_ref().to_string());
+        self
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn should_create_welcome_type() {
+        let welcome = Welcome::default();
+        assert!(welcome.banner.is_none());
+        let welcome = Welcome::default().banner("Hello, world!");
+        assert_eq!(welcome.banner.as_deref().unwrap(), "Hello, world!");
+    }
 }

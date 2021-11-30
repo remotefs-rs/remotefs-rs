@@ -26,95 +26,28 @@
  * SOFTWARE.
  */
 // -- local
-use self::params::RemoteParams;
 // -- ext
-use std::fmt;
 use std::fs::File as FsFile;
 use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use thiserror::Error;
 use wildmatch::WildMatch;
 // -- modules
-pub mod drivers;
+pub mod driver;
+mod errors;
 mod file;
-pub mod params;
+mod welcome;
 
 // -- export
+pub use errors::{RemoteError, RemoteErrorType, RemoteResult};
 pub use file::{Directory, Entry, File, UnixPex};
-
-/// Result type returned by a `FileTransfer` implementation
-pub type RemoteResult<T> = Result<T, RemoteError>;
-
-/// RemoteError defines the possible errors available for a file transfer
-#[derive(Debug)]
-pub struct RemoteError {
-    code: RemoteErrorType,
-    msg: Option<String>,
-}
-
-/// RemoteErrorType defines the possible errors available for a file transfer
-#[derive(Error, Debug, Clone, Copy, PartialEq)]
-pub enum RemoteErrorType {
-    #[error("authentication failed")]
-    AuthenticationFailed,
-    #[error("bad address syntax")]
-    BadAddress,
-    #[error("connection error")]
-    ConnectionError,
-    #[error("SSL error")]
-    SslError,
-    #[error("could not stat directory")]
-    DirStatFailed,
-    #[error("directory already exists")]
-    DirectoryAlreadyExists,
-    #[error("failed to create file")]
-    FileCreateDenied,
-    #[error("no such file or directory")]
-    NoSuchFileOrDirectory,
-    #[error("not enough permissions")]
-    PexError,
-    #[error("protocol error")]
-    ProtocolError,
-    #[error("not connected yet")]
-    NotConnected,
-    #[error("unsupported feature")]
-    UnsupportedFeature,
-}
-
-impl RemoteError {
-    /// Instantiates a new RemoteError
-    pub fn new(code: RemoteErrorType) -> RemoteError {
-        RemoteError { code, msg: None }
-    }
-
-    /// Instantiates a new RemoteError with message
-    pub fn new_ex(code: RemoteErrorType, msg: String) -> RemoteError {
-        let mut err: RemoteError = RemoteError::new(code);
-        err.msg = Some(msg);
-        err
-    }
-
-    /// Returns the error kind
-    pub fn kind(&self) -> RemoteErrorType {
-        self.code
-    }
-}
-
-impl fmt::Display for RemoteError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.msg {
-            Some(msg) => write!(f, "{} ({})", self.code, msg),
-            None => write!(f, "{}", self.code),
-        }
-    }
-}
+pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
 pub trait RemoteFileSystem {
-    /// Connect to the remote server and authenticate
+    /// Connect to the remote server and authenticate.
     /// Can return banner / welcome message on success
-    fn connect(&mut self, params: &RemoteParams) -> RemoteResult<Option<String>>;
+    fn connect(&mut self) -> RemoteResult<Welcome>;
 
     /// Disconnect from the remote server
     fn disconnect(&mut self) -> RemoteResult<()>;
@@ -287,78 +220,5 @@ pub trait RemoteFileSystem {
             }
             Err(err) => Err(err),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn test_filetransfer_mod_error() {
-        let err: RemoteError = RemoteError::new_ex(
-            RemoteErrorType::NoSuchFileOrDirectory,
-            String::from("non va una mazza"),
-        );
-        assert_eq!(*err.msg.as_ref().unwrap(), String::from("non va una mazza"));
-        assert_eq!(
-            format!("{}", err),
-            String::from("no such file or directory (non va una mazza)")
-        );
-        assert_eq!(
-            format!(
-                "{}",
-                RemoteError::new(RemoteErrorType::AuthenticationFailed)
-            ),
-            String::from("authentication failed")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::BadAddress)),
-            String::from("bad address syntax")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::ConnectionError)),
-            String::from("connection error")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::DirStatFailed)),
-            String::from("could not stat directory")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::FileCreateDenied)),
-            String::from("failed to create file")
-        );
-        assert_eq!(
-            format!(
-                "{}",
-                RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)
-            ),
-            String::from("no such file or directory")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::PexError)),
-            String::from("not enough permissions")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::ProtocolError)),
-            String::from("protocol error")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::SslError)),
-            String::from("SSL error")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::NotConnected)),
-            String::from("not connected yet")
-        );
-        assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::UnsupportedFeature)),
-            String::from("unsupported feature")
-        );
-        let err = RemoteError::new(RemoteErrorType::UnsupportedFeature);
-        assert_eq!(err.kind(), RemoteErrorType::UnsupportedFeature);
     }
 }

@@ -1,4 +1,4 @@
-//! # Drivers
+//! # Driver
 //!
 //! This module contains the driver implementation for a remote file system based on a certain protocol
 
