@@ -1,35 +1,6 @@
-#![crate_name = "remotefs"]
-#![crate_type = "lib"]
-
-//! # remotefs
+//! ## SFTP
 //!
-//! remotefs TODO:
-//!
-//! ## Get started
-//!
-//! First of you need to add **remotefs** to your project dependencies:
-//!
-//! ```toml
-//! remotefs = "0.1.0"
-//! ```
-//!
-//! TODO: features and protocols
-//!
-//! ## Usage
-//!
-//! Here is a basic usage example:
-//!
-//! ```rust
-//! ```
-//!
-
-#![doc(html_playground_url = "https://play.rust-lang.org")]
-#![doc(
-    html_favicon_url = "https://raw.githubusercontent.com/veeso/remotefs/main/assets/images/cargo/remotefs-128.png"
-)]
-#![doc(
-    html_logo_url = "https://raw.githubusercontent.com/veeso/remotefs/main/assets/images/cargo/remotefs-512.png"
-)]
+//! Sftp remote fs implementation
 
 /**
  * MIT License
@@ -54,14 +25,9 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-// -- crates
-#[macro_use]
-extern crate log;
-
-// -- export
-pub use fs::{
-    Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFileSystem, RemoteResult,
+use crate::fs::{
+    Metadata, RemoteError, RemoteErrorType, RemoteFileSystem, RemoteResult, UnixPex, UnixPexClass,
 };
-// -- modules
-pub mod fs;
-// mod utils; TODO: add when available
+use crate::{Directory, Entry, File};
+
+pub struct SftpFs {}

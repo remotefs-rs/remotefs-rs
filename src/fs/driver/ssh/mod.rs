@@ -29,10 +29,10 @@
 use std::path::Path;
 // -- modules
 // mod scp;
-// mod sftp;
+mod sftp;
 // -- export
 // pub use scp::ScpFileTransfer;
-// pub use sftp::SftpFileTransfer;
+pub use sftp::SftpFs;
 
 // -- Ssh key storage
 
@@ -43,3 +43,8 @@ pub trait SshKeyStorage {
     /// Return RSA key path from host and username
     fn resolve<S: AsRef<str>>(&self, host: S, username: S) -> Option<&Path>;
 }
+
+// -- ssh options
+
+/// Ssh options; used to build SCP/SFTP driver
+pub struct SshOpts {}

@@ -26,7 +26,6 @@
  * SOFTWARE.
  */
 // -- local
-use file::Metadata;
 // -- ext
 use std::fs::File as StdFile;
 use std::io;
@@ -41,7 +40,7 @@ mod welcome;
 
 // -- export
 pub use errors::{RemoteError, RemoteErrorType, RemoteResult};
-pub use file::{Directory, Entry, File, UnixPex};
+pub use file::{Directory, Entry, File, Metadata, UnixPex, UnixPexClass};
 pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
