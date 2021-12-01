@@ -26,25 +26,54 @@
  * SOFTWARE.
  */
 // -- ext
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
 // -- modules
 // mod scp;
 mod sftp;
 // -- export
 // pub use scp::ScpFileTransfer;
 pub use sftp::SftpFs;
+pub use ssh2::MethodType;
 
 // -- Ssh key storage
 
 /// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
-/// You must provide the SFTP/SCP file transfer with a struct implementing this trait.
-/// If you can't/don't want to support ssh key storage, just implement a struct which always returns `None`.
 pub trait SshKeyStorage {
     /// Return RSA key path from host and username
-    fn resolve<S: AsRef<str>>(&self, host: S, username: S) -> Option<&Path>;
+    fn resolve(&self, host: &str, username: &str) -> Option<&Path>;
+}
+
+// -- key method
+
+pub struct KeyMethod {
+    pub(crate) method_type: MethodType,
+    algos: Vec<String>,
+}
+
+impl KeyMethod {
+    /// Instantiates a new `KeyMethod`
+    pub fn new(method_type: MethodType, algos: &[String]) -> Self {
+        Self {
+            method_type,
+            algos: algos.to_vec(),
+        }
+    }
+
+    /// Get preferred algos in ssh protocol syntax
+    pub(crate) fn prefs(&self) -> String {
+        self.algos.join(",")
+    }
 }
 
 // -- ssh options
 
 /// Ssh options; used to build SCP/SFTP driver
-pub struct SshOpts {}
+pub struct SshOpts {
+    /// SSH configuration file. If provided will be parsed on connect.
+    config_file: Option<PathBuf>,
+    /// Key storage
+    key_storage: Option<Box<dyn SshKeyStorage>>,
+    /// Preferred key exchange methods
+    methods: Vec<KeyMethod>,
+}
