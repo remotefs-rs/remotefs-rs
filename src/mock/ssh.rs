@@ -1,6 +1,6 @@
-//! ## SFTP
+//! ## Ssh mock
 //!
-//! Sftp remote fs implementation
+//! Contains mock for SSH protocol
 
 /**
  * MIT License
@@ -25,9 +25,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-use crate::fs::{
-    Metadata, RemoteError, RemoteErrorType, RemoteFileSystem, RemoteResult, UnixPex, UnixPexClass,
-};
-use crate::{Directory, Entry, File};
+use crate::client::ssh::SshKeyStorage;
 
-pub struct SftpFs {}
+/// Mock ssh key storage
+#[derive(Default)]
+pub struct MockSshKeyStorage;
+
+impl SshKeyStorage for MockSshKeyStorage {
+    fn resolve(&self, _host: &str, _username: &str) -> Option<&std::path::Path> {
+        None
+    }
+}

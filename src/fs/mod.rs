@@ -33,7 +33,6 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use wildmatch::WildMatch;
 // -- modules
-pub mod driver;
 mod errors;
 mod file;
 mod welcome;

@@ -1,6 +1,6 @@
-//! ## SSH
+//! ## SFTP
 //!
-//! implements the file transfer for SSH based protocols: SFTP and SCP
+//! Sftp remote fs implementation
 
 /**
  * MIT License
@@ -25,55 +25,47 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-// -- ext
+use super::{commons, SshOpts};
+use crate::fs::{
+    Metadata, RemoteError, RemoteErrorType, RemoteFileSystem, RemoteResult, UnixPex, UnixPexClass,
+};
+use crate::{Directory, Entry, File};
+
+use ssh2::{Channel, FileStat, OpenFlags, OpenType};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-// -- modules
-// mod scp;
-mod sftp;
 // -- export
-// pub use scp::ScpFileTransfer;
-pub use sftp::SftpFs;
-pub use ssh2::MethodType;
+pub use ssh2::{Session as SshSession, Sftp as SshSftp};
 
-// -- Ssh key storage
-
-/// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
-pub trait SshKeyStorage {
-    /// Return RSA key path from host and username
-    fn resolve(&self, host: &str, username: &str) -> Option<&Path>;
+/// Sftp "filesystem" client
+pub struct SftpFs {
+    session: Option<SshSession>,
+    sftp: Option<SshSftp>,
+    wrkdir: PathBuf,
+    opts: SshOpts,
 }
 
-// -- key method
-
-pub struct KeyMethod {
-    pub(crate) method_type: MethodType,
-    algos: Vec<String>,
-}
-
-impl KeyMethod {
-    /// Instantiates a new `KeyMethod`
-    pub fn new(method_type: MethodType, algos: &[String]) -> Self {
+impl SftpFs {
+    /// Creates a new `SftpFs`
+    pub fn new(opts: SshOpts) -> Self {
         Self {
-            method_type,
-            algos: algos.to_vec(),
+            session: None,
+            sftp: None,
+            wrkdir: PathBuf::from("/"),
+            opts,
         }
     }
 
-    /// Get preferred algos in ssh protocol syntax
-    pub(crate) fn prefs(&self) -> String {
-        self.algos.join(",")
+    /// Get a reference to current `session` value.
+    pub fn session(&mut self) -> Option<&mut SshSession> {
+        self.session.as_mut()
     }
-}
 
-// -- ssh options
-
-/// Ssh options; used to build SCP/SFTP driver
-pub struct SshOpts {
-    /// SSH configuration file. If provided will be parsed on connect.
-    config_file: Option<PathBuf>,
-    /// Key storage
-    key_storage: Option<Box<dyn SshKeyStorage>>,
-    /// Preferred key exchange methods
-    methods: Vec<KeyMethod>,
+    /// Get a reference to current `sftp` value.
+    pub fn sftp(&mut self) -> Option<&mut SshSftp> {
+        self.sftp.as_mut()
+    }
 }

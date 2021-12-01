@@ -8,3 +8,4 @@ ignore:
   - "../*"
   - src/lib.rs
   - src/transfer/s3/mod.rs
+  - "src/mock/*"
