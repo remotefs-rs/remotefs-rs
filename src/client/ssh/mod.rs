@@ -174,9 +174,9 @@ impl SshOpts {
     }
 }
 
-impl Into<SftpFs> for SshOpts {
-    fn into(self) -> SftpFs {
-        SftpFs::new(self)
+impl From<SshOpts> for SftpFs {
+    fn from(opts: SshOpts) -> Self {
+        SftpFs::new(opts)
     }
 }
 

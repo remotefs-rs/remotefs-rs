@@ -60,7 +60,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
                 ssh_config.connection_timeout.as_secs()
             );
             if let Ok(tcp_stream) =
-                TcpStream::connect_timeout(&socket_addr, ssh_config.connection_timeout)
+                TcpStream::connect_timeout(socket_addr, ssh_config.connection_timeout)
             {
                 debug!("Connection established with address {}", socket_addr);
                 stream = Some(tcp_stream);

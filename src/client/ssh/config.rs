@@ -118,7 +118,9 @@ impl Config {
     fn resolve_connection_timeout(params: &HostParams, opts: &SshOpts) -> Duration {
         match opts.connection_timeout {
             Some(t) => t,
-            None => params.connect_timeout.unwrap_or(Duration::from_secs(30)),
+            None => params
+                .connect_timeout
+                .unwrap_or_else(|| Duration::from_secs(30)),
         }
     }
 

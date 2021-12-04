@@ -28,16 +28,10 @@
 
 /// Structure holding all data related to a successful connection and authentication
 /// on remote host.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Welcome {
     /// Welcome message / banner
     pub banner: Option<String>,
-}
-
-impl Default for Welcome {
-    fn default() -> Self {
-        Self { banner: None }
-    }
 }
 
 impl Welcome {
