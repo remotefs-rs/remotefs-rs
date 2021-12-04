@@ -41,6 +41,8 @@ pub struct RemoteError {
 /// RemoteErrorType defines the possible errors available for a file transfer
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RemoteErrorType {
+    #[error("already connected")]
+    AlreadyConnected,
     #[error("authentication failed")]
     AuthenticationFailed,
     #[error("bad address syntax")]
@@ -55,6 +57,8 @@ pub enum RemoteErrorType {
     DirectoryAlreadyExists,
     #[error("failed to create file")]
     FileCreateDenied,
+    #[error("IO error")]
+    IoError,
     #[error("no such file or directory")]
     NoSuchFileOrDirectory,
     #[error("not enough permissions")]
@@ -74,9 +78,9 @@ impl RemoteError {
     }
 
     /// Instantiates a new RemoteError with message
-    pub fn new_ex(code: RemoteErrorType, msg: String) -> RemoteError {
+    pub fn new_ex<S: ToString>(code: RemoteErrorType, msg: S) -> RemoteError {
         let mut err: RemoteError = RemoteError::new(code);
-        err.msg = Some(msg);
+        err.msg = Some(msg.to_string());
         err
     }
 }
@@ -106,6 +110,10 @@ mod test {
         assert_eq!(
             format!("{}", err),
             String::from("no such file or directory (non va una mazza)")
+        );
+        assert_eq!(
+            format!("{}", RemoteError::new(RemoteErrorType::AlreadyConnected)),
+            String::from("already connected")
         );
         assert_eq!(
             format!(

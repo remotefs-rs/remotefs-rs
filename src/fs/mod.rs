@@ -45,7 +45,8 @@ pub use welcome::Welcome;
 /// Defines the methods which must be implemented in order to setup a Remote file system
 pub trait RemoteFileSystem {
     /// Connect to the remote server and authenticate.
-    /// Can return banner / welcome message on success
+    /// Can return banner / welcome message on success.
+    /// If client has already established connection, then `AlreadyConnected` error is returned.
     fn connect(&mut self) -> RemoteResult<Welcome>;
 
     /// Disconnect from the remote server

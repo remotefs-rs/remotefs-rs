@@ -12,6 +12,7 @@ Please note we have a [code of conduct](CODE_OF_CONDUCT.md), please follow it in
   - [Preferred contributions](#preferred-contributions)
   - [Pull Request Process](#pull-request-process)
     - [Software guidelines](#software-guidelines)
+    - [Run tests](#run-tests)
 
 ---
 
@@ -110,6 +111,15 @@ In addition to the process described for the PRs, I've also decided to introduce
 4. **Comments are useful**: Many people say that the code should be that simple to talk by itself about what it does, and comments should then be useless. I personally don't agree. I'm not saying they're wrong, but I'm just saying that this approach has, in my personal opinion, many aspects which are underrated:
    1. What's obvious for me, might not be for the others.
    2. Our capacity to work on a code depends mostly on **time and experience**, not on complexity: I'm not denying complexity matter, but the most decisive factor when working on code is the experience we've acquired working on it and the time we've spent. As the author of the project, I know the project like the back of my hands, but if I didn't work on it for a year, then I would probably have some problems in working on it again as the same speed as before. And do you know what's really time-saving in these cases? Comments.
+
+### Run tests
+
+In case your working on a PR, these steps must be followed to run tests on the remotefs crate:
+
+1. go to `tests/`
+2. run containers: `docker-compose up -d`
+3. enable logger for debugging `export RUST_LOG=trace` (bash) or `set -gx RUST_LOG trace` (fish)
+4. run tests `cargo test --features aws-s3,ftp,with-containers`
 
 ---
 

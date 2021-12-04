@@ -25,18 +25,205 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-use super::SshOpts;
+use super::{config::Config, SshOpts};
 use crate::{RemoteError, RemoteErrorType, RemoteResult};
 
-use ssh2::{Session, Sftp};
+use ssh2::{MethodType as SshMethodType, Session};
 use std::io::Read;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 
 // -- connect
 
 /// Establish connection with remote server and in case of success, return the generated `Session`
 pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
-    todo!()
+    // parse configuration
+    let ssh_config = Config::try_from(opts)?;
+    // Resolve host
+    debug!("Connecting to '{}'", ssh_config.address);
+    // setup tcp stream
+    let socket_addresses: Vec<SocketAddr> = match ssh_config.address.to_socket_addrs() {
+        Ok(s) => s.collect(),
+        Err(err) => {
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::BadAddress,
+                err.to_string(),
+            ))
+        }
+    };
+    let mut stream = None;
+    for _ in 0..ssh_config.connection_attempts {
+        for socket_addr in socket_addresses.iter() {
+            trace!(
+                "Trying to connect to socket address '{}' (timeout: {}s)",
+                socket_addr,
+                ssh_config.connection_timeout.as_secs()
+            );
+            if let Ok(tcp_stream) =
+                TcpStream::connect_timeout(&socket_addr, ssh_config.connection_timeout)
+            {
+                debug!("Connection established with address {}", socket_addr);
+                stream = Some(tcp_stream);
+                break;
+            }
+        }
+        // break from attempts cycle if some
+        if stream.is_some() {
+            break;
+        }
+    }
+    // If stream is None, return connection timeout
+    let stream = match stream {
+        Some(s) => s,
+        None => {
+            error!("No suitable socket address found; connection timeout");
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::ConnectionError,
+                "connection timeout",
+            ));
+        }
+    };
+    // Create session
+    let mut session = match Session::new() {
+        Ok(s) => s,
+        Err(err) => {
+            error!("Could not create session: {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, err));
+        }
+    };
+    // Set TCP stream
+    session.set_tcp_stream(stream);
+    // configure algos
+    set_algo_prefs(&mut session, opts, &ssh_config)?;
+    // Open connection and initialize handshake
+    if let Err(err) = session.handshake() {
+        error!("SSH handshake failed: {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+    }
+    // Authenticate with password or key
+    match opts
+        .key_storage
+        .as_ref()
+        .map(|x| x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str()))
+        .flatten()
+    {
+        Some(rsa_key) => {
+            session_auth_with_rsakey(
+                &mut session,
+                &ssh_config.username,
+                rsa_key,
+                opts.password.as_deref(),
+            )?;
+        }
+        None => {
+            session_auth_with_password(
+                &mut session,
+                &ssh_config.username,
+                opts.password.as_deref(),
+            )?;
+        }
+    }
+    // Return session
+    Ok(session)
+}
+
+/// Configure algorithm preferences into session
+fn set_algo_prefs(session: &mut Session, opts: &SshOpts, config: &Config) -> RemoteResult<()> {
+    // Configure preferences from config
+    let params = &config.params;
+    trace!("Configuring algorithm preferences...");
+    if let Some(compress) = params.compression {
+        trace!("compression: {}", compress);
+        session.set_compress(compress);
+    }
+    if let Some(algos) = params.kex_algorithms.as_deref() {
+        let algos = algos.join(",");
+        trace!("Configuring KEX algorithms: {}", algos);
+        if let Err(err) = session.method_pref(SshMethodType::Kex, algos.as_str()) {
+            error!("Could not set KEX algorithms: {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+    }
+    if let Some(algos) = params.host_key_algorithms.as_deref() {
+        let algos = algos.join(",");
+        trace!("Configuring HostKey algorithms: {}", algos);
+        if let Err(err) = session.method_pref(SshMethodType::HostKey, algos.as_str()) {
+            error!("Could not set host key algorithms: {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+    }
+    if let Some(algos) = params.ciphers.as_deref() {
+        let algos = algos.join(",");
+        trace!("Configuring Crypt algorithms: {}", algos);
+        if let Err(err) = session.method_pref(SshMethodType::CryptCs, algos.as_str()) {
+            error!("Could not set crypt algorithms (client-server): {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+        if let Err(err) = session.method_pref(SshMethodType::CryptSc, algos.as_str()) {
+            error!("Could not set crypt algorithms (server-client): {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+    }
+    if let Some(algos) = params.mac.as_deref() {
+        let algos = algos.join(",");
+        trace!("Configuring MAC algorithms: {}", algos);
+        if let Err(err) = session.method_pref(SshMethodType::MacCs, algos.as_str()) {
+            error!("Could not set MAC algorithms (client-server): {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+        if let Err(err) = session.method_pref(SshMethodType::MacSc, algos.as_str()) {
+            error!("Could not set MAC algorithms (server-client): {}", err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+    }
+    // -- configure algos from opts
+    for method in opts.methods.iter() {
+        let algos = method.prefs();
+        trace!("Configuring {:?} algorithm: {}", method.method_type, algos);
+        if let Err(err) = session.method_pref(method.method_type.into(), algos.as_str()) {
+            error!("Could not set {:?} algorithms: {}", method.method_type, err);
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        }
+    }
+    Ok(())
+}
+
+/// Authenticate on session with private key
+fn session_auth_with_rsakey(
+    session: &mut Session,
+    username: &str,
+    private_key: &Path,
+    password: Option<&str>,
+) -> RemoteResult<()> {
+    debug!("Authenticating with username '{}' and RSA key", username);
+    if let Err(err) = session.userauth_pubkey_file(username, None, private_key, password) {
+        error!("Authentication failed: {}", err);
+        Err(RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            err,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Authenticate on session with username and password
+fn session_auth_with_password(
+    session: &mut Session,
+    username: &str,
+    password: Option<&str>,
+) -> RemoteResult<()> {
+    // Username / password
+    debug!("Authenticating with username '{}' and password", username);
+    if let Err(err) = session.userauth_password(username, password.unwrap_or("")) {
+        error!("Authentication failed: {}", err);
+        Err(RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            err,
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 // -- shell commands
@@ -46,24 +233,28 @@ pub fn perform_shell_cmd_at<S: AsRef<str>>(
     session: &mut Session,
     cmd: S,
     p: &Path,
-) -> Result<String, String> {
+) -> RemoteResult<String> {
     perform_shell_cmd(session, format!("cd \"{}\"; {}", p.display(), cmd.as_ref()))
 }
 
 /// Perform shell command in current SSH session
-pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Result<String, String> {
+pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> RemoteResult<String> {
     // Create channel
     debug!("Running command: {}", cmd.as_ref());
     let mut channel = match session.channel_session() {
         Ok(ch) => ch,
-        Err(err) => return Err(format!("Could not open channel: {}", err)),
+        Err(err) => {
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not open channel: {}", err),
+            ))
+        }
     };
     // Execute command
     if let Err(err) = channel.exec(cmd.as_ref()) {
-        return Err(format!(
-            "Could not execute command \"{}\": {}",
-            cmd.as_ref(),
-            err
+        return Err(RemoteError::new_ex(
+            RemoteErrorType::ProtocolError,
+            format!("Could not execute command \"{}\": {}", cmd.as_ref(), err),
         ));
     }
     // Read output
@@ -75,8 +266,55 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Result
             debug!("Command output: {}", output);
             Ok(output)
         }
-        Err(err) => Err(format!("Could not read output: {}", err)),
+        Err(err) => Err(RemoteError::new_ex(
+            RemoteErrorType::ProtocolError,
+            format!("Could not read output: {}", err),
+        )),
     }
 }
 
-// TODO: impl tests
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    #[cfg(feature = "with-containers")]
+    use crate::mock::ssh as ssh_mock;
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    fn should_connect_to_ssh_server_auth_user_password() {
+        crate::mock::logger();
+        let config_file = ssh_mock::create_ssh_config();
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path())
+            .password("password");
+        let session = connect(&opts).ok().unwrap();
+        assert!(session.authenticated());
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    fn should_connect_to_ssh_server_auth_key() {
+        crate::mock::logger();
+        let config_file = ssh_mock::create_ssh_config();
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path())
+            .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()));
+        let session = connect(&opts).ok().unwrap();
+        assert!(session.authenticated());
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    fn should_perform_shell_command_on_server() {
+        crate::mock::logger();
+        let opts = SshOpts::new("127.0.0.1")
+            .port(10022)
+            .username("sftp")
+            .password("password");
+        let mut session = connect(&opts).ok().unwrap();
+        assert!(session.authenticated());
+        // run commands
+        assert!(perform_shell_cmd_at(&mut session, "pwd", Path::new("/")).is_ok());
+    }
+}
