@@ -317,4 +317,25 @@ mod test {
         // run commands
         assert!(perform_shell_cmd_at(&mut session, "pwd", Path::new("/")).is_ok());
     }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    fn should_fail_authentication() {
+        crate::mock::logger();
+        let opts = SshOpts::new("127.0.0.1")
+            .port(10022)
+            .username("sftp")
+            .password("ippopotamo");
+        assert!(connect(&opts).is_err());
+    }
+
+    #[test]
+    fn test_filetransfer_sftp_bad_server() {
+        crate::mock::logger();
+        let opts = SshOpts::new("myverybad.verybad.server")
+            .port(10022)
+            .username("sftp")
+            .password("ippopotamo");
+        assert!(connect(&opts).is_err());
+    }
 }

@@ -51,12 +51,18 @@ pub enum RemoteErrorType {
     ConnectionError,
     #[error("SSL error")]
     SslError,
-    #[error("could not stat directory")]
-    DirStatFailed,
+    #[error("could not stat file")]
+    StatFailed,
+    #[error("bad file")]
+    BadFile,
     #[error("directory already exists")]
     DirectoryAlreadyExists,
     #[error("failed to create file")]
     FileCreateDenied,
+    #[error("failed to open file")]
+    CouldNotOpenFile,
+    #[error("failed to remove file")]
+    CouldNotRemoveFile,
     #[error("IO error")]
     IoError,
     #[error("no such file or directory")]
@@ -131,8 +137,8 @@ mod test {
             String::from("connection error")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::DirStatFailed)),
-            String::from("could not stat directory")
+            format!("{}", RemoteError::new(RemoteErrorType::StatFailed)),
+            String::from("could not stat file")
         );
         assert_eq!(
             format!("{}", RemoteError::new(RemoteErrorType::FileCreateDenied)),

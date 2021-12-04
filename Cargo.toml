@@ -33,9 +33,13 @@ tempfile = "^3.2.0"
 
 [features]
 default = [ "ssh" ]
+# protocols
 aws-s3 = [ "rust-s3" ]
 ftp = [ "suppaftp" ]
 ssh = [ "ssh2", "ssh2-config" ]
+# misc
+no-log = [ "log/max_level_off" ]
+# tests
 github-actions = [ ]
 with-s3-ci = []
 with-containers = []

@@ -67,7 +67,7 @@ pub struct File {
     /// Absolute path
     pub abs_path: PathBuf,
     /// File type
-    pub ftype: Option<String>,
+    pub extension: Option<String>,
     /// File metadata
     pub metadata: Metadata,
 }
@@ -98,10 +98,10 @@ impl Entry {
     }
 
     /// Get file type from `Entry`. For directories is always None
-    pub fn file_type(&self) -> Option<&'_ str> {
+    pub fn extension(&self) -> Option<&'_ str> {
         match self {
             Entry::Directory(_) => None,
-            Entry::File(file) => file.ftype.as_deref(),
+            Entry::File(file) => file.extension.as_deref(),
         }
     }
 
@@ -161,12 +161,12 @@ mod tests {
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
             abs_path: PathBuf::from("/bar.txt"),
-            ftype: Some(String::from("txt")),
+            extension: Some(String::from("txt")),
             metadata: Metadata::default(),
         });
         assert_eq!(entry.path(), Path::new("/bar.txt"));
         assert_eq!(entry.name(), String::from("bar.txt"));
-        assert_eq!(entry.file_type(), Some("txt"));
+        assert_eq!(entry.extension(), Some("txt"));
         assert_eq!(entry.is_dir(), false);
         assert_eq!(entry.is_file(), true);
         assert_eq!(entry.unwrap_file().abs_path, PathBuf::from("/bar.txt"));
@@ -179,7 +179,7 @@ mod tests {
             name: String::from("bar.txt"),
             abs_path: PathBuf::from("/bar.txt"),
             metadata: Metadata::default(),
-            ftype: Some(String::from("txt")),
+            extension: Some(String::from("txt")),
         });
         entry.unwrap_dir();
     }
@@ -201,14 +201,14 @@ mod tests {
             name: String::from("bar.txt"),
             abs_path: PathBuf::from("/bar.txt"),
             metadata: Metadata::default(),
-            ftype: Some(String::from("txt")),
+            extension: Some(String::from("txt")),
         });
         assert_eq!(entry.is_hidden(), false);
         let entry: Entry = Entry::File(File {
             name: String::from(".gitignore"),
             abs_path: PathBuf::from("/.gitignore"),
             metadata: Metadata::default(),
-            ftype: Some(String::from("txt")),
+            extension: Some(String::from("txt")),
         });
         assert_eq!(entry.is_hidden(), true);
         let entry: Entry = Entry::Directory(Directory {

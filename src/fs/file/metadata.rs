@@ -46,7 +46,7 @@ pub struct Metadata {
     /// Modify time
     pub mtime: SystemTime,
     /// File size in bytes
-    pub size: usize,
+    pub size: u64,
     /// If file is symlink, contains the path of the file it is pointing to
     pub symlink: Option<PathBuf>,
     /// User id
@@ -100,7 +100,7 @@ impl Metadata {
     }
 
     /// Construct metadata with file size
-    pub fn size(mut self, size: usize) -> Self {
+    pub fn size(mut self, size: u64) -> Self {
         self.size = size;
         self
     }

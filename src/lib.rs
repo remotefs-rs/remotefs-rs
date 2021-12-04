@@ -59,13 +59,11 @@
 extern crate log;
 
 // -- export
-pub use fs::{
-    Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFileSystem, RemoteResult,
-};
+pub use fs::{Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
 pub mod client;
 pub mod fs;
-// mod utils; TODO: add when available
+pub(crate) mod utils;
 
 // -- mock
 #[cfg(test)]

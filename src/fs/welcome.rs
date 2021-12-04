@@ -36,8 +36,8 @@ pub struct Welcome {
 
 impl Welcome {
     /// Set welcome message or banner
-    pub(crate) fn banner<S: AsRef<str>>(mut self, banner: S) -> Self {
-        self.banner = Some(banner.as_ref().to_string());
+    pub(crate) fn banner(mut self, banner: Option<String>) -> Self {
+        self.banner = banner;
         self
     }
 }
@@ -52,7 +52,7 @@ mod test {
     fn should_create_welcome_type() {
         let welcome = Welcome::default();
         assert!(welcome.banner.is_none());
-        let welcome = Welcome::default().banner("Hello, world!");
+        let welcome = Welcome::default().banner(Some("Hello, world!".to_string()));
         assert_eq!(welcome.banner.as_deref().unwrap(), "Hello, world!");
     }
 }

@@ -52,6 +52,22 @@ impl UnixPex {
     }
 }
 
+impl From<UnixPex> for u32 {
+    fn from(pex: UnixPex) -> Self {
+        (u32::from(pex.0) << 6) + (u32::from(pex.1) << 3) + u32::from(pex.2)
+    }
+}
+
+impl From<u32> for UnixPex {
+    fn from(x: u32) -> Self {
+        UnixPex::new(
+            UnixPexClass::from(((x >> 6) & 0x7) as u8),
+            UnixPexClass::from(((x >> 3) & 0x7) as u8),
+            UnixPexClass::from((x & 0x7) as u8),
+        )
+    }
+}
+
 /// Describes the permissions on POSIX system for a user class
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UnixPexClass {
@@ -101,6 +117,12 @@ impl From<u8> for UnixPexClass {
     }
 }
 
+impl From<UnixPexClass> for u32 {
+    fn from(pex: UnixPexClass) -> Self {
+        ((pex.read as u32) << 2) + ((pex.write as u32) << 1) + (pex.execute as u32)
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -142,5 +164,33 @@ mod test {
         assert_eq!(pex.user().as_byte(), 6);
         assert_eq!(pex.group().as_byte(), 4);
         assert_eq!(pex.others().as_byte(), 0);
+    }
+
+    #[test]
+    fn should_convert_unix_pex_to_byte() {
+        let pex = UnixPex::new(
+            UnixPexClass::from(6),
+            UnixPexClass::from(4),
+            UnixPexClass::from(2),
+        );
+        assert_eq!(u32::from(pex), 0o642);
+        let pex = UnixPex::new(
+            UnixPexClass::from(7),
+            UnixPexClass::from(5),
+            UnixPexClass::from(5),
+        );
+        assert_eq!(u32::from(pex), 0o755);
+    }
+
+    #[test]
+    fn should_convert_u32_to_unix_pex() {
+        assert_eq!(
+            UnixPex::from(0o754),
+            UnixPex::new(
+                UnixPexClass::from(7),
+                UnixPexClass::from(5),
+                UnixPexClass::from(4),
+            )
+        );
     }
 }

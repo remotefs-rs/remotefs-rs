@@ -27,7 +27,6 @@
  */
 // -- local
 // -- ext
-use std::fs::File as StdFile;
 use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -43,7 +42,7 @@ pub use file::{Directory, Entry, File, Metadata, UnixPex, UnixPexClass};
 pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
-pub trait RemoteFileSystem {
+pub trait RemoteFs {
     /// Connect to the remote server and authenticate.
     /// Can return banner / welcome message on success.
     /// If client has already established connection, then `AlreadyConnected` error is returned.
@@ -68,6 +67,9 @@ pub trait RemoteFileSystem {
     /// Stat file at `path` and return Entry
     fn stat(&mut self, path: &Path) -> RemoteResult<Entry>;
 
+    /// Set metadata for file at `path`
+    fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
+
     /// Returns whether file at `path` exists.
     fn exists(&mut self, path: &Path) -> RemoteResult<bool>;
 
@@ -75,7 +77,38 @@ pub trait RemoteFileSystem {
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()>;
 
     /// Remove directory at `path`
+    /// Directory is removed only if empty
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
+
+    /// Removes a directory at this path, after removing all its contents. **Use carefully!**
+    ///
+    /// If path is a `File`, file is removed anyway, as it was a file (after all, directories are files!)
+    ///
+    /// This function does not follow symbolic links and it will simply remove the symbolic link itself.
+    ///
+    /// By default this method will combine remove_dir and remove_file to remove all the content.
+    /// Implement this method when there is a faster way to achieve this
+    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
+        if self.is_connected() {
+            let path = crate::utils::path::absolutize(&self.pwd()?, path);
+            let entry = self.stat(path.as_path())?;
+            debug!("Removing all contents of {}", entry.path().display());
+            match entry {
+                Entry::File(_) => self.remove_file(entry.path()),
+                Entry::Directory(d) => {
+                    // list dir
+                    debug!("{} is a directory; removing all directory entries", d.name);
+                    let directory_content = self.list_dir(d.abs_path.as_path())?;
+                    for entry in directory_content.iter() {
+                        self.remove_dir_all(entry.path())?;
+                    }
+                    self.remove_dir(d.abs_path.as_path())
+                }
+            }
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        }
+    }
 
     /// Create a directory at `path`
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
@@ -98,7 +131,7 @@ pub trait RemoteFileSystem {
     fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
     /// Open file at path for read.
-    fn open(&mut self, path: &Path) -> RemoteResult<(Box<dyn Read>, Metadata)>;
+    fn open(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>>;
 
     /// Finalize `create_file` and `append_file` methods.
     /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
@@ -169,14 +202,14 @@ pub trait RemoteFileSystem {
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// For safety reasons this function doesn't accept the `Write` trait, but the destination path.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn open_file(&mut self, src: &Path, dest: &mut StdFile) -> RemoteResult<Metadata> {
+    fn open_file(&mut self, src: &Path, dest: &mut impl Write) -> RemoteResult<()> {
         if self.is_connected() {
-            let (mut stream, metadata) = self.open(src)?;
+            let mut stream = self.open(src)?;
             io::copy(&mut stream, dest)
                 .map(|_| ())
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_read(stream)?;
-            Ok(metadata)
+            Ok(())
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
