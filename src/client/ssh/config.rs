@@ -97,10 +97,7 @@ impl Config {
             None => params.port.unwrap_or(22),
             Some(p) => p,
         };
-        match host.contains(':') {
-            true => host.to_string(),
-            false => format!("{}:{}", host, port),
-        }
+        format!("{}:{}", host, port)
     }
 
     /// Resolve username from opts and params.

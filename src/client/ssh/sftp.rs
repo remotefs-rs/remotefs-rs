@@ -325,26 +325,16 @@ impl RemoteFs for SftpFs {
         let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
         debug!("Copying {} to {}", src.display(), dest.display());
         // Run `cp -rf`
-        match commons::perform_shell_cmd_at(
+        match commons::perform_shell_cmd_with_rc(
             self.session.as_mut().unwrap(),
-            format!(
-                "cp -rf \"{}\" \"{}\"; echo $?",
-                src.display(),
-                dest.display()
-            )
-            .as_str(),
-            self.wrkdir.as_path(),
+            format!("cp -rf \"{}\" \"{}\"", src.display(), dest.display()).as_str(),
         ) {
-            Ok(output) => {
-                match output.as_str().trim() == "0" {
-                    true => Ok(()), // File copied
-                    false => Err(RemoteError::new_ex(
-                        // Could not copy file
-                        RemoteErrorType::FileCreateDenied,
-                        format!("\"{}\"", dest.display()),
-                    )),
-                }
-            }
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new_ex(
+                // Could not copy file
+                RemoteErrorType::FileCreateDenied,
+                format!("\"{}\"", dest.display()),
+            )),
             Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
         }
     }
@@ -368,22 +358,11 @@ impl RemoteFs for SftpFs {
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
         self.check_connection()?;
         debug!(r#"Executing command "{}""#, cmd);
-        commons::perform_shell_cmd_at(
+        commons::perform_shell_cmd_at_with_rc(
             self.session.as_mut().unwrap(),
-            format!("{}; echo $?", cmd),
+            cmd,
             self.wrkdir.as_path(),
         )
-        .map(|output| {
-            if let Some(index) = output.trim().rfind('\n') {
-                trace!("Read from stdout: '{}'", output);
-                let actual_output = (&output[0..index + 1]).to_string();
-                let rc = u32::from_str(&output[index..]).ok().unwrap_or(0);
-                debug!(r#"Command output: "{}"; exit code: {}"#, actual_output, rc);
-                (rc, actual_output)
-            } else {
-                (u32::from_str(&output).ok().unwrap_or(0), String::new())
-            }
-        })
     }
 
     fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>> {

@@ -32,6 +32,7 @@ use ssh2::{MethodType as SshMethodType, Session};
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
+use std::str::FromStr;
 
 // -- connect
 
@@ -273,6 +274,48 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Remote
     }
 }
 
+/// Perform shell command at specified path and return exit code and output
+pub fn perform_shell_cmd_at_with_rc<S: AsRef<str>>(
+    session: &mut Session,
+    cmd: S,
+    p: &Path,
+) -> RemoteResult<(u32, String)> {
+    perform_shell_cmd_with_rc(session, format!("cd \"{}\"; {}", p.display(), cmd.as_ref()))
+}
+
+/// Perform shell command and collect return code and output
+pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
+    session: &mut Session,
+    cmd: S,
+) -> RemoteResult<(u32, String)> {
+    let output = perform_shell_cmd(session, format!("{}; echo $?", cmd.as_ref()))?;
+    if let Some(index) = output.trim().rfind('\n') {
+        trace!("Read from stdout: '{}'", output);
+        let actual_output = (&output[0..index + 1]).to_string();
+        trace!("Actual output '{}'", actual_output);
+        trace!("Parsing return code '{}'", output[index..].trim());
+        let rc = match u32::from_str(&output[index..].trim()).ok() {
+            Some(val) => val,
+            None => {
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::ProtocolError,
+                    "Failed to get command exit code",
+                ))
+            }
+        };
+        debug!(r#"Command output: "{}"; exit code: {}"#, actual_output, rc);
+        Ok((rc, actual_output))
+    } else {
+        match u32::from_str(output.trim()).ok() {
+            Some(val) => Ok((val, String::new())),
+            None => Err(RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                "Failed to get command exit code",
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -316,6 +359,32 @@ mod test {
         assert!(session.authenticated());
         // run commands
         assert!(perform_shell_cmd_at(&mut session, "pwd", Path::new("/")).is_ok());
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    fn should_perform_shell_command_on_server_and_return_exit_code() {
+        crate::mock::logger();
+        let opts = SshOpts::new("127.0.0.1")
+            .port(10022)
+            .username("sftp")
+            .password("password");
+        let mut session = connect(&opts).ok().unwrap();
+        assert!(session.authenticated());
+        // run commands
+        assert_eq!(
+            perform_shell_cmd_at_with_rc(&mut session, "pwd", Path::new("/tmp"))
+                .ok()
+                .unwrap(),
+            (0, String::from("/tmp\n"))
+        );
+        assert_eq!(
+            perform_shell_cmd_at_with_rc(&mut session, "pippopluto", Path::new("/tmp"))
+                .ok()
+                .unwrap()
+                .0,
+            127
+        );
     }
 
     #[test]
