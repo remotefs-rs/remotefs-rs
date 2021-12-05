@@ -1,0 +1,224 @@
+//! ## SCP
+//!
+//! Scp remote fs implementation
+
+/**
+ * MIT License
+ *
+ * remotefs - Copyright (c) 2021 Christian Visintin
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+use super::{commons, SshOpts};
+use crate::fs::{
+    Metadata, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex, UnixPexClass, Welcome,
+};
+use crate::utils::path as path_utils;
+use crate::{Directory, Entry, File};
+
+use regex::Regex;
+use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::ops::Range;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+// -- export
+pub use ssh2::Session as SshSession;
+
+/// SCP "filesystem" client
+pub struct ScpFs {
+    session: Option<SshSession>,
+    wrkdir: PathBuf,
+    opts: SshOpts,
+}
+
+impl ScpFs {
+    /// Creates a new `SftpFs`
+    pub fn new(opts: SshOpts) -> Self {
+        Self {
+            session: None,
+            wrkdir: PathBuf::from("/"),
+            opts,
+        }
+    }
+
+    /// Get a reference to current `session` value.
+    pub fn session(&mut self) -> Option<&mut SshSession> {
+        self.session.as_mut()
+    }
+
+    // -- private
+
+    /// Check connection status
+    fn check_connection(&self) -> RemoteResult<()> {
+        if self.is_connected() {
+            Ok(())
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        }
+    }
+
+    /// ### parse_ls_output
+    ///
+    /// Parse a line of `ls -l` output and tokenize the output into a `FsEntry`
+    fn parse_ls_output(&mut self, path: &Path, line: &str) -> Result<Entry, ()> {
+        // Prepare list regex
+        // NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
+        lazy_static! {
+            static ref LS_RE: Regex = Regex::new(r#"^([\-ld])([\-rwxs]{9})\s+(\d+)\s+(.+)\s+(.+)\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(.+)$"#).unwrap();
+        }
+        trace!("Parsing LS line: '{}'", line);
+        // Apply regex to result
+        match LS_RE.captures(line) {
+            // String matches regex
+            Some(metadata) => {
+                // NOTE: metadata fmt: (regex, file_type, permissions, link_count, uid, gid, filesize, mtime, filename)
+                // Expected 7 + 1 (8) values: + 1 cause regex is repeated at 0
+                if metadata.len() < 8 {
+                    return Err(());
+                }
+                // Collect metadata
+                // Get if is directory and if is symlink
+                let (mut is_dir, is_symlink): (bool, bool) = match metadata.get(1).unwrap().as_str()
+                {
+                    "-" => (false, false),
+                    "l" => (false, true),
+                    "d" => (true, false),
+                    _ => return Err(()), // Ignore special files
+                };
+                // Check string length (unix pex)
+                if metadata.get(2).unwrap().as_str().len() < 9 {
+                    return Err(());
+                }
+
+                let pex = |range: Range<usize>| {
+                    let mut count: u8 = 0;
+                    for (i, c) in metadata.get(2).unwrap().as_str()[range].chars().enumerate() {
+                        match c {
+                            '-' => {}
+                            _ => {
+                                count += match i {
+                                    0 => 4,
+                                    1 => 2,
+                                    2 => 1,
+                                    _ => 0,
+                                }
+                            }
+                        }
+                    }
+                    count
+                };
+
+                // Get unix pex
+                let mode = UnixPex::new(
+                    UnixPexClass::from(pex(0..3)),
+                    UnixPexClass::from(pex(3..6)),
+                    UnixPexClass::from(pex(6..9)),
+                );
+
+                // Parse mtime and convert to SystemTime
+                let mtime: SystemTime = match parse_lstime(
+                    metadata.get(7).unwrap().as_str(),
+                    "%b %d %Y",
+                    "%b %d %H:%M",
+                ) {
+                    Ok(t) => t,
+                    Err(_) => SystemTime::UNIX_EPOCH,
+                };
+                // Get uid
+                let uid: Option<u32> = match metadata.get(4).unwrap().as_str().parse::<u32>() {
+                    Ok(uid) => Some(uid),
+                    Err(_) => None,
+                };
+                // Get gid
+                let gid: Option<u32> = match metadata.get(5).unwrap().as_str().parse::<u32>() {
+                    Ok(gid) => Some(gid),
+                    Err(_) => None,
+                };
+                // Get filesize
+                let size = metadata
+                    .get(6)
+                    .unwrap()
+                    .as_str()
+                    .parse::<u64>()
+                    .unwrap_or(0);
+                // Get link and name
+                let (file_name, symlink): (String, Option<PathBuf>) = match is_symlink {
+                    true => self.get_name_and_link(metadata.get(8).unwrap().as_str()),
+                    false => (String::from(metadata.get(8).unwrap().as_str()), None),
+                };
+                // Check if file_name is '.' or '..'
+                if file_name.as_str() == "." || file_name.as_str() == ".." {
+                    debug!("File name is {}; ignoring entry", file_name);
+                    return Err(());
+                }
+                // Re-check if is directory
+                let mut abs_path: PathBuf = path.to_path_buf();
+                abs_path.push(file_name.as_str());
+                // Get extension
+                let extension: Option<String> = abs_path
+                    .as_path()
+                    .extension()
+                    .map(|s| String::from(s.to_string_lossy()));
+                let metadata = Metadata {
+                    atime: SystemTime::UNIX_EPOCH,
+                    ctime: SystemTime::UNIX_EPOCH,
+                    gid,
+                    mode: Some(mode),
+                    mtime,
+                    size,
+                    symlink,
+                    uid,
+                };
+                trace!(
+                    "Found entry at {} with metadata {:?}",
+                    abs_path.display(),
+                    metadata
+                );
+                // Push to entries
+                Ok(match is_dir {
+                    true => Entry::Directory(Directory {
+                        name: file_name,
+                        abs_path,
+                        metadata,
+                    }),
+                    false => Entry::File(File {
+                        name: file_name,
+                        abs_path,
+                        extension,
+                        metadata,
+                    }),
+                })
+            }
+            None => Err(()),
+        }
+    }
+
+    /// ### get_name_and_link
+    ///
+    /// Returns from a `ls -l` command output file name token, the name of the file and the symbolic link (if there is any)
+    fn get_name_and_link(&self, token: &str) -> (String, Option<PathBuf>) {
+        let tokens: Vec<&str> = token.split(" -> ").collect();
+        let filename: String = String::from(*tokens.get(0).unwrap());
+        let symlink: Option<PathBuf> = tokens.get(1).map(PathBuf::from);
+        (filename, symlink)
+    }
+}

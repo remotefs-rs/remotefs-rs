@@ -33,9 +33,11 @@ use std::time::Duration;
 // mod scp;
 mod commons;
 mod config;
+mod scp;
 mod sftp;
 // -- export
 // pub use scp::ScpFileTransfer;
+pub use scp::ScpFs;
 pub use sftp::SftpFs;
 pub use ssh2::MethodType as SshMethodType;
 
@@ -155,7 +157,16 @@ impl SshOpts {
     ///
     /// The supported options are:
     ///
-    /// - TODO: complete
+    /// - Host block
+    /// - HostName
+    /// - Port
+    /// - User
+    /// - Ciphers
+    /// - MACs
+    /// - KexAlgorithms
+    /// - HostKeyAlgorithms
+    /// - ConnectionAttempts
+    /// - ConnectTimeout
     pub fn config_file<P: AsRef<Path>>(mut self, p: P) -> Self {
         self.config_file = Some(p.as_ref().to_path_buf());
         self
@@ -180,7 +191,11 @@ impl From<SshOpts> for SftpFs {
     }
 }
 
-// TODO: impl for ScpFs
+impl From<SshOpts> for ScpFs {
+    fn from(opts: SshOpts) -> Self {
+        ScpFs::new(opts)
+    }
+}
 
 /// Re-implementation of ssh key method, in order to use `Eq`
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -280,5 +295,10 @@ mod test {
     #[test]
     fn should_build_sftp_client() {
         let _: SftpFs = SshOpts::new("localhost").into();
+    }
+
+    #[test]
+    fn should_build_scp_client() {
+        let _: ScpFs = SshOpts::new("localhost").into();
     }
 }
