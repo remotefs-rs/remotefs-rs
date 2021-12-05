@@ -318,6 +318,10 @@ impl RemoteFs for SftpFs {
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
         self.check_connection()?;
         let src = path_utils::absolutize(self.wrkdir.as_path(), src);
+        // check if file exists
+        if !self.exists(src.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
         let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
         debug!("Copying {} to {}", src.display(), dest.display());
         // Run `cp -rf`
@@ -346,15 +350,19 @@ impl RemoteFs for SftpFs {
     }
 
     fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let src = path_utils::absolutize(self.wrkdir.as_path(), src);
-            let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
-            debug!("Copying {} to {}", src.display(), dest.display());
-            sftp.rename(src.as_path(), dest.as_path(), Some(RenameFlags::OVERWRITE))
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        self.check_connection()?;
+        let src = path_utils::absolutize(self.wrkdir.as_path(), src);
+        // check if file exists
+        if !self.exists(src.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
         }
+        let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
+        debug!("Moving {} to {}", src.display(), dest.display());
+        self.sftp
+            .as_ref()
+            .unwrap()
+            .rename(src.as_path(), dest.as_path(), Some(RenameFlags::OVERWRITE))
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
     }
 
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
@@ -415,15 +423,19 @@ impl RemoteFs for SftpFs {
     }
 
     fn open(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Opening file at {}", path.display());
-            sftp.open(path.as_path())
-                .map(|f| Box::new(BufReader::with_capacity(65536, f)) as Box<dyn Read>)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        // check if file exists
+        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
         }
+        debug!("Opening file at {}", path.display());
+        self.sftp
+            .as_ref()
+            .unwrap()
+            .open(path.as_path())
+            .map(|f| Box::new(BufReader::with_capacity(65536, f)) as Box<dyn Read>)
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))
     }
 }
 

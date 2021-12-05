@@ -240,7 +240,7 @@ pub fn perform_shell_cmd_at<S: AsRef<str>>(
 /// Perform shell command in current SSH session
 pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> RemoteResult<String> {
     // Create channel
-    debug!("Running command: {}", cmd.as_ref());
+    trace!("Running command: {}", cmd.as_ref());
     let mut channel = match session.channel_session() {
         Ok(ch) => ch,
         Err(err) => {
@@ -263,7 +263,7 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Remote
         Ok(_) => {
             // Wait close
             let _ = channel.wait_close();
-            debug!("Command output: {}", output);
+            trace!("Command output: {}", output);
             Ok(output)
         }
         Err(err) => Err(RemoteError::new_ex(
