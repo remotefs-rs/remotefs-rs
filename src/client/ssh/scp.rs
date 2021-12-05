@@ -35,11 +35,9 @@ use crate::utils::path as path_utils;
 use crate::{Directory, Entry, File};
 
 use regex::Regex;
-use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
 // -- export
@@ -81,7 +79,7 @@ impl ScpFs {
     /// ### parse_ls_output
     ///
     /// Parse a line of `ls -l` output and tokenize the output into a `FsEntry`
-    fn parse_ls_output(&mut self, path: &Path, line: &str) -> Result<Entry, ()> {
+    fn parse_ls_output(&self, path: &Path, line: &str) -> Result<Entry, ()> {
         // Prepare list regex
         // NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
         lazy_static! {
@@ -99,8 +97,7 @@ impl ScpFs {
                 }
                 // Collect metadata
                 // Get if is directory and if is symlink
-                let (mut is_dir, is_symlink): (bool, bool) = match metadata.get(1).unwrap().as_str()
-                {
+                let (is_dir, is_symlink): (bool, bool) = match metadata.get(1).unwrap().as_str() {
                     "-" => (false, false),
                     "l" => (false, true),
                     "d" => (true, false),
@@ -167,6 +164,11 @@ impl ScpFs {
                     true => self.get_name_and_link(metadata.get(8).unwrap().as_str()),
                     false => (String::from(metadata.get(8).unwrap().as_str()), None),
                 };
+                // Sanitize file name
+                let file_name = PathBuf::from(&file_name)
+                    .file_name()
+                    .map(|x| x.to_string_lossy().to_string())
+                    .unwrap_or(file_name);
                 // Check if file_name is '.' or '..'
                 if file_name.as_str() == "." || file_name.as_str() == ".." {
                     debug!("File name is {}; ignoring entry", file_name);
@@ -232,6 +234,19 @@ impl ScpFs {
             Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
         }
     }
+
+    /// Returns whether file at `path` is a directory
+    fn is_directory(&mut self, path: &Path) -> RemoteResult<bool> {
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("test -d \"{}\"", path.display()),
+        ) {
+            Ok((0, _)) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, err)),
+        }
+    }
 }
 
 impl RemoteFs for ScpFs {
@@ -292,7 +307,7 @@ impl RemoteFs for ScpFs {
         debug!("Changing working directory to {}", dir.display());
         match commons::perform_shell_cmd(
             self.session.as_mut().unwrap(),
-            format!("cd \"{}\"; echo $?; pwd", dir.display()), // TODO: commons function for exit code
+            format!("cd \"{}\"; echo $?; pwd", dir.display()),
         ) {
             Ok(output) => {
                 // Trim
@@ -351,7 +366,7 @@ impl RemoteFs for ScpFs {
         let path = path_utils::absolutize(self.wrkdir.as_path(), path);
         debug!("Stat {}", path.display());
         // make command; Directories require `-d` option
-        let cmd: String = match path.to_string_lossy().ends_with('/') {
+        let cmd = match self.is_directory(path.as_path())? {
             true => format!("ls -ld \"{}\"", path.display()),
             false => format!("ls -l \"{}\"", path.display()),
         };
@@ -373,6 +388,19 @@ impl RemoteFs for ScpFs {
                 }
             }
             Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
+    }
+
+    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("test -e \"{}\"", path.display()),
+        ) {
+            Ok((0, _)) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, err)),
         }
     }
 
@@ -402,17 +430,6 @@ impl RemoteFs for ScpFs {
             fmt_utils::fmt_time_utc(metadata.mtime, "%Y%m%d%H%M.%S"),
             path.display()
         ))
-    }
-
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
-        match self.stat(path) {
-            Ok(_) => Ok(true),
-            Err(RemoteError {
-                code: RemoteErrorType::NoSuchFileOrDirectory,
-                ..
-            }) => Ok(false),
-            Err(err) => Err(err),
-        }
     }
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
@@ -483,7 +500,7 @@ impl RemoteFs for ScpFs {
             format!("mkdir -m {} \"{}\"", mode, path.display()),
         ) {
             Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::CouldNotRemoveFile)),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::FileCreateDenied)),
             Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
         }
     }
@@ -571,15 +588,410 @@ impl RemoteFs for ScpFs {
         )
     }
 
-    fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>> {
-        todo!()
+    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<Box<dyn Write>> {
+        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
     fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>> {
-        todo!()
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        debug!("Creating file {}", path.display());
+        // blocking channel
+        self.session.as_mut().unwrap().set_blocking(true);
+        trace!("blocked channel");
+        let mode = metadata.mode.map(u32::from).unwrap_or(0o644) as i32;
+        let atime = metadata
+            .atime
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        let mtime = metadata
+            .mtime
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        trace!(
+            "Creating file with mode {:o}, atime: {}, mtime: {}",
+            mode,
+            atime,
+            mtime
+        );
+        match self.session.as_mut().unwrap().scp_send(
+            path.as_path(),
+            mode,
+            metadata.size,
+            Some((mtime, atime)),
+        ) {
+            Ok(channel) => Ok(Box::new(BufWriter::with_capacity(65536, channel))),
+            Err(err) => {
+                error!("Failed to create file: {}", err);
+                Err(RemoteError::new_ex(RemoteErrorType::FileCreateDenied, err))
+            }
+        }
     }
 
     fn open(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>> {
-        todo!()
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        debug!("Opening file {} for read", path.display());
+        // check if file exists
+        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        self.session.as_mut().unwrap().set_blocking(true);
+        trace!("blocked channel");
+        match self.session.as_mut().unwrap().scp_recv(path.as_path()) {
+            Ok((channel, _)) => Ok(Box::new(BufReader::with_capacity(65536, channel))),
+            Err(err) => {
+                error!("Failed to open file: {}", err);
+                Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crate::mock::fs as fs_mock;
+    use crate::mock::ssh as ssh_mock;
+
+    use pretty_assertions::assert_eq;
+    use std::fs::File as StdFile;
+
+    #[test]
+    fn should_init_scp_fs() {
+        let client = ScpFs::new(SshOpts::new("localhost"));
+        assert!(client.session.is_none());
+        assert_eq!(client.is_connected(), false);
+    }
+
+    #[test]
+    fn should_fail_connection_to_bad_server() {
+        let mut client = ScpFs::new(SshOpts::new("mybad.verybad.server"));
+        assert!(client.connect().is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    fn should_operate_on_scp_file_system() {
+        crate::mock::logger();
+        let config_file = ssh_mock::create_ssh_config();
+        let mut client = ScpFs::new(
+            SshOpts::new("scp")
+                .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
+                .config_file(config_file.path()),
+        );
+        // Sample file
+        let (entry, file) = fs_mock::create_sample_file_entry();
+        // Connect
+        assert!(client.connect().is_ok());
+        // Check session
+        assert!(client.session.is_some());
+        assert_eq!(client.wrkdir, PathBuf::from("/config"));
+        assert_eq!(client.is_connected(), true);
+        // Pwd
+        assert_eq!(client.wrkdir.clone(), client.pwd().ok().unwrap());
+        // Cleanup
+        assert!(client.change_dir(Path::new("/")).is_ok());
+        let _ = client.remove_dir_all(Path::new("/tmp/omar"));
+        let _ = client.remove_dir_all(Path::new("/tmp/uploads"));
+        // Stat
+        let stat = client
+            .stat(Path::new("/config/sshd.pid"))
+            .ok()
+            .unwrap()
+            .unwrap_file();
+        assert_eq!(stat.name.as_str(), "sshd.pid");
+        let stat = client
+            .stat(Path::new("/config/"))
+            .ok()
+            .unwrap()
+            .unwrap_dir();
+        assert_eq!(stat.name.as_str(), "config");
+        // Stat (err)
+        assert!(client.stat(Path::new("/config/5t0ca220.log")).is_err());
+        // List dir (dir has 4 (one is hidden :D) entries)
+        assert!(client.list_dir(&Path::new("/config")).unwrap().len() >= 4);
+        // Make directory
+        assert!(client
+            .create_dir(Path::new("/tmp/omar"), UnixPex::from(0o775))
+            .is_ok());
+        // Remake directory (should report already exists)
+        assert_eq!(
+            client
+                .create_dir(Path::new("/tmp/omar"), UnixPex::from(0o775))
+                .err()
+                .unwrap()
+                .code,
+            RemoteErrorType::DirectoryAlreadyExists
+        );
+        // Make directory (err)
+        assert!(client
+            .create_dir(Path::new("/root/aaaaa/pommlar"), UnixPex::from(0o775))
+            .is_err());
+        // Change directory
+        assert!(client.change_dir(Path::new("/tmp/omar")).is_ok());
+        // Change directory (err)
+        assert!(client.change_dir(Path::new("/tmp/oooo/aaaa/eee")).is_err());
+        // Copy (not supported)
+        assert!(client
+            .copy(entry.abs_path.as_path(), Path::new("/"))
+            .is_err());
+        // Exec
+        assert_eq!(client.exec("echo 5").ok().unwrap(), (0, "5\n".to_string()));
+        // Upload 2 files
+        let mut writable = client
+            .create(Path::new("omar.txt"), &entry.metadata)
+            .ok()
+            .unwrap();
+        fs_mock::write_file(&file, &mut writable);
+        assert!(client.on_written(writable).is_ok());
+        let mut writable = client
+            .create(Path::new("README.md"), &entry.metadata)
+            .ok()
+            .unwrap();
+        fs_mock::write_file(&file, &mut writable);
+        assert!(client.on_written(writable).is_ok());
+        // Set stat
+        let metadata = client
+            .stat(Path::new("README.md"))
+            .ok()
+            .unwrap()
+            .metadata()
+            .clone();
+        assert!(client.setstat(Path::new("README.md"), metadata).is_ok());
+        // Upload file without stream
+        let reader = Box::new(StdFile::open(entry.abs_path.as_path()).ok().unwrap());
+        assert!(client
+            .create_file(Path::new("README2.md"), &entry.metadata, reader)
+            .is_ok());
+        // Upload file (err)
+        assert!(client
+            .create(Path::new("/ommlar/omarone"), &entry.metadata)
+            .is_err());
+        // List dir
+        let list = client.list_dir(Path::new("/tmp/omar")).ok().unwrap();
+        assert_eq!(list.len(), 3);
+        // Find
+        assert_eq!(client.find("*.txt").ok().unwrap().len(), 1);
+        assert_eq!(client.find("*.md").ok().unwrap().len(), 2);
+        assert_eq!(client.find("*.jpeg").ok().unwrap().len(), 0);
+        // Rename
+        assert!(client
+            .create_dir(Path::new("/tmp/uploads"), UnixPex::from(0o775))
+            .is_ok());
+        assert!(client
+            .mov(
+                list.get(0).unwrap().path(),
+                Path::new("/tmp/uploads/README.txt")
+            )
+            .is_ok());
+        // Rename (err)
+        assert!(client
+            .mov(list.get(0).unwrap().path(), Path::new("OMARONE"))
+            .is_err());
+        // Symlink
+        let _ = client.exec("rm -f /tmp/README.txt");
+        assert!(client
+            .symlink(
+                Path::new("/tmp/README.txt"),
+                Path::new("/tmp/uploads/README.txt")
+            )
+            .is_ok());
+        // Symlink (err)
+        assert!(client
+            .symlink(
+                Path::new("/tmp/uploads/PIPPO.txt"),
+                Path::new("/tmp/omarone.log")
+            )
+            .is_err());
+        let dummy = Entry::File(File {
+            name: String::from("cucumber.txt"),
+            abs_path: PathBuf::from("/cucumber.txt"),
+            extension: None,
+            metadata: Metadata::default(),
+        });
+        assert!(client.mov(&dummy.path(), Path::new("/a/b/c")).is_err());
+        // Remove
+        assert!(client.remove_dir_all(list.get(1).unwrap().path()).is_ok());
+        assert!(client.remove_dir_all(list.get(1).unwrap().path()).is_err());
+        // Receive file
+        let mut writable = client
+            .create(Path::new("/tmp/uploads/README.txt"), &entry.metadata)
+            .ok()
+            .unwrap();
+        fs_mock::write_file(&file, &mut writable);
+        assert!(client.on_written(writable).is_ok());
+        let file = client
+            .list_dir(Path::new("/tmp/uploads"))
+            .ok()
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .clone()
+            .unwrap_file();
+        let mut readable = client.open(file.abs_path.as_path()).ok().unwrap();
+        let mut data: Vec<u8> = vec![0; 1024];
+        assert!(readable.read(&mut data).is_ok());
+        assert!(client.on_read(readable).is_ok());
+        let mut dest_file = fs_mock::create_sample_file();
+        // Receive file wno stream
+        assert!(client
+            .open_file(file.abs_path.as_path(), &mut dest_file)
+            .is_ok());
+        // Receive file (err)
+        assert!(client.open(entry.abs_path.as_path()).is_err());
+        // Cleanup
+        assert!(client.change_dir(Path::new("/")).is_ok());
+        assert!(client.remove_dir_all(Path::new("/tmp/omar")).is_ok());
+        assert!(client.remove_dir_all(Path::new("/tmp/uploads")).is_ok());
+        // Disconnect
+        assert!(client.disconnect().is_ok());
+        assert_eq!(client.is_connected(), false);
+    }
+
+    #[test]
+    fn should_get_name_and_link() {
+        let client = ScpFs::new(SshOpts::new("localhost"));
+        assert_eq!(
+            client.get_name_and_link("Cargo.toml"),
+            (String::from("Cargo.toml"), None)
+        );
+        assert_eq!(
+            client.get_name_and_link("Cargo -> Cargo.toml"),
+            (String::from("Cargo"), Some(PathBuf::from("Cargo.toml")))
+        );
+    }
+
+    #[test]
+    fn should_parse_file_ls_output() {
+        let client = ScpFs::new(SshOpts::new("localhost"));
+        // File
+        let entry = client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "-rw-r--r-- 1 root root  2056 giu 13 21:11 /tmp/Cargo.toml",
+            )
+            .ok()
+            .unwrap()
+            .unwrap_file();
+        assert_eq!(entry.name.as_str(), "Cargo.toml");
+        assert_eq!(entry.abs_path, PathBuf::from("/tmp/Cargo.toml"));
+        assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o644_u32);
+        assert_eq!(entry.metadata.size, 2056);
+        assert_eq!(entry.extension.unwrap().as_str(), "toml");
+        assert!(entry.metadata.symlink.is_none());
+        // File (year)
+        let entry = client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "-rw-rw-rw- 1 root root  3368 nov  7  2020 CODE_OF_CONDUCT.md",
+            )
+            .ok()
+            .unwrap()
+            .unwrap_file();
+        assert_eq!(entry.name.as_str(), "CODE_OF_CONDUCT.md");
+        assert_eq!(entry.abs_path, PathBuf::from("/tmp/CODE_OF_CONDUCT.md"));
+        assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o666_u32);
+        assert_eq!(entry.metadata.size, 3368);
+        assert_eq!(entry.extension.unwrap().as_str(), "md");
+        assert!(entry.metadata.symlink.is_none());
+    }
+
+    #[test]
+    fn should_parse_directory_from_ls_output() {
+        let client = ScpFs::new(SshOpts::new("localhost"));
+        // Directory
+        let entry = client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "drwxr-xr-x 1 root root   512 giu 13 21:11 docs",
+            )
+            .ok()
+            .unwrap()
+            .unwrap_dir();
+        assert_eq!(entry.name.as_str(), "docs");
+        assert_eq!(entry.abs_path, PathBuf::from("/tmp/docs"));
+        assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o755_u32);
+        assert!(entry.metadata.symlink.is_none());
+        // Short metadata
+        assert!(client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "drwxr-xr-x 1 root root   512 giu 13 21:11",
+            )
+            .is_err());
+        // Special file
+        assert!(client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "crwxr-xr-x 1 root root   512 giu 13 21:11 ttyS1",
+            )
+            .is_err());
+        // Bad pex
+        assert!(client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "-rwxr-xr 1 root root   512 giu 13 21:11 ttyS1",
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn should_parse_symlink_from_ls_output() {
+        let client = ScpFs::new(SshOpts::new("localhost"));
+        // File
+        let entry = client
+            .parse_ls_output(
+                PathBuf::from("/tmp").as_path(),
+                "lrw-r--r-- 1 root root  2056 giu 13 21:11 Cargo.toml -> Cargo.prod.toml",
+            )
+            .ok()
+            .unwrap()
+            .unwrap_file();
+        assert_eq!(entry.name.as_str(), "Cargo.toml");
+        assert_eq!(entry.abs_path, PathBuf::from("/tmp/Cargo.toml"));
+        assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o644_u32);
+        assert_eq!(entry.metadata.size, 2056);
+        assert_eq!(entry.extension.unwrap().as_str(), "toml");
+        assert_eq!(
+            entry.metadata.symlink.as_deref().unwrap(),
+            Path::new("Cargo.prod.toml")
+        );
+    }
+
+    #[test]
+    fn should_return_errors_on_uninitialized_client() {
+        let mut client = ScpFs::new(SshOpts::new("localhost"));
+        assert!(client.change_dir(Path::new("/tmp")).is_err());
+        assert!(client
+            .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
+            .is_err());
+        assert!(client.exec("echo 5").is_err());
+        assert!(client.disconnect().is_err());
+        assert!(client.list_dir(Path::new("/tmp")).is_err());
+        assert!(client
+            .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
+            .is_err());
+        assert!(client.pwd().is_err());
+        assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
+        assert!(client
+            .mov(Path::new("/nowhere"), Path::new("/culonia"))
+            .is_err());
+        assert!(client.stat(Path::new("/tmp")).is_err());
+        assert!(client
+            .setstat(Path::new("/tmp"), Metadata::default())
+            .is_err());
+        assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
+        assert!(client
+            .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
+            .is_err());
+        assert!(client
+            .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
+            .is_err());
     }
 }

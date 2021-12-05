@@ -648,9 +648,16 @@ mod test {
         // Remove
         assert!(client.remove_dir_all(list.get(1).unwrap().path()).is_ok());
         assert!(client.remove_dir_all(list.get(1).unwrap().path()).is_err());
-        // Receive file
+        // Create file
         let mut writable = client
             .create(Path::new("/tmp/uploads/README.txt"), &entry.metadata)
+            .ok()
+            .unwrap();
+        fs_mock::write_file(&file, &mut writable);
+        assert!(client.on_written(writable).is_ok());
+        // Append to file
+        let mut writable = client
+            .append(Path::new("/tmp/uploads/README.txt"), &entry.metadata)
             .ok()
             .unwrap();
         fs_mock::write_file(&file, &mut writable);
@@ -709,6 +716,9 @@ mod test {
         assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
         assert!(client
             .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
+            .is_err());
+        assert!(client
+            .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
             .is_err());
     }
 }

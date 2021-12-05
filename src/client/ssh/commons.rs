@@ -229,15 +229,6 @@ fn session_auth_with_password(
 
 // -- shell commands
 
-/// Perform specified shell command at specified path
-pub fn perform_shell_cmd_at<S: AsRef<str>>(
-    session: &mut Session,
-    cmd: S,
-    p: &Path,
-) -> RemoteResult<String> {
-    perform_shell_cmd(session, format!("cd \"{}\"; {}", p.display(), cmd.as_ref()))
-}
-
 /// Perform shell command in current SSH session
 pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> RemoteResult<String> {
     // Create channel
@@ -291,10 +282,10 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
     let output = perform_shell_cmd(session, format!("{}; echo $?", cmd.as_ref()))?;
     if let Some(index) = output.trim().rfind('\n') {
         trace!("Read from stdout: '{}'", output);
-        let actual_output = (&output[0..index + 1]).to_string();
+        let actual_output = (output[0..index + 1]).to_string();
         trace!("Actual output '{}'", actual_output);
         trace!("Parsing return code '{}'", output[index..].trim());
-        let rc = match u32::from_str(&output[index..].trim()).ok() {
+        let rc = match u32::from_str(output[index..].trim()).ok() {
             Some(val) => val,
             None => {
                 return Err(RemoteError::new_ex(
@@ -358,7 +349,7 @@ mod test {
         let mut session = connect(&opts).ok().unwrap();
         assert!(session.authenticated());
         // run commands
-        assert!(perform_shell_cmd_at(&mut session, "pwd", Path::new("/")).is_ok());
+        assert!(perform_shell_cmd(&mut session, "pwd").is_ok());
     }
 
     #[test]
