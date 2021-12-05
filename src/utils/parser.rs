@@ -78,6 +78,7 @@ pub fn parse_datetime(tm: &str, fmt: &str) -> Result<SystemTime, ParseError> {
 mod test {
 
     use super::*;
+    use crate::utils::fmt::fmt_time_local;
 
     use pretty_assertions::assert_eq;
 
@@ -85,7 +86,7 @@ mod test {
     fn should_parse_lstime() {
         // Good cases
         assert_eq!(
-            fmt_time(
+            fmt_time_local(
                 parse_lstime("Nov 5 16:32", "%b %d %Y", "%b %d %H:%M")
                     .ok()
                     .unwrap(),
@@ -95,7 +96,7 @@ mod test {
             "11 05 32"
         );
         assert_eq!(
-            fmt_time(
+            fmt_time_local(
                 parse_lstime("Dec 2 21:32", "%b %d %Y", "%b %d %H:%M")
                     .ok()
                     .unwrap(),
@@ -141,10 +142,5 @@ mod test {
         );
         // Not enough argument for datetime
         assert!(parse_datetime("04-08-14", "%d-%m-%y").is_err());
-    }
-
-    fn fmt_time(time: SystemTime, fmt: &str) -> String {
-        let datetime: DateTime<Local> = time.into();
-        format!("{}", datetime.format(fmt))
     }
 }

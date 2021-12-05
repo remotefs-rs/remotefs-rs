@@ -33,7 +33,6 @@ use crate::{Directory, Entry, File};
 use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::{Duration, SystemTime};
 
 // -- export
@@ -244,7 +243,10 @@ impl RemoteFs for SftpFs {
             debug!("Collecting metadata for {}", path.display());
             sftp.stat(path.as_path())
                 .map(|x| self.make_fsentry(path.as_path(), &x))
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::NoSuchFileOrDirectory, e))
+                .map_err(|e| {
+                    error!("Stat failed: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::NoSuchFileOrDirectory, e)
+                })
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -256,7 +258,10 @@ impl RemoteFs for SftpFs {
             debug!("Setting metadata for {}", path.display());
             sftp.setstat(path.as_path(), FileStat::from(metadata))
                 .map(|_| ())
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::StatFailed, e))
+                .map_err(|e| {
+                    error!("Setstat failed: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::StatFailed, e)
+                })
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -277,8 +282,10 @@ impl RemoteFs for SftpFs {
         if let Some(sftp) = self.sftp.as_ref() {
             let path = path_utils::absolutize(self.wrkdir.as_path(), path);
             debug!("Remove file {}", path.display());
-            sftp.unlink(path.as_path())
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e))
+            sftp.unlink(path.as_path()).map_err(|e| {
+                error!("Remove failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
+            })
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -288,8 +295,10 @@ impl RemoteFs for SftpFs {
         if let Some(sftp) = self.sftp.as_ref() {
             let path = path_utils::absolutize(self.wrkdir.as_path(), path);
             debug!("Remove dir {}", path.display());
-            sftp.rmdir(path.as_path())
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e))
+            sftp.rmdir(path.as_path()).map_err(|e| {
+                error!("Remove failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
+            })
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -312,7 +321,33 @@ impl RemoteFs for SftpFs {
             .as_ref()
             .unwrap()
             .mkdir(path.as_path(), u32::from(mode) as i32)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
+            .map_err(|e| {
+                error!("Create dir failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
+            })
+    }
+
+    fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()> {
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        // Check if already exists
+        debug!(
+            "Creating symlink at {} pointing to {}",
+            path.display(),
+            target.display()
+        );
+        if !self.exists(target)? {
+            error!("target {} doesn't exist", target.display());
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        self.sftp
+            .as_ref()
+            .unwrap()
+            .symlink(target, path.as_path())
+            .map_err(|e| {
+                error!("Symlink failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
+            })
     }
 
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
@@ -352,7 +387,10 @@ impl RemoteFs for SftpFs {
             .as_ref()
             .unwrap()
             .rename(src.as_path(), dest.as_path(), Some(RenameFlags::OVERWRITE))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
+            .map_err(|e| {
+                error!("Move failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
+            })
     }
 
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
@@ -377,7 +415,10 @@ impl RemoteFs for SftpFs {
                 OpenType::File,
             )
             .map(|f| Box::new(BufWriter::with_capacity(65536, f)) as Box<dyn Write>)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))
+            .map_err(|e| {
+                error!("Append failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
+            })
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -395,7 +436,10 @@ impl RemoteFs for SftpFs {
                 OpenType::File,
             )
             .map(|f| Box::new(BufWriter::with_capacity(65536, f)) as Box<dyn Write>)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
+            .map_err(|e| {
+                error!("Create failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
+            })
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -414,7 +458,10 @@ impl RemoteFs for SftpFs {
             .unwrap()
             .open(path.as_path())
             .map(|f| Box::new(BufReader::with_capacity(65536, f)) as Box<dyn Read>)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))
+            .map_err(|e| {
+                error!("Open failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
+            })
     }
 }
 
@@ -481,6 +528,10 @@ mod test {
         assert_eq!(client.is_connected(), true);
         // Pwd
         assert_eq!(client.wrkdir.clone(), client.pwd().ok().unwrap());
+        // Cleanup
+        assert!(client.change_dir(Path::new("/")).is_ok());
+        let _ = client.remove_dir_all(Path::new("/tmp/omar"));
+        let _ = client.remove_dir_all(Path::new("/tmp/uploads"));
         // Stat
         let stat = client
             .stat(Path::new("/config/sshd.pid"))
@@ -571,6 +622,21 @@ mod test {
         // Rename (err)
         assert!(client
             .mov(list.get(0).unwrap().path(), Path::new("OMARONE"))
+            .is_err());
+        // Symlink
+        let _ = client.exec("rm -f /tmp/README.txt");
+        assert!(client
+            .symlink(
+                Path::new("/tmp/README.txt"),
+                Path::new("/tmp/uploads/README.txt")
+            )
+            .is_ok());
+        // Symlink (err)
+        assert!(client
+            .symlink(
+                Path::new("/tmp/uploads/PIPPO.txt"),
+                Path::new("/tmp/omarone.log")
+            )
             .is_err());
         let dummy = Entry::File(File {
             name: String::from("cucumber.txt"),

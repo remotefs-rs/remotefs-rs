@@ -91,8 +91,8 @@ pub trait RemoteFs {
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
         if self.is_connected() {
             let path = crate::utils::path::absolutize(&self.pwd()?, path);
+            debug!("Removing {}...", path.display());
             let entry = self.stat(path.as_path())?;
-            debug!("Removing all contents of {}", entry.path().display());
             match entry {
                 Entry::File(_) => self.remove_file(entry.path()),
                 Entry::Directory(d) => {
@@ -102,6 +102,10 @@ pub trait RemoteFs {
                     for entry in directory_content.iter() {
                         self.remove_dir_all(entry.path())?;
                     }
+                    trace!(
+                        "Removed all files in {}; removing directory",
+                        d.abs_path.display()
+                    );
                     self.remove_dir(d.abs_path.as_path())
                 }
             }
@@ -112,6 +116,9 @@ pub trait RemoteFs {
 
     /// Create a directory at `path`
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
+
+    /// Create a symlink at `path` pointing at `target`
+    fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()>;
 
     /// Copy `src` to `dest`
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;

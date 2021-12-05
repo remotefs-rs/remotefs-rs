@@ -57,6 +57,8 @@ pub enum RemoteErrorType {
     BadFile,
     #[error("directory already exists")]
     DirectoryAlreadyExists,
+    #[error("directory is not empty")]
+    DirectoryNotEmpty,
     #[error("failed to create file")]
     FileCreateDenied,
     #[error("failed to open file")]

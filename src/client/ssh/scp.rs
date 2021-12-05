@@ -29,6 +29,7 @@ use super::{commons, SshOpts};
 use crate::fs::{
     Metadata, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex, UnixPexClass, Welcome,
 };
+use crate::utils::fmt as fmt_utils;
 use crate::utils::parser as parser_utils;
 use crate::utils::path as path_utils;
 use crate::{Directory, Entry, File};
@@ -39,7 +40,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 // -- export
 pub use ssh2::Session as SshSession;
@@ -222,6 +223,15 @@ impl ScpFs {
         let symlink: Option<PathBuf> = tokens.get(1).map(PathBuf::from);
         (filename, symlink)
     }
+
+    /// Execute setstat command and assert result is 0
+    fn assert_stat_command(&mut self, cmd: String) -> RemoteResult<()> {
+        match commons::perform_shell_cmd_with_rc(self.session.as_mut().unwrap(), cmd) {
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::StatFailed)),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
+    }
 }
 
 impl RemoteFs for ScpFs {
@@ -367,7 +377,31 @@ impl RemoteFs for ScpFs {
     }
 
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()> {
-        todo!()
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        debug!("Setting attributes for {}", path.display());
+        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        // set mode with chmod
+        if let Some(mode) = metadata.mode {
+            self.assert_stat_command(format!(
+                "chmod {:o} \"{}\"",
+                u32::from(mode),
+                path.display()
+            ))?;
+        }
+        // set times
+        self.assert_stat_command(format!(
+            "touch -a -t {} \"{}\"",
+            fmt_utils::fmt_time_utc(metadata.atime, "%Y%m%d%H%M.%S"),
+            path.display()
+        ))?;
+        self.assert_stat_command(format!(
+            "touch -m -t {} \"{}\"",
+            fmt_utils::fmt_time_utc(metadata.mtime, "%Y%m%d%H%M.%S"),
+            path.display()
+        ))
     }
 
     fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
@@ -382,20 +416,100 @@ impl RemoteFs for ScpFs {
     }
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        todo!()
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        debug!("Removing file {}", path.display());
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("rm -f \"{}\"", path.display()),
+        ) {
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::CouldNotRemoveFile)),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
     }
 
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        todo!()
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        debug!("Removing directory {}", path.display());
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("rmdir \"{}\"", path.display()),
+        ) {
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::DirectoryNotEmpty)),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
     }
 
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        todo!()
-        // TODO: use rm -rf
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        debug!("Removing directory {} recursively", path.display());
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("rm -rf \"{}\"", path.display()),
+        ) {
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::CouldNotRemoveFile)),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
     }
 
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()> {
-        todo!()
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        if self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
+        }
+        let mode = format!("{:o}", u32::from(mode));
+        debug!(
+            "Creating directory at {} with mode {}",
+            path.display(),
+            mode
+        );
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("mkdir -m {} \"{}\"", mode, path.display()),
+        ) {
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::CouldNotRemoveFile)),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
+    }
+
+    fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()> {
+        self.check_connection()?;
+        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+        debug!(
+            "Creating a symlink at {} pointing at {}",
+            path.display(),
+            target.display()
+        );
+        if !self.exists(target).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        if self.exists(path.as_path()).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::FileCreateDenied));
+        }
+        match commons::perform_shell_cmd_with_rc(
+            self.session.as_mut().unwrap(),
+            format!("ln -s \"{}\" \"{}\"", target.display(), path.display()),
+        ) {
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new(RemoteErrorType::FileCreateDenied)),
+            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        }
     }
 
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
@@ -407,27 +521,16 @@ impl RemoteFs for ScpFs {
         }
         let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
         debug!("Copying {} to {}", src.display(), dest.display());
-        match commons::perform_shell_cmd(
+        match commons::perform_shell_cmd_with_rc(
             self.session.as_mut().unwrap(),
-            format!(
-                "cp -rf \"{}\" \"{}\"; echo $?",
-                src.display(),
-                dest.display()
-            )
-            .as_str(),
+            format!("cp -rf \"{}\" \"{}\"", src.display(), dest.display()).as_str(),
         ) {
-            Ok(output) =>
-            // Check if output is 0
-            {
-                match output.as_str().trim() == "0" {
-                    true => Ok(()), // File copied
-                    false => Err(RemoteError::new_ex(
-                        // Could not copy file
-                        RemoteErrorType::FileCreateDenied,
-                        format!("\"{}\"", dest.display()),
-                    )),
-                }
-            }
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new_ex(
+                // Could not copy file
+                RemoteErrorType::FileCreateDenied,
+                format!("\"{}\"", dest.display()),
+            )),
             Err(err) => Err(RemoteError::new_ex(
                 RemoteErrorType::ProtocolError,
                 err.to_string(),
@@ -444,27 +547,16 @@ impl RemoteFs for ScpFs {
         }
         let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
         debug!("Moving {} to {}", src.display(), dest.display());
-        match commons::perform_shell_cmd(
+        match commons::perform_shell_cmd_with_rc(
             self.session.as_mut().unwrap(),
-            format!(
-                "mv -f \"{}\" \"{}\"; echo $?",
-                src.display(),
-                dest.display()
-            )
-            .as_str(),
+            format!("mv -f \"{}\" \"{}\"", src.display(), dest.display()).as_str(),
         ) {
-            Ok(output) =>
-            // Check if output is 0
-            {
-                match output.as_str().trim() == "0" {
-                    true => Ok(()), // File copied
-                    false => Err(RemoteError::new_ex(
-                        // Could not copy file
-                        RemoteErrorType::FileCreateDenied,
-                        format!("\"{}\"", dest.display()),
-                    )),
-                }
-            }
+            Ok((0, _)) => Ok(()),
+            Ok(_) => Err(RemoteError::new_ex(
+                // Could not copy file
+                RemoteErrorType::FileCreateDenied,
+                format!("\"{}\"", dest.display()),
+            )),
             Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
         }
     }
@@ -472,22 +564,11 @@ impl RemoteFs for ScpFs {
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
         self.check_connection()?;
         debug!(r#"Executing command "{}""#, cmd);
-        commons::perform_shell_cmd_at(
+        commons::perform_shell_cmd_at_with_rc(
             self.session.as_mut().unwrap(),
-            format!("{}; echo $?", cmd),
+            cmd,
             self.wrkdir.as_path(),
         )
-        .map(|output| {
-            if let Some(index) = output.trim().rfind('\n') {
-                trace!("Read from stdout: '{}'", output);
-                let actual_output = (&output[0..index + 1]).to_string();
-                let rc = u32::from_str(&output[index..]).ok().unwrap_or(0);
-                debug!(r#"Command output: "{}"; exit code: {}"#, actual_output, rc);
-                (rc, actual_output)
-            } else {
-                (u32::from_str(&output).ok().unwrap_or(0), String::new())
-            }
-        })
     }
 
     fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>> {
