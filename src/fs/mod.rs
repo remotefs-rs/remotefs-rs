@@ -209,7 +209,10 @@ pub trait RemoteFs {
     /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
     /// For safety reasons this function doesn't accept the `Write` trait, but the destination path.
     /// By default this function uses the streams function to copy content from reader to writer
-    fn open_file(&mut self, src: &Path, dest: &mut impl Write) -> RemoteResult<()> {
+    fn open_file<W>(&mut self, src: &Path, dest: &mut W) -> RemoteResult<()>
+    where
+        W: Write + Send,
+    {
         if self.is_connected() {
             let mut stream = self.open(src)?;
             io::copy(&mut stream, dest)

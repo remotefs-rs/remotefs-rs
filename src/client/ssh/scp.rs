@@ -977,6 +977,7 @@ mod test {
         assert!(client
             .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
             .is_err());
+        assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
         assert!(client.pwd().is_err());
         assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
         assert!(client

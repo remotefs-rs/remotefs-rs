@@ -25,14 +25,8 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use std::time::SystemTime;
-
-/// Format time using fmt string in localtime
-pub fn fmt_time_local(time: SystemTime, fmt: &str) -> String {
-    let datetime: DateTime<Local> = time.into();
-    format!("{}", datetime.format(fmt))
-}
 
 /// Format time using fmt string in utc time
 pub fn fmt_time_utc(time: SystemTime, fmt: &str) -> String {
@@ -50,10 +44,6 @@ mod test {
     #[test]
     fn should_fmt_time() {
         let system_time: SystemTime = SystemTime::from(SystemTime::UNIX_EPOCH);
-        assert_eq!(
-            fmt_time_local(system_time, "%Y-%m-%d"),
-            String::from("1970-01-01")
-        );
         assert_eq!(
             fmt_time_utc(system_time, "%Y-%m-%d %H:%M"),
             String::from("1970-01-01 00:00")

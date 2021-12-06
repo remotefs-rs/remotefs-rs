@@ -42,8 +42,8 @@ ssh = [ "ssh2", "ssh2-config" ]
 # misc
 no-log = [ "log/max_level_off" ]
 # tests
-github-actions = [ ]
-with-s3-ci = []
+github-actions = []
+with-s3-ci = [ "aws-s3" ]
 with-containers = []
 
 [target."cfg(target_family = \"unix\")"]

@@ -700,6 +700,7 @@ mod test {
             .is_err());
         assert!(client.exec("echo 5").is_err());
         assert!(client.disconnect().is_err());
+        assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
         assert!(client.list_dir(Path::new("/tmp")).is_err());
         assert!(client
             .create_dir(Path::new("/tmp"), UnixPex::from(0o755))

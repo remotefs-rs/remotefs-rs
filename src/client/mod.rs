@@ -27,5 +27,7 @@
  */
 
 // -- drivers
+#[cfg(feature = "aws-s3")]
+pub mod aws_s3;
 #[cfg(feature = "ssh")]
 pub mod ssh;

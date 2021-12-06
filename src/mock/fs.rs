@@ -25,7 +25,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-use crate::fs::{Directory, Entry, File, Metadata, UnixPex, UnixPexClass};
+use crate::fs::{File, Metadata};
 // ext
 use std::fs::File as StdFile;
 #[cfg(any(feature = "with-containers", feature = "with-s3-ci"))]
@@ -34,7 +34,6 @@ use std::fs::OpenOptions;
 use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 use tempfile::NamedTempFile;
 
 pub fn create_sample_file_entry() -> (File, NamedTempFile) {

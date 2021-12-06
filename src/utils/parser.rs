@@ -78,7 +78,7 @@ pub fn parse_datetime(tm: &str, fmt: &str) -> Result<SystemTime, ParseError> {
 mod test {
 
     use super::*;
-    use crate::utils::fmt::fmt_time_local;
+    use crate::utils::fmt::fmt_time_utc;
 
     use pretty_assertions::assert_eq;
 
@@ -86,7 +86,7 @@ mod test {
     fn should_parse_lstime() {
         // Good cases
         assert_eq!(
-            fmt_time_local(
+            fmt_time_utc(
                 parse_lstime("Nov 5 16:32", "%b %d %Y", "%b %d %H:%M")
                     .ok()
                     .unwrap(),
@@ -96,7 +96,7 @@ mod test {
             "11 05 32"
         );
         assert_eq!(
-            fmt_time_local(
+            fmt_time_utc(
                 parse_lstime("Dec 2 21:32", "%b %d %Y", "%b %d %H:%M")
                     .ok()
                     .unwrap(),
