@@ -30,4 +30,4 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy -- -Dwarnings
+        run: cargo clippy --features ssh,ftp,aws-s3 -- -Dwarnings
