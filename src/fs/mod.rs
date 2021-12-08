@@ -98,15 +98,15 @@ pub trait RemoteFs {
                 Entry::Directory(d) => {
                     // list dir
                     debug!("{} is a directory; removing all directory entries", d.name);
-                    let directory_content = self.list_dir(d.abs_path.as_path())?;
+                    let directory_content = self.list_dir(d.path.as_path())?;
                     for entry in directory_content.iter() {
                         self.remove_dir_all(entry.path())?;
                     }
                     trace!(
                         "Removed all files in {}; removing directory",
-                        d.abs_path.display()
+                        d.path.display()
                     );
-                    self.remove_dir(d.abs_path.as_path())
+                    self.remove_dir(d.path.as_path())
                 }
             }
         } else {
@@ -273,7 +273,7 @@ pub trait RemoteFs {
                             if filter.matches(dir.name.as_str()) {
                                 drained.push(Entry::Directory(dir.clone()));
                             }
-                            drained.append(&mut self.iter_search(dir.abs_path.as_path(), filter)?);
+                            drained.append(&mut self.iter_search(dir.path.as_path(), filter)?);
                         }
                         Entry::File(file) => {
                             if filter.matches(file.name.as_str()) {

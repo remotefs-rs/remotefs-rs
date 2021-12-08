@@ -49,7 +49,7 @@ pub struct S3Object {
 impl From<&Object> for S3Object {
     fn from(obj: &Object) -> Self {
         let is_dir: bool = obj.key.ends_with('/');
-        let abs_path: PathBuf = path_utils::absolutize(
+        let path: PathBuf = path_utils::absolutize(
             PathBuf::from("/").as_path(),
             PathBuf::from(obj.key.as_str()).as_path(),
         );
@@ -60,7 +60,7 @@ impl From<&Object> for S3Object {
             };
         Self {
             name: Self::object_name(obj.key.as_str()),
-            path: abs_path,
+            path: path,
             size: obj.size,
             last_modified,
             is_dir,
@@ -70,11 +70,11 @@ impl From<&Object> for S3Object {
 
 impl From<S3Object> for Entry {
     fn from(obj: S3Object) -> Self {
-        let abs_path: PathBuf = path_utils::absolutize(Path::new("/"), obj.path.as_path());
+        let path: PathBuf = path_utils::absolutize(Path::new("/"), obj.path.as_path());
         match obj.is_dir {
             true => Entry::Directory(Directory {
                 name: obj.name.clone(),
-                abs_path,
+                path,
                 metadata: obj.into(),
             }),
             false => Entry::File(File {
@@ -83,7 +83,7 @@ impl From<S3Object> for Entry {
                     .path
                     .extension()
                     .map(|x| x.to_string_lossy().to_string()),
-                abs_path,
+                path,
                 metadata: obj.into(),
             }),
         }
@@ -198,7 +198,7 @@ mod test {
         let entry = Entry::from(obj).unwrap_file();
         assert_eq!(entry.name.as_str(), "chiedo.gif");
         assert_eq!(
-            entry.abs_path.as_path(),
+            entry.path.as_path(),
             Path::new("/pippo/sottocartella/chiedo.gif")
         );
         assert_eq!(entry.metadata.ctime, UNIX_EPOCH);
@@ -222,7 +222,7 @@ mod test {
         };
         let entry = Entry::from(obj).unwrap_dir();
         assert_eq!(entry.name.as_str(), "temp");
-        assert_eq!(entry.abs_path.as_path(), Path::new("/temp"));
+        assert_eq!(entry.path.as_path(), Path::new("/temp"));
         assert_eq!(entry.metadata.ctime, UNIX_EPOCH);
         assert_eq!(entry.metadata.mtime, UNIX_EPOCH);
         assert_eq!(entry.metadata.atime, UNIX_EPOCH);

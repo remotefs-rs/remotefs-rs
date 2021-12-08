@@ -42,6 +42,7 @@ use suppaftp::{
     FtpError, Status,
 };
 
+/// Ftp file system client
 pub struct FtpFs {
     /// Client
     stream: Option<FtpStream>,
@@ -146,7 +147,7 @@ impl FtpFs {
                 match f.is_directory() {
                     true => Entry::Directory(Directory {
                         name: f.name().to_string(),
-                        abs_path,
+                        path: abs_path,
                         metadata,
                     }),
                     false => Entry::File(File {
@@ -154,7 +155,7 @@ impl FtpFs {
                         extension: abs_path
                             .extension()
                             .map(|x| x.to_string_lossy().to_string()),
-                        abs_path,
+                        path: abs_path,
                         metadata,
                     }),
                 }
@@ -326,7 +327,7 @@ impl RemoteFs for FtpFs {
                 warn!("{} has no parent: returning root", path.display());
                 return Ok(Entry::Directory(Directory {
                     name: String::from("/"),
-                    abs_path: PathBuf::from("/"),
+                    path: PathBuf::from("/"),
                     metadata: Metadata::default(),
                 }));
             }
@@ -772,7 +773,7 @@ mod test {
         assert_eq!(file.name.as_str(), "a.txt");
         let mut expected_path = wrkdir;
         expected_path.push(p);
-        assert_eq!(file.abs_path.as_path(), expected_path.as_path());
+        assert_eq!(file.path.as_path(), expected_path.as_path());
         assert_eq!(file.extension.as_deref().unwrap(), "txt");
         assert_eq!(file.metadata.size, 10);
         assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));

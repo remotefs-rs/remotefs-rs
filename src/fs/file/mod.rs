@@ -51,7 +51,7 @@ pub struct Directory {
     /// Directory name
     pub name: String,
     /// File absolute path
-    pub abs_path: PathBuf,
+    pub path: PathBuf,
     /// File metadata
     pub metadata: Metadata,
 }
@@ -65,7 +65,7 @@ pub struct File {
     /// File name
     pub name: String,
     /// Absolute path
-    pub abs_path: PathBuf,
+    pub path: PathBuf,
     /// File type
     pub extension: Option<String>,
     /// File metadata
@@ -76,8 +76,8 @@ impl Entry {
     /// Get absolute path from `Entry`
     pub fn path(&self) -> &Path {
         match self {
-            Entry::Directory(dir) => dir.abs_path.as_path(),
-            Entry::File(file) => file.abs_path.as_path(),
+            Entry::Directory(dir) => dir.path.as_path(),
+            Entry::File(file) => file.path.as_path(),
         }
     }
 
@@ -147,20 +147,20 @@ mod tests {
     fn should_create_fs_dir() {
         let entry: Entry = Entry::Directory(Directory {
             name: String::from("foo"),
-            abs_path: PathBuf::from("/foo"),
+            path: PathBuf::from("/foo"),
             metadata: Metadata::default(),
         });
         assert_eq!(entry.metadata().size, 0);
         assert_eq!(entry.is_dir(), true);
         assert_eq!(entry.is_file(), false);
-        assert_eq!(entry.unwrap_dir().abs_path, PathBuf::from("/foo"));
+        assert_eq!(entry.unwrap_dir().path, PathBuf::from("/foo"));
     }
 
     #[test]
     fn should_create_fs_file() {
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
-            abs_path: PathBuf::from("/bar.txt"),
+            path: PathBuf::from("/bar.txt"),
             extension: Some(String::from("txt")),
             metadata: Metadata::default(),
         });
@@ -169,7 +169,7 @@ mod tests {
         assert_eq!(entry.extension(), Some("txt"));
         assert_eq!(entry.is_dir(), false);
         assert_eq!(entry.is_file(), true);
-        assert_eq!(entry.unwrap_file().abs_path, PathBuf::from("/bar.txt"));
+        assert_eq!(entry.unwrap_file().path, PathBuf::from("/bar.txt"));
     }
 
     #[test]
@@ -177,7 +177,7 @@ mod tests {
     fn should_fail_unwrapping_directory() {
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
-            abs_path: PathBuf::from("/bar.txt"),
+            path: PathBuf::from("/bar.txt"),
             metadata: Metadata::default(),
             extension: Some(String::from("txt")),
         });
@@ -189,7 +189,7 @@ mod tests {
     fn should_fail_unwrapping_file() {
         let entry: Entry = Entry::Directory(Directory {
             name: String::from("foo"),
-            abs_path: PathBuf::from("/foo"),
+            path: PathBuf::from("/foo"),
             metadata: Metadata::default(),
         });
         entry.unwrap_file();
@@ -199,21 +199,21 @@ mod tests {
     fn should_return_is_hidden_for_hidden_files() {
         let entry: Entry = Entry::File(File {
             name: String::from("bar.txt"),
-            abs_path: PathBuf::from("/bar.txt"),
+            path: PathBuf::from("/bar.txt"),
             metadata: Metadata::default(),
             extension: Some(String::from("txt")),
         });
         assert_eq!(entry.is_hidden(), false);
         let entry: Entry = Entry::File(File {
             name: String::from(".gitignore"),
-            abs_path: PathBuf::from("/.gitignore"),
+            path: PathBuf::from("/.gitignore"),
             metadata: Metadata::default(),
             extension: Some(String::from("txt")),
         });
         assert_eq!(entry.is_hidden(), true);
         let entry: Entry = Entry::Directory(Directory {
             name: String::from(".git"),
-            abs_path: PathBuf::from("/.git"),
+            path: PathBuf::from("/.git"),
             metadata: Metadata::default(),
         });
         assert_eq!(entry.is_hidden(), true);

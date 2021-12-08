@@ -806,7 +806,7 @@ mod test {
         assert_eq!(file.name.as_str(), "a.txt");
         let mut expected_path = wrkdir;
         expected_path.push(p);
-        assert_eq!(file.abs_path.as_path(), expected_path.as_path());
+        assert_eq!(file.path.as_path(), expected_path.as_path());
         assert_eq!(file.extension.as_deref().unwrap(), "txt");
         assert_eq!(file.metadata.size, 10);
         assert_eq!(file.metadata.mode, None);

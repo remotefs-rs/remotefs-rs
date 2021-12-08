@@ -175,10 +175,10 @@ impl ScpFs {
                     return Err(());
                 }
                 // Re-check if is directory
-                let mut abs_path: PathBuf = path.to_path_buf();
-                abs_path.push(file_name.as_str());
+                let mut path: PathBuf = path.to_path_buf();
+                path.push(file_name.as_str());
                 // Get extension
-                let extension: Option<String> = abs_path
+                let extension: Option<String> = path
                     .as_path()
                     .extension()
                     .map(|s| String::from(s.to_string_lossy()));
@@ -194,19 +194,19 @@ impl ScpFs {
                 };
                 trace!(
                     "Found entry at {} with metadata {:?}",
-                    abs_path.display(),
+                    path.display(),
                     metadata
                 );
                 // Push to entries
                 Ok(match is_dir {
                     true => Entry::Directory(Directory {
                         name: file_name,
-                        abs_path,
+                        path,
                         metadata,
                     }),
                     false => Entry::File(File {
                         name: file_name,
-                        abs_path,
+                        path,
                         extension,
                         metadata,
                     }),
@@ -915,7 +915,7 @@ mod test {
         assert_eq!(file.name.as_str(), "a.txt");
         let mut expected_path = wrkdir;
         expected_path.push(p);
-        assert_eq!(file.abs_path.as_path(), expected_path.as_path());
+        assert_eq!(file.path.as_path(), expected_path.as_path());
         assert_eq!(file.extension.as_deref().unwrap(), "txt");
         assert_eq!(file.metadata.size, 10);
         assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));
@@ -1293,7 +1293,7 @@ mod test {
             .unwrap()
             .unwrap_file();
         assert_eq!(entry.name.as_str(), "Cargo.toml");
-        assert_eq!(entry.abs_path, PathBuf::from("/tmp/Cargo.toml"));
+        assert_eq!(entry.path, PathBuf::from("/tmp/Cargo.toml"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o644_u32);
         assert_eq!(entry.metadata.size, 2056);
         assert_eq!(entry.extension.unwrap().as_str(), "toml");
@@ -1308,7 +1308,7 @@ mod test {
             .unwrap()
             .unwrap_file();
         assert_eq!(entry.name.as_str(), "CODE_OF_CONDUCT.md");
-        assert_eq!(entry.abs_path, PathBuf::from("/tmp/CODE_OF_CONDUCT.md"));
+        assert_eq!(entry.path, PathBuf::from("/tmp/CODE_OF_CONDUCT.md"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o666_u32);
         assert_eq!(entry.metadata.size, 3368);
         assert_eq!(entry.extension.unwrap().as_str(), "md");
@@ -1328,7 +1328,7 @@ mod test {
             .unwrap()
             .unwrap_dir();
         assert_eq!(entry.name.as_str(), "docs");
-        assert_eq!(entry.abs_path, PathBuf::from("/tmp/docs"));
+        assert_eq!(entry.path, PathBuf::from("/tmp/docs"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o755_u32);
         assert!(entry.metadata.symlink.is_none());
         // Short metadata
@@ -1367,7 +1367,7 @@ mod test {
             .unwrap()
             .unwrap_file();
         assert_eq!(entry.name.as_str(), "Cargo.toml");
-        assert_eq!(entry.abs_path, PathBuf::from("/tmp/Cargo.toml"));
+        assert_eq!(entry.path, PathBuf::from("/tmp/Cargo.toml"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o644_u32);
         assert_eq!(entry.metadata.size, 2056);
         assert_eq!(entry.extension.unwrap().as_str(), "toml");
