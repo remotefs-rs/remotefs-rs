@@ -68,7 +68,7 @@ impl ScpFs {
     // -- private
 
     /// Check connection status
-    fn check_connection(&self) -> RemoteResult<()> {
+    fn check_connection(&mut self) -> RemoteResult<()> {
         if self.is_connected() {
             Ok(())
         } else {
@@ -289,7 +289,7 @@ impl RemoteFs for ScpFs {
         }
     }
 
-    fn is_connected(&self) -> bool {
+    fn is_connected(&mut self) -> bool {
         self.session
             .as_ref()
             .map(|x| x.authenticated())
@@ -679,7 +679,7 @@ mod test {
 
     #[test]
     fn should_init_scp_fs() {
-        let client = ScpFs::new(SshOpts::new("localhost"));
+        let mut client = ScpFs::new(SshOpts::new("localhost"));
         assert!(client.session.is_none());
         assert_eq!(client.is_connected(), false);
     }

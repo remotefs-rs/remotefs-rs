@@ -35,10 +35,12 @@ use crate::{Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFs, Remo
 
 use s3::creds::Credentials;
 use s3::serde_types::Object;
-use s3::{Bucket, Region};
+use s3::Region;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+pub use s3::Bucket;
 
 /// Aws s3 file system client
 pub struct AwsS3Fs {
@@ -102,6 +104,13 @@ impl AwsS3Fs {
     pub fn session_token<S: AsRef<str>>(mut self, key: S) -> Self {
         self.session_token = Some(key.as_ref().to_string());
         self
+    }
+
+    // -- get ref
+
+    /// Get a reference to the `Bucket` struct
+    pub fn bucket(&self) -> Option<&Bucket> {
+        self.bucket.as_ref()
     }
 
     // -- private
@@ -219,7 +228,7 @@ impl AwsS3Fs {
     }
 
     /// Check connection status
-    fn check_connection(&self) -> RemoteResult<()> {
+    fn check_connection(&mut self) -> RemoteResult<()> {
         if self.is_connected() {
             Ok(())
         } else {
@@ -280,7 +289,7 @@ impl RemoteFs for AwsS3Fs {
         }
     }
 
-    fn is_connected(&self) -> bool {
+    fn is_connected(&mut self) -> bool {
         self.bucket.is_some()
     }
 
@@ -532,6 +541,7 @@ mod test {
         assert!(s3.security_token.is_none());
         assert!(s3.session_token.is_none());
         assert!(s3.secret_key.is_none());
+        assert!(s3.bucket.is_none());
     }
 
     #[test]

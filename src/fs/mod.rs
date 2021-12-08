@@ -52,7 +52,7 @@ pub trait RemoteFs {
     fn disconnect(&mut self) -> RemoteResult<()>;
 
     /// Indicates whether the client is connected to remote
-    fn is_connected(&self) -> bool;
+    fn is_connected(&mut self) -> bool;
 
     /// Print working directory
     fn pwd(&mut self) -> RemoteResult<PathBuf>;
@@ -131,6 +131,7 @@ pub trait RemoteFs {
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
 
     /// Open file at `path` for appending data.
+    /// If the file doesn't exist, the file is created.
     ///
     /// Warning: metadata should be the same of the local file.
     /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
