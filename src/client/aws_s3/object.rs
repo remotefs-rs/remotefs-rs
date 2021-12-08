@@ -60,7 +60,7 @@ impl From<&Object> for S3Object {
             };
         Self {
             name: Self::object_name(obj.key.as_str()),
-            path: path,
+            path,
             size: obj.size,
             last_modified,
             is_dir,
