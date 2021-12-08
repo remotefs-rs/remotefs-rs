@@ -114,7 +114,7 @@ pub trait RemoteFs {
         }
     }
 
-    /// Create a directory at `path`
+    /// Create a directory at `path` with specified mode.
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
 
     /// Create a symlink at `path` pointing at `target`
