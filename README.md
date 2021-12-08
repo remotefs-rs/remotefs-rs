@@ -1,11 +1,6 @@
 # remotefs
 
 <p align="center">
-  <img src="/assets/images/remotefs.svg" width="256" height="256" />
-</p>
-
-<p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
-<p align="center">
   <a href="https://veeso.github.io/remotefs/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
   ·
   <a href="https://veeso.github.io/remotefs/#get-started" target="_blank">Get started</a>
@@ -13,8 +8,10 @@
   <a href="https://docs.rs/remotefs" target="_blank">Documentation</a>
 </p>
 
+<p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
+
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (FIXME: 31/08/2021)</p>
+<p align="center">Current version: 0.1.0 (08/12/2021)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -141,35 +138,35 @@ This trait exposes several methods to operate on the remote file system, via the
 
 Let's briefly see which methods are available:
 
-- connect: connect to the remote host.
-- disconnect: disconnect from the remote host.
-- is_connected: returns whether the client is connected to the remote host.
-- append_file: append specified buffer to the specified file.
-- append: open a file for append and returns a stream to write it.
-- change_dir: change the working directory to provided path.
-- copy: copy a file from the specified source path to the specified destination.
-- create_dir: create a directory with the specified file mode at the specified path.
-- create_file: create a file at a specified path with the specified content.
-- create: create a file and returns a stream to write it.
-- exec: Executes a shell command.
-- exists: checks whether file at specified path exists.
-- list_dir: get entries at the provided path.
-- mov: move a file from the specified source path to the specified destination.
-- open_file: open a file for reading and fill the specified buffer with the file content.
-- open: open a file and returns a stream to read it.
-- pwd: get working directory.
-- remove_dir_all: remove file/directory and all of its content.
-- remove_dir: remove directory at the specified path. It fails if it is not an empty directory.
-- remove_file: remove file at the specified path. It fails if it is not a file.
-- setstat: set file metadata for file at the specified path.
-- stat: get file information of file at the specified path.
-- symlink: create a symlink at the specified path, pointing to the specified file.
+- **connect**: connect to the remote host.
+- **disconnect**: disconnect from the remote host.
+- **is_connected**: returns whether the client is connected to the remote host.
+- **append_file**: append specified buffer to the specified file.
+- **append**: open a file for append and returns a stream to write it.
+- **change_dir**: change the working directory to provided path.
+- **copy**: copy a file from the specified source path to the specified destination.
+- **create_dir**: create a directory with the specified file mode at the specified path.
+- **create_file**: create a file at a specified path with the specified content.
+- **create**: create a file and returns a stream to write it.
+- **exec**: Executes a shell command.
+- **exists**: checks whether file at specified path exists.
+- **list_dir**: get entries at the provided path.
+- **mov**: move a file from the specified source path to the specified destination.
+- **open_file**: open a file for reading and fill the specified buffer with the file content.
+- **open**: open a file and returns a stream to read it.
+- **pwd**: get working directory.
+- **remove_dir_all**: remove file/directory and all of its content.
+- **remove_dir**: remove directory at the specified path. It fails if it is not an empty directory.
+- **remove_file**: remove file at the specified path. It fails if it is not a file.
+- **setstat**: set file metadata for file at the specified path.
+- **stat**: get file information of file at the specified path.
+- **symlink**: create a symlink at the specified path, pointing to the specified file.
 
 ### Client compatibility table ✔️
 
 The following table states the compatibility for each protocol client and the remote file system trait method.
 
-Note: `connect()`, `disconnect()` and `is_connected` MUST always be supported, and are so omitted in the table.
+Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | Aws-S3 | Ftp | Scp | Sftp |
 |----------------|--------|-----|-----|------|
@@ -198,7 +195,7 @@ Note: `connect()`, `disconnect()` and `is_connected` MUST always be supported, a
 
 ## Support the developer ☕
 
-If you like tui-realm and you're grateful for the work I've done, please consider a little donation 🥳
+If you like remotefs and you're grateful for the work I've done, please consider a little donation 🥳
 
 You can make a donation with one of these platforms:
 

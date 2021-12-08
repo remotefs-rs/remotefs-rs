@@ -51,32 +51,33 @@ pub trait RemoteFs {
     /// Disconnect from the remote server
     fn disconnect(&mut self) -> RemoteResult<()>;
 
-    /// Indicates whether the client is connected to remote
+    /// Gets whether the client is connected to remote
     fn is_connected(&mut self) -> bool;
 
-    /// Print working directory
+    /// Get working directory
     fn pwd(&mut self) -> RemoteResult<PathBuf>;
 
     /// Change working directory.
     /// Returns the realpath of new directory
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
 
-    /// List directory entries at `path`
+    /// List directory entries at specified `path`
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<Entry>>;
 
-    /// Stat file at `path` and return Entry
+    /// Stat file at specified `path` and return Entry
     fn stat(&mut self, path: &Path) -> RemoteResult<Entry>;
 
-    /// Set metadata for file at `path`
+    /// Set metadata for file at specifieed `path`
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
 
-    /// Returns whether file at `path` exists.
+    /// Returns whether file at specified `path` exists.
     fn exists(&mut self, path: &Path) -> RemoteResult<bool>;
 
-    /// Remove file at `path`
+    /// Remove file at specified `path`.
+    /// Fails if is not a file or doesn't exist
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()>;
 
-    /// Remove directory at `path`
+    /// Remove directory at specified `path`
     /// Directory is removed only if empty
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
 
@@ -86,7 +87,9 @@ pub trait RemoteFs {
     ///
     /// This function does not follow symbolic links and it will simply remove the symbolic link itself.
     ///
-    /// By default this method will combine remove_dir and remove_file to remove all the content.
+    /// ### Default implementation
+    ///
+    /// By default this method will combine `remove_file` and `remove_file` to remove all the content.
     /// Implement this method when there is a faster way to achieve this
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
         if self.is_connected() {
@@ -127,24 +130,28 @@ pub trait RemoteFs {
     fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
     /// Execute a command on remote host if supported by host.
-    /// Returns command exit code and output
+    /// Returns command exit code and output (stdout)
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
 
     /// Open file at `path` for appending data.
     /// If the file doesn't exist, the file is created.
     ///
-    /// Warning: metadata should be the same of the local file.
+    /// ### ⚠️ Warning
+    ///
+    /// metadata should be the same of the local file.
     /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
     fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
     /// Create file at path for write.
     /// If the file already exists, its content will be overwritten
     ///
-    /// Warning: metadata should be the same of the local file.
+    /// ### ⚠️ Warning
+    ///
+    /// metadata should be the same of the local file.
     /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
     fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
-    /// Open file at path for read.
+    /// Open file at specified path for read.
     fn open(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>>;
 
     /// Finalize `create_file` and `append_file` methods.
@@ -152,6 +159,9 @@ pub trait RemoteFs {
     /// The purpose of this method is to finalize the connection with the peer when writing data.
     /// This is necessary for some protocols such as FTP.
     /// You must call this method each time you want to finalize the write of the remote file.
+    ///
+    /// ### Default implementation
+    ///
     /// By default this function returns already `Ok(())`
     fn on_written(&mut self, _writable: Box<dyn Write>) -> RemoteResult<()> {
         Ok(())
@@ -162,15 +172,21 @@ pub trait RemoteFs {
     /// The purpose of this method is to finalize the connection with the peer when reading data.
     /// This mighe be necessary for some protocols.
     /// You must call this method each time you want to finalize the read of the remote file.
+    ///
+    /// ### Default implementation
+    ///
     /// By default this function returns already `Ok(())`
     fn on_read(&mut self, _readable: Box<dyn Read>) -> RemoteResult<()> {
         Ok(())
     }
 
     /// Blocking implementation of `append`
-    /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
-    /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
-    /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
+    /// This method **SHOULD** be implemented **ONLY** when streams are not supported by the current file transfer.
+    /// The developer using the client should FIRST try with `create` followed by `on_written`
+    /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    ///
+    /// ### Default implementation
+    ///
     /// By default this function uses the streams function to copy content from reader to writer
     fn append_file(
         &mut self,
@@ -192,8 +208,11 @@ pub trait RemoteFs {
 
     /// Blocking implementation of `create`
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
-    /// The developer implementing the Remote file system should FIRST try with `create_file` followed by `on_written`
-    /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
+    /// The developer using the client should FIRST try with `create` followed by `on_written`
+    /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    ///
+    /// ### Default implementation
+    ///
     /// By default this function uses the streams function to copy content from reader to writer
     fn create_file(
         &mut self,
@@ -216,9 +235,11 @@ pub trait RemoteFs {
     /// Blocking implementation of `open`
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// (since it would work thanks to the default implementation)
-    /// The developer implementing the filetransfer user should FIRST try with `send_file` followed by `on_sent`
-    /// If the function returns error kind() `UnsupportedFeature`, then he should call this function.
-    /// For safety reasons this function doesn't accept the `Write` trait, but the destination path.
+    /// The developer using the client should FIRST try with `open` followed by `on_sent`
+    /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    ///
+    /// ### Default implementation
+    ///
     /// By default this function uses the streams function to copy content from reader to writer
     fn open_file<W>(&mut self, src: &Path, dest: &mut W) -> RemoteResult<()>
     where
@@ -253,6 +274,9 @@ pub trait RemoteFs {
     }
 
     /// Search recursively in `dir` for file matching the wildcard.
+    ///
+    /// ### ⚠️ Warning
+    ///
     /// NOTE: DON'T RE-IMPLEMENT THIS FUNCTION, unless the file transfer provides a faster way to do so
     /// NOTE: don't call this method from outside; consider it as private
     fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<Entry>> {
