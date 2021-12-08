@@ -29,7 +29,7 @@
 mod object;
 use object::S3Object;
 
-use crate::fs::{UnixPex, Welcome};
+use crate::fs::{Metadata, UnixPex, Welcome};
 use crate::utils::path as path_utils;
 use crate::{Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
@@ -333,7 +333,7 @@ impl RemoteFs for AwsS3Fs {
         self.stat_object(path.as_path()).map(|x| x.into())
     }
 
-    fn setstat(&mut self, _path: &Path, _metadata: crate::fs::Metadata) -> RemoteResult<()> {
+    fn setstat(&mut self, _path: &Path, _metadata: Metadata) -> RemoteResult<()> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
@@ -350,12 +350,7 @@ impl RemoteFs for AwsS3Fs {
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
         self.check_connection()?;
-        let path = Self::fmt_path(
-            path_utils::diff_paths(path, &Path::new("/"))
-                .unwrap_or_default()
-                .as_path(),
-            false,
-        );
+        let path = Self::fmt_path(self.resolve(path).as_path(), true);
         debug!("Removing object {}...", path);
         self.bucket
             .as_ref()
@@ -372,12 +367,11 @@ impl RemoteFs for AwsS3Fs {
 
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
         self.check_connection()?;
-        let path = Self::fmt_path(
-            path_utils::diff_paths(path, &Path::new("/"))
-                .unwrap_or_default()
-                .as_path(),
-            true,
-        );
+        if !self.exists(path).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        println!("{}", self.resolve(path).as_path().display());
+        let path = Self::fmt_path(self.resolve(path).as_path(), true);
         debug!("Removing object {}...", path);
         self.bucket
             .as_ref()
@@ -387,18 +381,17 @@ impl RemoteFs for AwsS3Fs {
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
-                    format!("Could not remove file: {}", e),
+                    format!("Could not remove directory: {}", e),
                 )
             })
     }
 
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
         debug!("Removing all content of {}", path.display());
-        let is_dir = self.stat(path)?.is_dir();
-        if is_dir {
-            self.remove_dir(path)
-        } else {
+        if self.remove_dir(path).is_err() {
             self.remove_file(path)
+        } else {
+            Ok(())
         }
     }
 
@@ -446,7 +439,7 @@ impl RemoteFs for AwsS3Fs {
     fn append(
         &mut self,
         _path: &Path,
-        _metadata: &crate::fs::Metadata,
+        _metadata: &Metadata,
     ) -> RemoteResult<Box<dyn std::io::Write>> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
@@ -454,7 +447,7 @@ impl RemoteFs for AwsS3Fs {
     fn create(
         &mut self,
         _path: &Path,
-        _metadata: &crate::fs::Metadata,
+        _metadata: &Metadata,
     ) -> RemoteResult<Box<dyn std::io::Write>> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
@@ -466,11 +459,12 @@ impl RemoteFs for AwsS3Fs {
     fn create_file(
         &mut self,
         path: &Path,
-        _metadata: &crate::fs::Metadata,
+        _metadata: &Metadata,
         mut reader: Box<dyn Read>,
     ) -> RemoteResult<()> {
         self.check_connection()?;
-        let key = Self::fmt_path(path, false);
+        let src = self.resolve(path);
+        let key = Self::fmt_path(src.as_path(), false);
         debug!("Query PUT for key '{}'", key);
         self.bucket
             .as_ref()
@@ -490,7 +484,11 @@ impl RemoteFs for AwsS3Fs {
         W: std::io::Write + Send,
     {
         self.check_connection()?;
-        let key = Self::fmt_path(src, false);
+        if !self.exists(src).ok().unwrap_or(false) {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        }
+        let src = self.resolve(src);
+        let key = Self::fmt_path(src.as_path(), false);
         info!("Query GET for key '{}'", key);
         self.bucket
             .as_ref()
@@ -510,12 +508,16 @@ impl RemoteFs for AwsS3Fs {
 mod test {
 
     use super::*;
-    #[cfg(feature = "with-s3-ci")]
-    use crate::mock::fs as mock_fs;
 
     use pretty_assertions::assert_eq;
     #[cfg(feature = "with-s3-ci")]
+    use serial_test::serial;
+    #[cfg(feature = "with-s3-ci")]
     use std::env;
+    #[cfg(feature = "with-s3-ci")]
+    use std::io::Cursor;
+    #[cfg(feature = "with-s3-ci")]
+    use std::time::SystemTime;
 
     #[test]
     fn should_init_s3() {
@@ -609,82 +611,439 @@ mod test {
         assert_eq!(AwsS3Fs::fmt_path(&Path::new("/"), true).as_str(), "");
     }
 
-    #[cfg(feature = "with-s3-ci")]
     #[test]
-    fn s3_filetransfer() {
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_append_to_file() {
         crate::mock::logger();
-        // Gather s3 environment args
-        let bucket = env!("AWS_S3_BUCKET");
-        let region = env!("AWS_S3_REGION");
-        // Get transfer
-        let mut s3 = AwsS3Fs::new(bucket, region);
-        // Connect
-        assert!(s3.connect().is_ok());
-        // Check is connected
-        assert_eq!(s3.is_connected(), true);
-        // Remove temp dir (cleanup)
-        let dir_path = PathBuf::from("/github-ci/playground/test-dir");
-        let _ = s3.remove_dir_all(&dir_path.as_path());
-        // Pwd
-        assert_eq!(s3.pwd().ok().unwrap(), PathBuf::from("/"));
-        // Go to github-ci directory
-        assert!(s3.change_dir(&Path::new("/github-ci")).is_ok());
-        assert_eq!(s3.pwd().ok().unwrap(), PathBuf::from("/github-ci"));
-        // Find
-        assert_eq!(s3.find("*.jpg").ok().unwrap().len(), 1);
-        // List directory (3 entries)
-        assert_eq!(s3.list_dir(&Path::new("/github-ci")).ok().unwrap().len(), 3);
-        // Go to playground
-        assert!(s3.change_dir(&Path::new("/github-ci/playground")).is_ok());
-        assert_eq!(
-            s3.pwd().ok().unwrap(),
-            PathBuf::from("/github-ci/playground")
-        );
-        // Create directory
-        assert!(s3
-            .create_dir(dir_path.as_path(), UnixPex::from(0o755))
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        // Append to file
+        let file_data = "Hello, world!\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .append_file(p, &Metadata::default(), Box::new(reader))
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_change_directory() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        let pwd = client.pwd().ok().unwrap();
+        assert!(client.change_dir(Path::new("/")).is_ok());
+        assert!(client.change_dir(pwd.as_path()).is_ok());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_change_directory() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        assert!(client
+            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_copy_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_create_directory() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // create directory
+        assert!(client
+            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
             .is_ok());
-        assert!(s3.change_dir(dir_path.as_path()).is_ok());
-        // Copy/rename file is unsupported
-        assert!(s3.copy(dir_path.as_path(), &Path::new("/copia")).is_err());
-        assert!(s3.mov(dir_path.as_path(), &Path::new("/copia")).is_err());
-        // Exec is unsupported
-        assert!(s3.exec("omar!").is_err());
-        // Stat file
-        let entry = s3
-            .stat(&Path::new("/github-ci/avril_lavigne.jpg"))
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_create_directory_cause_already_exists() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // create directory
+        assert!(client
+            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+            .is_ok());
+        assert_eq!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .err()
+                .unwrap()
+                .kind,
+            RemoteErrorType::DirectoryAlreadyExists
+        );
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_create_directory() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // create directory
+        assert!(client
+            .create_dir(
+                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                UnixPex::from(0o755)
+            )
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_create_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        // Verify size
+        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_exec_command() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        assert!(client.exec("echo 5").is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_tell_whether_file_exists() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        // Verify size
+        assert_eq!(client.exists(p).ok().unwrap(), true);
+        assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
+        assert_eq!(
+            client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
+            false
+        );
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_list_dir() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let wrkdir = client.pwd().ok().unwrap();
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        // Verify size
+        let file = client
+            .list_dir(wrkdir.as_path())
             .ok()
             .unwrap()
+            .get(0)
+            .unwrap()
+            .clone()
             .unwrap_file();
-        assert_eq!(entry.name.as_str(), "avril_lavigne.jpg");
-        assert_eq!(
-            entry.abs_path.as_path(),
-            Path::new("/github-ci/avril_lavigne.jpg")
-        );
-        assert_eq!(entry.extension.as_deref().unwrap(), "jpg");
-        assert_eq!(entry.metadata.size, 101738);
-        assert_eq!(entry.metadata.uid, None);
-        assert_eq!(entry.metadata.gid, None);
-        assert_eq!(entry.metadata.mode, None);
-        // Download file
-        let mut local_file = mock_fs::create_sample_file();
-        assert!(s3
-            .open_file(&Path::new("/github-ci/avril_lavigne.jpg"), &mut local_file)
+        assert_eq!(file.name.as_str(), "a.txt");
+        let mut expected_path = wrkdir;
+        expected_path.push(p);
+        assert_eq!(file.abs_path.as_path(), expected_path.as_path());
+        assert_eq!(file.extension.as_deref().unwrap(), "txt");
+        assert_eq!(file.metadata.size, 10);
+        assert_eq!(file.metadata.mode, None);
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_move_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        let dest = Path::new("b.txt");
+        assert!(client.mov(p, dest).is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_open_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        // Verify size
+        let mut buffer: Vec<u8> = Vec::with_capacity(512);
+        assert!(client.open_file(p, &mut buffer).is_ok());
+        trace!("read from remote: {:?}", buffer);
+        assert_eq!(buffer.len(), 10);
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_open_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Verify size
+        let mut buffer = Vec::with_capacity(512);
+        assert!(client
+            .open_file(Path::new("/tmp/aashafb/hhh"), &mut buffer)
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_print_working_directory() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        assert!(client.pwd().is_ok());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_remove_dir_all() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create dir
+        let mut dir_path = client.pwd().ok().unwrap();
+        dir_path.push(Path::new("test/"));
+        assert!(client
+            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
             .is_ok());
-        // Upload file
-        let mut dest_path = dir_path.clone();
-        dest_path.push("aurellia_lavagna.jpg");
-        assert!(s3
-            .create_file(
-                dest_path.as_path(),
-                &crate::fs::Metadata::default(),
-                Box::new(local_file)
+        // Create file
+        let mut file_path = dir_path.clone();
+        file_path.push(Path::new("a.txt"));
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client
+            .create_file(file_path.as_path(), &metadata, Box::new(reader))
+            .is_ok());
+        // Remove dir
+        assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_remove_dir() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create dir
+        let mut dir_path = client.pwd().ok().unwrap();
+        dir_path.push(Path::new("test/"));
+        assert!(client
+            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+            .is_ok());
+        assert!(client.remove_dir(dir_path.as_path()).is_ok());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_remove_dir() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Remove dir
+        assert!(client.remove_dir(Path::new("test/")).is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_remove_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client.remove_file(p).is_ok());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_setstat_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.sh");
+        let file_data = "echo 5\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .setstat(
+                p,
+                Metadata {
+                    atime: SystemTime::UNIX_EPOCH,
+                    ctime: SystemTime::UNIX_EPOCH,
+                    gid: Some(1000),
+                    mode: Some(UnixPex::from(0o755)),
+                    mtime: SystemTime::UNIX_EPOCH,
+                    size: 7,
+                    symlink: None,
+                    uid: Some(1000),
+                }
             )
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_stat_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.sh");
+        let file_data = "echo 5\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        let entry = client.stat(p).ok().unwrap();
+        assert_eq!(entry.name(), "a.sh");
+        let mut expected_path = client.pwd().ok().unwrap();
+        expected_path.push("a.sh");
+        assert_eq!(entry.path(), expected_path.as_path());
+        let meta = entry.metadata();
+        assert_eq!(meta.size, 7);
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_stat_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.sh");
+        assert!(client.stat(p).is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_make_symlink() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.sh");
+        let file_data = "echo 5\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        let symlink = Path::new("b.sh");
+        assert!(client.symlink(symlink, p).is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-s3-ci")]
+    #[serial]
+    fn should_not_make_symlink() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.sh");
+        let file_data = "echo 5\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        let mut metadata = Metadata::default();
+        metadata.size = file_data.len() as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        let symlink = Path::new("b.sh");
+        let file_data = "echo 5\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .create_file(symlink, &metadata, Box::new(reader))
             .is_ok());
-        // Remove temp dir
-        assert!(s3.remove_dir_all(&dir_path.as_path()).is_ok());
-        // Disconnect
-        assert!(s3.disconnect().is_ok());
+        assert!(client.symlink(symlink, p).is_err());
+        assert!(client.remove_file(symlink).is_ok());
+        assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
+        finalize_client(client);
     }
 
     #[test]
@@ -708,14 +1067,55 @@ mod test {
             .is_err());
         assert!(client.stat(Path::new("/tmp")).is_err());
         assert!(client
-            .setstat(Path::new("/tmp"), crate::fs::Metadata::default())
+            .setstat(Path::new("/tmp"), Metadata::default())
             .is_err());
         assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
         assert!(client
-            .create(Path::new("/tmp/pippo.txt"), &crate::fs::Metadata::default())
+            .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
             .is_err());
         assert!(client
-            .append(Path::new("/tmp/pippo.txt"), &crate::fs::Metadata::default())
+            .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
             .is_err());
+    }
+
+    // -- test utils
+
+    #[cfg(feature = "with-s3-ci")]
+    fn setup_client() -> AwsS3Fs {
+        // Gather s3 environment args
+        let bucket = env!("AWS_S3_BUCKET");
+        let region = env!("AWS_S3_REGION");
+        // Get transfer
+        let mut client = AwsS3Fs::new(bucket, region);
+        assert!(client.connect().is_ok());
+        // Create wrkdir
+        let tempdir = PathBuf::from(generate_tempdir());
+        assert!(client
+            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
+            .is_ok());
+        // Change directory
+        assert!(client.change_dir(tempdir.as_path()).is_ok());
+        client
+    }
+
+    #[cfg(feature = "with-s3-ci")]
+    fn finalize_client(mut client: AwsS3Fs) {
+        // Get working directory
+        let wrkdir = client.pwd().ok().unwrap();
+        // Remove directory
+        assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
+        assert!(client.disconnect().is_ok());
+    }
+
+    #[cfg(feature = "with-s3-ci")]
+    fn generate_tempdir() -> String {
+        use rand::{distributions::Alphanumeric, thread_rng, Rng};
+        let mut rng = thread_rng();
+        let name: String = std::iter::repeat(())
+            .map(|()| rng.sample(Alphanumeric))
+            .map(char::from)
+            .take(8)
+            .collect();
+        format!("/github-ci/temp_{}/", name)
     }
 }

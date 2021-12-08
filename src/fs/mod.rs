@@ -131,10 +131,16 @@ pub trait RemoteFs {
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
 
     /// Open file at `path` for appending data.
+    ///
+    /// Warning: metadata should be the same of the local file.
+    /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
     fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
     /// Create file at path for write.
     /// If the file already exists, its content will be overwritten
+    ///
+    /// Warning: metadata should be the same of the local file.
+    /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
     fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
 
     /// Open file at path for read.
@@ -172,9 +178,11 @@ pub trait RemoteFs {
         mut reader: Box<dyn Read>,
     ) -> RemoteResult<()> {
         if self.is_connected() {
+            trace!("Opened remote file");
             let mut stream = self.append(path, metadata)?;
-            io::copy(&mut reader, &mut stream)
+            let sz = io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            trace!("Written {} bytes to destination", sz);
             self.on_written(stream)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -194,8 +202,10 @@ pub trait RemoteFs {
     ) -> RemoteResult<()> {
         if self.is_connected() {
             let mut stream = self.create(path, metadata)?;
-            io::copy(&mut reader, &mut stream)
+            trace!("Opened remote file");
+            let sz = io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            trace!("Written {} bytes to destination", sz);
             self.on_written(stream)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -215,10 +225,11 @@ pub trait RemoteFs {
     {
         if self.is_connected() {
             let mut stream = self.open(src)?;
-            io::copy(&mut stream, dest)
-                .map(|_| ())
+            trace!("File opened");
+            let sz = io::copy(&mut stream, dest)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_read(stream)?;
+            trace!("Copied {} bytes to destination", sz);
             Ok(())
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
