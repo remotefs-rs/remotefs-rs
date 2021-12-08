@@ -341,7 +341,7 @@ impl RemoteFs for AwsS3Fs {
         match self.stat(path) {
             Ok(_) => Ok(true),
             Err(RemoteError {
-                code: RemoteErrorType::NoSuchFileOrDirectory,
+                kind: RemoteErrorType::NoSuchFileOrDirectory,
                 ..
             }) => Ok(false),
             Err(err) => Err(err),

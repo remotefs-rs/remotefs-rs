@@ -34,7 +34,7 @@ pub type RemoteResult<T> = Result<T, RemoteError>;
 /// RemoteError defines the possible errors available for a file transfer
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct RemoteError {
-    pub code: RemoteErrorType,
+    pub kind: RemoteErrorType,
     pub msg: Option<String>,
 }
 
@@ -81,13 +81,13 @@ pub enum RemoteErrorType {
 
 impl RemoteError {
     /// Instantiates a new RemoteError
-    pub fn new(code: RemoteErrorType) -> RemoteError {
-        RemoteError { code, msg: None }
+    pub fn new(kind: RemoteErrorType) -> RemoteError {
+        RemoteError { kind, msg: None }
     }
 
     /// Instantiates a new RemoteError with message
-    pub fn new_ex<S: ToString>(code: RemoteErrorType, msg: S) -> RemoteError {
-        let mut err: RemoteError = RemoteError::new(code);
+    pub fn new_ex<S: ToString>(kind: RemoteErrorType, msg: S) -> RemoteError {
+        let mut err: RemoteError = RemoteError::new(kind);
         err.msg = Some(msg.to_string());
         err
     }
@@ -96,8 +96,8 @@ impl RemoteError {
 impl fmt::Display for RemoteError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.msg {
-            Some(msg) => write!(f, "{} ({})", self.code, msg),
-            None => write!(f, "{}", self.code),
+            Some(msg) => write!(f, "{} ({})", self.kind, msg),
+            None => write!(f, "{}", self.kind),
         }
     }
 }
@@ -174,6 +174,6 @@ mod test {
             String::from("unsupported feature")
         );
         let err = RemoteError::new(RemoteErrorType::UnsupportedFeature);
-        assert_eq!(err.code, RemoteErrorType::UnsupportedFeature);
+        assert_eq!(err.kind, RemoteErrorType::UnsupportedFeature);
     }
 }

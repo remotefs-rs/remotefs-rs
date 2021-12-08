@@ -726,7 +726,7 @@ mod test {
                 .create_dir(Path::new("/tmp/omar"), UnixPex::from(0o775))
                 .err()
                 .unwrap()
-                .code,
+                .kind,
             RemoteErrorType::DirectoryAlreadyExists
         );
         // Make directory (err)
