@@ -241,14 +241,11 @@ pub trait RemoteFs {
     /// ### Default implementation
     ///
     /// By default this function uses the streams function to copy content from reader to writer
-    fn open_file<W>(&mut self, src: &Path, dest: &mut W) -> RemoteResult<()>
-    where
-        W: Write + Send,
-    {
+    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<()> {
         if self.is_connected() {
             let mut stream = self.open(src)?;
             trace!("File opened");
-            let sz = io::copy(&mut stream, dest)
+            let sz = io::copy(&mut stream, &mut dest)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_read(stream)?;
             trace!("Copied {} bytes to destination", sz);
@@ -310,5 +307,17 @@ pub trait RemoteFs {
             }
             Err(err) => Err(err),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crate::mock::MockRemoteFs;
+
+    #[test]
+    fn should_be_able_to_create_trait_object() {
+        let _: Box<dyn RemoteFs> = Box::new(MockRemoteFs {});
     }
 }

@@ -488,10 +488,11 @@ impl RemoteFs for AwsS3Fs {
             })
     }
 
-    fn open_file<W>(&mut self, src: &Path, dest: &mut W) -> RemoteResult<()>
-    where
-        W: std::io::Write + Send,
-    {
+    fn open_file(
+        &mut self,
+        src: &Path,
+        mut dest: Box<dyn std::io::Write + Send>,
+    ) -> RemoteResult<()> {
         self.check_connection()?;
         if !self.exists(src).ok().unwrap_or(false) {
             return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
@@ -502,7 +503,7 @@ impl RemoteFs for AwsS3Fs {
         self.bucket
             .as_ref()
             .unwrap()
-            .get_object_stream(key.as_str(), dest)
+            .get_object_stream(key.as_str(), &mut dest)
             .map(|_| ())
             .map_err(|e| {
                 RemoteError::new_ex(
@@ -845,10 +846,8 @@ mod test {
         metadata.size = file_data.len() as u64;
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
-        let mut buffer: Vec<u8> = Vec::with_capacity(512);
-        assert!(client.open_file(p, &mut buffer).is_ok());
-        trace!("read from remote: {:?}", buffer);
-        assert_eq!(buffer.len(), 10);
+        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
+        assert!(client.open_file(p, buffer).is_ok());
         finalize_client(client);
     }
 
@@ -859,9 +858,9 @@ mod test {
         crate::mock::logger();
         let mut client = setup_client();
         // Verify size
-        let mut buffer = Vec::with_capacity(512);
+        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
         assert!(client
-            .open_file(Path::new("/tmp/aashafb/hhh"), &mut buffer)
+            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
             .is_err());
         finalize_client(client);
     }

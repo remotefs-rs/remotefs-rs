@@ -990,10 +990,8 @@ mod test {
         metadata.size = file_data.len() as u64;
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
-        let mut buffer: Vec<u8> = Vec::with_capacity(512);
-        assert!(client.open_file(p, &mut buffer).is_ok());
-        trace!("read from remote: {:?}", buffer);
-        assert_eq!(buffer.len(), 10);
+        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
+        assert!(client.open_file(p, buffer).is_ok());
         finalize_client(client);
     }
 
@@ -1004,9 +1002,9 @@ mod test {
         crate::mock::logger();
         let mut client = setup_client();
         // Verify size
-        let mut buffer = BufWriter::new(Vec::with_capacity(512));
+        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
         assert!(client
-            .open_file(Path::new("/tmp/aashafb/hhh"), &mut buffer)
+            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
             .is_err());
         finalize_client(client);
     }
