@@ -1,10 +1,20 @@
 # Changelog
 
 - [Changelog](#changelog)
+  - [0.2.0](#020)
   - [0.1.1](#011)
   - [0.1.0](#010)
 
 ---
+
+## 0.2.0
+
+Released on ??
+
+- Moved protocols to **extern crates**:
+  - [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
+  - [ftp](https://github.com/veeso/remotefs-rs-ftp)
+  - [ssh](https://github.com/veeso/remotefs-rs-ssh)
 
 ## 0.1.1
 

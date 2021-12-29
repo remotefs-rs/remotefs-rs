@@ -11,7 +11,7 @@
 <p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.1 (09/12/2021)</p>
+<p align="center">Current version: 0.2.0 (FIXME:/12/2021)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -74,7 +74,7 @@
 
 remotefs is a library that provides a file system structure to work with all the most used file transfer protocols.
 This is achieved through a trait called `RemoteFs` which exposes methods to operate on the remote file system.
-Currently the library exposes a client for **Sftp**, **Scp**, **Ftp** and **Aws-s3**.
+Currently the library exposes a client for **Sftp**, **Scp**, **Ftp** and **Aws-s3** as external libraries.
 
 ### Why remotefs ❓
 
@@ -106,28 +106,20 @@ With remotefs this is no more a problem: all you need is to configure the option
 First of all, add `remotefs` to your project dependencies:
 
 ```toml
-remotefs = "^0.1.0"
+remotefs = "^0.2.0"
 ```
-
-by default, these features are enabled: `ssh`
 
 these features are supported:
 
-- `aws-s3`: enable Aws-s3 client
-- `ftp`: enable Ftp client
-- `ssh`: enable Ssh client
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
-### Requirements ❗
+### Client libraries
 
-- **Linux** users:
-  - **Ssh**
-    - libssh
-    - pkg-config
-- **BSD** users:
-  - **Ssh**
-    - libssh
-    - pkgconf
+In order to use the existing client library, you'll need to add them to your Cargo.toml:
+
+- [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
+- [ftp](https://github.com/veeso/remotefs-rs-ftp)
+- [ssh](https://github.com/veeso/remotefs-rs-ssh)
 
 ---
 

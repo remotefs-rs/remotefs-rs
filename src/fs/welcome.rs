@@ -36,7 +36,7 @@ pub struct Welcome {
 
 impl Welcome {
     /// Set welcome message or banner
-    pub(crate) fn banner(mut self, banner: Option<String>) -> Self {
+    pub fn banner(mut self, banner: Option<String>) -> Self {
         self.banner = banner;
         self
     }

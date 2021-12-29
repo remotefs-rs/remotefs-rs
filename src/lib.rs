@@ -136,14 +136,11 @@
  */
 // -- crates
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate log;
 
 // -- export
 pub use fs::{Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
-pub mod client;
 pub mod fs;
 
 // -- utils
