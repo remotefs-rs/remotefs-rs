@@ -1,4 +1,4 @@
-# remotefs
+# remotefs Aws S3
 
 <p align="center">
   <a href="https://veeso.github.io/remotefs-aws-s3/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
@@ -26,12 +26,12 @@
   /></a>
   <a href="https://crates.io/crates/remotefs-aws-s3"
     ><img
-      src="https://img.shields.io/crates/d/remotefs.svg"
+      src="https://img.shields.io/crates/d/remotefs-aws-s3.svg"
       alt="Downloads counter"
   /></a>
   <a href="https://crates.io/crates/remotefs-aws-s3"
     ><img
-      src="https://img.shields.io/crates/v/remotefs.svg"
+      src="https://img.shields.io/crates/v/remotefs-aws-s3.svg"
       alt="Latest version"
   /></a>
   <a href="https://ko-fi.com/veeso">
