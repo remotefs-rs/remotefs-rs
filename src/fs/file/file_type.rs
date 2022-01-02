@@ -25,6 +25,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+use std::fs::FileType as StdFileType;
 
 /// Describes the file type (directory, regular file or symlink)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -58,5 +59,38 @@ impl FileType {
     /// Returns whether file is symlink
     pub fn is_symlink(&self) -> bool {
         matches!(self, Self::Symlink)
+    }
+}
+
+impl From<StdFileType> for FileType {
+    fn from(t: StdFileType) -> Self {
+        if t.is_symlink() {
+            Self::Symlink
+        } else if t.is_dir() {
+            Self::Directory
+        } else {
+            Self::File
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn should_check_file_type() {
+        assert_eq!(FileType::Directory.is_dir(), true);
+        assert_eq!(FileType::Directory.is_file(), false);
+        assert_eq!(FileType::Directory.is_symlink(), false);
+        assert_eq!(FileType::File.is_dir(), false);
+        assert_eq!(FileType::File.is_file(), true);
+        assert_eq!(FileType::File.is_symlink(), false);
+        assert_eq!(FileType::Symlink.is_dir(), false);
+        assert_eq!(FileType::Symlink.is_file(), false);
+        assert_eq!(FileType::Symlink.is_symlink(), true);
     }
 }

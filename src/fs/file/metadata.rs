@@ -25,7 +25,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-use super::UnixPex;
+use super::{FileType, UnixPex};
 
 use std::{
     path::{Path, PathBuf},
@@ -49,6 +49,8 @@ pub struct Metadata {
     pub size: u64,
     /// If file is symlink, contains the path of the file it is pointing to
     pub symlink: Option<PathBuf>,
+    /// File type
+    pub type_: FileType,
     /// User id
     pub uid: Option<u32>,
 }
@@ -63,6 +65,7 @@ impl Default for Metadata {
             mtime: UNIX_EPOCH,
             size: 0,
             symlink: None,
+            type_: FileType::File,
             uid: None,
         }
     }
@@ -111,10 +114,31 @@ impl Metadata {
         self
     }
 
+    /// Construct metadata with type
+    pub fn file_type(mut self, t: FileType) -> Self {
+        self.type_ = t;
+        self
+    }
+
     /// Construct metadata with user id
     pub fn uid(mut self, uid: u32) -> Self {
         self.uid = Some(uid);
         self
+    }
+
+    /// Returns whether the file is a directory
+    pub fn is_dir(&self) -> bool {
+        self.type_.is_dir()
+    }
+
+    /// Returns whether the file is a regular file
+    pub fn is_file(&self) -> bool {
+        self.type_.is_file()
+    }
+
+    /// Returns whether the file is a symbolic link
+    pub fn is_symlink(&self) -> bool {
+        self.type_.is_symlink()
     }
 }
 
@@ -137,6 +161,7 @@ mod test {
         assert_eq!(metadata.mtime, UNIX_EPOCH);
         assert_eq!(metadata.size, 0);
         assert!(metadata.symlink.is_none());
+        assert_eq!(metadata.type_, FileType::File);
         assert!(metadata.uid.is_none());
     }
 
@@ -161,6 +186,7 @@ mod test {
             .mtime(mtime)
             .size(1024)
             .symlink(Path::new("/tmp/a.txt"))
+            .file_type(FileType::Symlink)
             .uid(10);
         assert_eq!(metadata.atime, atime);
         assert_eq!(metadata.ctime, ctime);
@@ -168,6 +194,9 @@ mod test {
         assert!(metadata.mode.is_some());
         assert_eq!(metadata.mtime, mtime);
         assert_eq!(metadata.size, 1024);
+        assert_eq!(metadata.is_symlink(), true);
+        assert_eq!(metadata.is_dir(), false);
+        assert_eq!(metadata.is_file(), false);
         assert_eq!(
             metadata.symlink.as_deref().unwrap(),
             Path::new("/tmp/a.txt")

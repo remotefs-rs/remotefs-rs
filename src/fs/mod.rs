@@ -38,7 +38,7 @@ mod welcome;
 
 // -- export
 pub use errors::{RemoteError, RemoteErrorType, RemoteResult};
-pub use file::{FileType, FsEntity, Metadata, UnixPex, UnixPexClass};
+pub use file::{File, FileType, Metadata, UnixPex, UnixPexClass};
 pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
@@ -62,10 +62,10 @@ pub trait RemoteFs {
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
 
     /// List directory entries at specified `path`
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<FsEntity>>;
+    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>>;
 
     /// Stat file at specified `path` and return Entry
-    fn stat(&mut self, path: &Path) -> RemoteResult<FsEntity>;
+    fn stat(&mut self, path: &Path) -> RemoteResult<File>;
 
     /// Set metadata for file at specifieed `path`
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
@@ -259,7 +259,7 @@ pub trait RemoteFs {
 
     /// Find files from current directory (in all subdirectories) whose name matches the provided search
     /// Search supports wildcards ('?', '*')
-    fn find(&mut self, search: &str) -> RemoteResult<Vec<FsEntity>> {
+    fn find(&mut self, search: &str) -> RemoteResult<Vec<File>> {
         match self.is_connected() {
             true => {
                 // Starting from current directory, iter dir
@@ -278,8 +278,8 @@ pub trait RemoteFs {
     ///
     /// NOTE: DON'T RE-IMPLEMENT THIS FUNCTION, unless the file transfer provides a faster way to do so
     /// NOTE: don't call this method from outside; consider it as private
-    fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<FsEntity>> {
-        let mut drained: Vec<FsEntity> = Vec::new();
+    fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<File>> {
+        let mut drained: Vec<File> = Vec::new();
         // Scan directory
         match self.list_dir(dir) {
             Ok(entries) => {
@@ -296,10 +296,8 @@ pub trait RemoteFs {
                             drained.push(entry.clone());
                         }
                         drained.append(&mut self.iter_search(entry.path(), filter)?);
-                    } else {
-                        if filter.matches(entry.name().as_str()) {
-                            drained.push(entry);
-                        }
+                    } else if filter.matches(entry.name().as_str()) {
+                        drained.push(entry);
                     }
                 }
                 Ok(drained)

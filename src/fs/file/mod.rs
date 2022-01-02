@@ -38,19 +38,17 @@ pub use file_type::FileType;
 pub use metadata::Metadata;
 pub use permissions::{UnixPex, UnixPexClass};
 
-/// A file system entity represents an entity in the file system
+/// A file represents an entity in the file system
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FsEntity {
+pub struct File {
     /// File absolute path
     pub path: PathBuf,
     /// File metadata
     pub metadata: Metadata,
-    /// File type
-    pub type_: FileType,
 }
 
-impl FsEntity {
+impl File {
     /// Get absolute path
     pub fn path(&self) -> &Path {
         self.path.as_path()
@@ -61,7 +59,7 @@ impl FsEntity {
         self.path()
             .file_name()
             .map(|x| x.to_string_lossy().to_string())
-            .unwrap_or("/".to_string())
+            .unwrap_or_else(|| "/".to_string())
     }
 
     /// Get metadata
@@ -78,17 +76,17 @@ impl FsEntity {
 
     /// Returns whether the file is a directory
     pub fn is_dir(&self) -> bool {
-        self.type_.is_dir()
+        self.metadata().is_dir()
     }
 
     /// Returns whether the file is a regular file
     pub fn is_file(&self) -> bool {
-        self.type_.is_file()
+        self.metadata().is_file()
     }
 
     /// Returns whether the file is a symbolic link
     pub fn is_symlink(&self) -> bool {
-        self.type_.is_symlink()
+        self.metadata().is_symlink()
     }
 
     /// Returns whether file is hidden
@@ -104,78 +102,26 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn should_create_fs_dir() {
-        let entry: Entry = Entry::Directory(Directory {
-            name: String::from("foo"),
-            path: PathBuf::from("/foo"),
-            metadata: Metadata::default(),
-        });
-        assert_eq!(entry.metadata().size, 0);
-        assert_eq!(entry.is_dir(), true);
-        assert_eq!(entry.is_file(), false);
-        assert_eq!(entry.unwrap_dir().path, PathBuf::from("/foo"));
-    }
-
-    #[test]
-    fn should_create_fs_file() {
-        let entry: Entry = Entry::File(File {
-            name: String::from("bar.txt"),
+    fn should_create_file() {
+        let entry = File {
             path: PathBuf::from("/bar.txt"),
-            extension: Some(String::from("txt")),
             metadata: Metadata::default(),
-        });
+        };
         assert_eq!(entry.path(), Path::new("/bar.txt"));
         assert_eq!(entry.name(), String::from("bar.txt"));
-        assert_eq!(entry.extension(), Some("txt"));
+        assert_eq!(entry.extension().as_deref(), Some("txt"));
+        assert_eq!(entry.metadata(), &Metadata::default());
         assert_eq!(entry.is_dir(), false);
         assert_eq!(entry.is_file(), true);
-        assert_eq!(entry.unwrap_file().path, PathBuf::from("/bar.txt"));
-    }
-
-    #[test]
-    #[should_panic]
-    fn should_fail_unwrapping_directory() {
-        let entry: Entry = Entry::File(File {
-            name: String::from("bar.txt"),
-            path: PathBuf::from("/bar.txt"),
-            metadata: Metadata::default(),
-            extension: Some(String::from("txt")),
-        });
-        entry.unwrap_dir();
-    }
-
-    #[test]
-    #[should_panic]
-    fn should_fail_unwrapping_file() {
-        let entry: Entry = Entry::Directory(Directory {
-            name: String::from("foo"),
-            path: PathBuf::from("/foo"),
-            metadata: Metadata::default(),
-        });
-        entry.unwrap_file();
+        assert_eq!(entry.is_hidden(), false);
     }
 
     #[test]
     fn should_return_is_hidden_for_hidden_files() {
-        let entry: Entry = Entry::File(File {
-            name: String::from("bar.txt"),
-            path: PathBuf::from("/bar.txt"),
+        let entry = File {
+            path: PathBuf::from("/.bar.txt"),
             metadata: Metadata::default(),
-            extension: Some(String::from("txt")),
-        });
-        assert_eq!(entry.is_hidden(), false);
-        let entry: Entry = Entry::File(File {
-            name: String::from(".gitignore"),
-            path: PathBuf::from("/.gitignore"),
-            metadata: Metadata::default(),
-            extension: Some(String::from("txt")),
-        });
-        assert_eq!(entry.is_hidden(), true);
-        let entry: Entry = Entry::Directory(Directory {
-            name: String::from(".git"),
-            path: PathBuf::from("/.git"),
-            metadata: Metadata::default(),
-        });
+        };
         assert_eq!(entry.is_hidden(), true);
     }
 }
