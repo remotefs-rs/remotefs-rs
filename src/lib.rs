@@ -58,7 +58,7 @@
 extern crate log;
 
 // -- export
-pub use fs::{Directory, Entry, File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
+pub use fs::{FsEntity, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
 pub mod fs;
 

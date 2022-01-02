@@ -29,111 +29,71 @@
 use std::path::{Path, PathBuf};
 
 // -- mod
+mod file_type;
 mod metadata;
 mod permissions;
 
 // -- export
+pub use file_type::FileType;
 pub use metadata::Metadata;
 pub use permissions::{UnixPex, UnixPexClass};
 
-/// Entry represents a generic entry in a directory
+/// A file system entity represents an entity in the file system
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Entry {
-    Directory(Directory),
-    File(File),
-}
-
-/// Directory provides an interface to file system directories
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Directory {
-    /// Directory name
-    pub name: String,
+pub struct FsEntity {
     /// File absolute path
     pub path: PathBuf,
     /// File metadata
     pub metadata: Metadata,
-}
-
-/// ### File
-///
-/// File provides an interface to file system files
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct File {
-    /// File name
-    pub name: String,
-    /// Absolute path
-    pub path: PathBuf,
     /// File type
-    pub extension: Option<String>,
-    /// File metadata
-    pub metadata: Metadata,
+    pub type_: FileType,
 }
 
-impl Entry {
-    /// Get absolute path from `Entry`
+impl FsEntity {
+    /// Get absolute path
     pub fn path(&self) -> &Path {
-        match self {
-            Entry::Directory(dir) => dir.path.as_path(),
-            Entry::File(file) => file.path.as_path(),
-        }
+        self.path.as_path()
     }
 
-    /// Get file name from `Entry`
-    pub fn name(&self) -> &'_ str {
-        match self {
-            Entry::Directory(dir) => dir.name.as_ref(),
-            Entry::File(file) => file.name.as_ref(),
-        }
+    /// Get file name
+    pub fn name(&self) -> String {
+        self.path()
+            .file_name()
+            .map(|x| x.to_string_lossy().to_string())
+            .unwrap_or("/".to_string())
     }
 
-    /// Get metadata from `Entry`
+    /// Get metadata
     pub fn metadata(&self) -> &Metadata {
-        match self {
-            Entry::Directory(dir) => &dir.metadata,
-            Entry::File(file) => &file.metadata,
-        }
+        &self.metadata
     }
 
-    /// Get file type from `Entry`. For directories is always None
-    pub fn extension(&self) -> Option<&'_ str> {
-        match self {
-            Entry::Directory(_) => None,
-            Entry::File(file) => file.extension.as_deref(),
-        }
+    /// Get file type, if defined
+    pub fn extension(&self) -> Option<String> {
+        self.path()
+            .extension()
+            .map(|x| x.to_string_lossy().to_string())
     }
 
-    /// Returns whether a Entry is a directory
+    /// Returns whether the file is a directory
     pub fn is_dir(&self) -> bool {
-        matches!(self, Entry::Directory(_))
+        self.type_.is_dir()
     }
 
-    /// Returns whether a Entry is a File
+    /// Returns whether the file is a regular file
     pub fn is_file(&self) -> bool {
-        matches!(self, Entry::File(_))
+        self.type_.is_file()
     }
 
-    /// Returns whether Entry is hidden
+    /// Returns whether the file is a symbolic link
+    pub fn is_symlink(&self) -> bool {
+        self.type_.is_symlink()
+    }
+
+    /// Returns whether file is hidden
     pub fn is_hidden(&self) -> bool {
         self.name().starts_with('.')
-    }
-
-    /// Unwrap Entry as File
-    pub fn unwrap_file(self) -> File {
-        match self {
-            Entry::File(file) => file,
-            _ => panic!("unwrap_file: not a File"),
-        }
-    }
-
-    /// Unwrap Entry as Directory
-    pub fn unwrap_dir(self) -> Directory {
-        match self {
-            Entry::Directory(dir) => dir,
-            _ => panic!("unwrap_dir: not a Directory"),
-        }
     }
 }
 

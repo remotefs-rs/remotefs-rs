@@ -38,7 +38,7 @@ mod welcome;
 
 // -- export
 pub use errors::{RemoteError, RemoteErrorType, RemoteResult};
-pub use file::{Directory, Entry, File, Metadata, UnixPex, UnixPexClass};
+pub use file::{FileType, FsEntity, Metadata, UnixPex, UnixPexClass};
 pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
@@ -62,10 +62,10 @@ pub trait RemoteFs {
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
 
     /// List directory entries at specified `path`
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<Entry>>;
+    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<FsEntity>>;
 
     /// Stat file at specified `path` and return Entry
-    fn stat(&mut self, path: &Path) -> RemoteResult<Entry>;
+    fn stat(&mut self, path: &Path) -> RemoteResult<FsEntity>;
 
     /// Set metadata for file at specifieed `path`
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
@@ -96,21 +96,23 @@ pub trait RemoteFs {
             let path = crate::utils::path::absolutize(&self.pwd()?, path);
             debug!("Removing {}...", path.display());
             let entry = self.stat(path.as_path())?;
-            match entry {
-                Entry::File(_) => self.remove_file(entry.path()),
-                Entry::Directory(d) => {
-                    // list dir
-                    debug!("{} is a directory; removing all directory entries", d.name);
-                    let directory_content = self.list_dir(d.path.as_path())?;
-                    for entry in directory_content.iter() {
-                        self.remove_dir_all(entry.path())?;
-                    }
-                    trace!(
-                        "Removed all files in {}; removing directory",
-                        d.path.display()
-                    );
-                    self.remove_dir(d.path.as_path())
+            if entry.is_dir() {
+                // list dir
+                debug!(
+                    "{} is a directory; removing all directory entries",
+                    entry.name()
+                );
+                let directory_content = self.list_dir(entry.path())?;
+                for entry in directory_content.iter() {
+                    self.remove_dir_all(entry.path())?;
                 }
+                trace!(
+                    "Removed all files in {}; removing directory",
+                    entry.path().display()
+                );
+                self.remove_dir(entry.path())
+            } else {
+                self.remove_file(entry.path())
             }
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -257,7 +259,7 @@ pub trait RemoteFs {
 
     /// Find files from current directory (in all subdirectories) whose name matches the provided search
     /// Search supports wildcards ('?', '*')
-    fn find(&mut self, search: &str) -> RemoteResult<Vec<Entry>> {
+    fn find(&mut self, search: &str) -> RemoteResult<Vec<FsEntity>> {
         match self.is_connected() {
             true => {
                 // Starting from current directory, iter dir
@@ -276,8 +278,8 @@ pub trait RemoteFs {
     ///
     /// NOTE: DON'T RE-IMPLEMENT THIS FUNCTION, unless the file transfer provides a faster way to do so
     /// NOTE: don't call this method from outside; consider it as private
-    fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<Entry>> {
-        let mut drained: Vec<Entry> = Vec::new();
+    fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<FsEntity>> {
+        let mut drained: Vec<FsEntity> = Vec::new();
         // Scan directory
         match self.list_dir(dir) {
             Ok(entries) => {
@@ -287,19 +289,16 @@ pub trait RemoteFs {
                 - if is file: check if it matches `filter`
                     - if it matches `filter`: push to to filter
                 */
-                for entry in entries.iter() {
-                    match entry {
-                        Entry::Directory(dir) => {
-                            // If directory name, matches wildcard, push it to drained
-                            if filter.matches(dir.name.as_str()) {
-                                drained.push(Entry::Directory(dir.clone()));
-                            }
-                            drained.append(&mut self.iter_search(dir.path.as_path(), filter)?);
+                for entry in entries.into_iter() {
+                    if entry.is_dir() {
+                        // If directory name, matches wildcard, push it to drained
+                        if filter.matches(entry.name().as_str()) {
+                            drained.push(entry.clone());
                         }
-                        Entry::File(file) => {
-                            if filter.matches(file.name.as_str()) {
-                                drained.push(Entry::File(file.clone()));
-                            }
+                        drained.append(&mut self.iter_search(entry.path(), filter)?);
+                    } else {
+                        if filter.matches(entry.name().as_str()) {
+                            drained.push(entry);
                         }
                     }
                 }

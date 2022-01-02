@@ -57,18 +57,17 @@ impl RemoteFs for MockRemoteFs {
     }
 
     #[allow(unused)]
-    fn list_dir(&mut self, path: &std::path::Path) -> crate::RemoteResult<Vec<crate::Entry>> {
+    fn list_dir(&mut self, path: &std::path::Path) -> crate::RemoteResult<Vec<crate::FsEntity>> {
         Ok(vec![])
     }
 
     #[allow(unused)]
-    fn stat(&mut self, path: &std::path::Path) -> crate::RemoteResult<crate::Entry> {
-        Ok(crate::Entry::File(crate::File {
-            name: "foo".to_string(),
+    fn stat(&mut self, path: &std::path::Path) -> crate::RemoteResult<crate::FsEntity> {
+        Ok(crate::FsEntity {
             path: std::path::PathBuf::from("/foo"),
-            extension: None,
             metadata: crate::fs::Metadata::default(),
-        }))
+            type_: crate::fs::FileType::File,
+        })
     }
 
     #[allow(unused)]
