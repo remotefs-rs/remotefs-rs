@@ -43,16 +43,16 @@ enum StreamReader {
     ReadAndSeek(Box<dyn ReadAndSeek>),
 }
 
-impl ReadStream {
-    /// Instantiates a new `ReadStream` which supports the `Read` trait only.
-    pub fn read(reader: Box<dyn Read>) -> Self {
+impl From<Box<dyn Read>> for ReadStream {
+    fn from(reader: Box<dyn Read>) -> Self {
         Self {
             stream: StreamReader::Read(reader),
         }
     }
+}
 
-    /// Instantiates a new `ReadStream` which supports both `Read` and `Seek` traits.
-    pub fn read_and_seek(reader: Box<dyn ReadAndSeek>) -> Self {
+impl From<Box<dyn ReadAndSeek>> for ReadStream {
+    fn from(reader: Box<dyn ReadAndSeek>) -> Self {
         Self {
             stream: StreamReader::ReadAndSeek(reader),
         }
@@ -108,16 +108,16 @@ enum StreamWriter {
     WriteAndSeek(Box<dyn WriteAndSeek>),
 }
 
-impl WriteStream {
-    /// Instantiates a new `WriteStream` which supports the `Write` trait only.
-    pub fn write(writer: Box<dyn Write>) -> Self {
+impl From<Box<dyn Write>> for WriteStream {
+    fn from(writer: Box<dyn Write>) -> Self {
         Self {
             stream: StreamWriter::Write(writer),
         }
     }
+}
 
-    /// Instantiates a new `WriteStream` which supports both `Write` and `Seek` traits.
-    pub fn write_and_seek(writer: Box<dyn WriteAndSeek>) -> Self {
+impl From<Box<dyn WriteAndSeek>> for WriteStream {
+    fn from(writer: Box<dyn WriteAndSeek>) -> Self {
         Self {
             stream: StreamWriter::WriteAndSeek(writer),
         }
@@ -165,5 +165,49 @@ impl Seek for StreamWriter {
             )),
             Self::WriteAndSeek(s) => s.seek(pos),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+
+    use std::fs::File;
+    use tempfile::NamedTempFile;
+
+    impl ReadAndSeek for File {}
+    impl WriteAndSeek for File {}
+
+    #[test]
+    fn should_create_new_read_stream_from_read() {
+        let temp = NamedTempFile::new().expect("Could not make tempfile");
+        let file: Box<dyn Read> =
+            Box::new(File::open(temp.path()).expect("Could not open tempfile"));
+        let _ = ReadStream::from(file);
+    }
+
+    #[test]
+    fn should_create_new_read_stream_from_read_and_seek() {
+        let temp = NamedTempFile::new().expect("Could not make tempfile");
+        let file: Box<dyn ReadAndSeek> =
+            Box::new(File::open(temp.path()).expect("Could not open tempfile"));
+        let _ = ReadStream::from(file);
+    }
+
+    #[test]
+    fn should_create_new_write_stream_from_write() {
+        let temp = NamedTempFile::new().expect("Could not make tempfile");
+        let file: Box<dyn Write> =
+            Box::new(File::create(temp.path()).expect("Could not open tempfile"));
+        let _ = WriteStream::from(file);
+    }
+
+    #[test]
+    fn should_create_new_write_stream_from_write_and_seek() {
+        let temp = NamedTempFile::new().expect("Could not make tempfile");
+        let file: Box<dyn WriteAndSeek> =
+            Box::new(File::create(temp.path()).expect("Could not open tempfile"));
+        let _ = WriteStream::from(file);
     }
 }
