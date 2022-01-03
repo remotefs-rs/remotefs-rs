@@ -27,6 +27,7 @@
 //!
 //! these features are supported:
 //!
+//! - `find`: enable `find()` method for RemoteFs. (*enabled by default*)
 //! - `no-log`: disable logging. By default, this library will log via the `log` crate.
 //!
 //!

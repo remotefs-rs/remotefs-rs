@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs Aws S3 client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (29/12/2021)</p>
+<p align="center">Current version: 0.1.0 (05/01/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -86,6 +86,7 @@ remotefs-aws-s3 = "^0.1.0"
 
 these features are supported:
 
+- `find`: enable `find()` method on client (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ---
