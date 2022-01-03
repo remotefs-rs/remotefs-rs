@@ -36,15 +36,15 @@ use std::{
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Metadata {
     /// Last access time
-    pub atime: SystemTime,
+    pub accessed: SystemTime,
     /// Creation time
-    pub ctime: SystemTime,
+    pub created: SystemTime,
     /// Group id
     pub gid: Option<u32>,
     /// Unix permissions
     pub mode: Option<UnixPex>,
     /// Modify time
-    pub mtime: SystemTime,
+    pub modified: SystemTime,
     /// File size in bytes
     pub size: u64,
     /// If file is symlink, contains the path of the file it is pointing to
@@ -58,11 +58,11 @@ pub struct Metadata {
 impl Default for Metadata {
     fn default() -> Self {
         Self {
-            atime: UNIX_EPOCH,
-            ctime: UNIX_EPOCH,
+            accessed: UNIX_EPOCH,
+            created: UNIX_EPOCH,
             gid: None,
             mode: None,
-            mtime: UNIX_EPOCH,
+            modified: UNIX_EPOCH,
             size: 0,
             symlink: None,
             type_: FileType::File,
@@ -72,15 +72,15 @@ impl Default for Metadata {
 }
 
 impl Metadata {
-    /// Construct metadata with atime
-    pub fn atime(mut self, atime: SystemTime) -> Self {
-        self.atime = atime;
+    /// Construct metadata with accessed
+    pub fn accessed(mut self, accessed: SystemTime) -> Self {
+        self.accessed = accessed;
         self
     }
 
-    /// Construct metadata with ctime
-    pub fn ctime(mut self, ctime: SystemTime) -> Self {
-        self.ctime = ctime;
+    /// Construct metadata with created
+    pub fn created(mut self, created: SystemTime) -> Self {
+        self.created = created;
         self
     }
 
@@ -97,8 +97,8 @@ impl Metadata {
     }
 
     /// Construct metadata with modify time
-    pub fn mtime(mut self, mtime: SystemTime) -> Self {
-        self.mtime = mtime;
+    pub fn modified(mut self, modified: SystemTime) -> Self {
+        self.modified = modified;
         self
     }
 
@@ -154,11 +154,11 @@ mod test {
     #[test]
     fn should_initialize_metadata() {
         let metadata = Metadata::default();
-        assert_eq!(metadata.atime, UNIX_EPOCH);
-        assert_eq!(metadata.ctime, UNIX_EPOCH);
+        assert_eq!(metadata.accessed, UNIX_EPOCH);
+        assert_eq!(metadata.created, UNIX_EPOCH);
         assert!(metadata.gid.is_none());
         assert!(metadata.mode.is_none());
-        assert_eq!(metadata.mtime, UNIX_EPOCH);
+        assert_eq!(metadata.modified, UNIX_EPOCH);
         assert_eq!(metadata.size, 0);
         assert!(metadata.symlink.is_none());
         assert_eq!(metadata.type_, FileType::File);
@@ -167,32 +167,32 @@ mod test {
 
     #[test]
     fn should_construct_metadata() {
-        let atime = UNIX_EPOCH.checked_add(Duration::from_secs(86400)).unwrap();
-        let ctime = UNIX_EPOCH
+        let accessed = UNIX_EPOCH.checked_add(Duration::from_secs(86400)).unwrap();
+        let created = UNIX_EPOCH
             .checked_add(Duration::from_secs(4238673))
             .unwrap();
-        let mtime = UNIX_EPOCH
+        let modified = UNIX_EPOCH
             .checked_add(Duration::from_secs(9048045687))
             .unwrap();
         let metadata = Metadata::default()
-            .atime(atime)
-            .ctime(ctime)
+            .accessed(accessed)
+            .created(created)
             .gid(14)
             .mode(UnixPex::new(
                 UnixPexClass::from(6),
                 UnixPexClass::from(4),
                 UnixPexClass::from(0),
             ))
-            .mtime(mtime)
+            .modified(modified)
             .size(1024)
             .symlink(Path::new("/tmp/a.txt"))
             .file_type(FileType::Symlink)
             .uid(10);
-        assert_eq!(metadata.atime, atime);
-        assert_eq!(metadata.ctime, ctime);
+        assert_eq!(metadata.accessed, accessed);
+        assert_eq!(metadata.created, created);
         assert_eq!(metadata.gid.unwrap(), 14);
         assert!(metadata.mode.is_some());
-        assert_eq!(metadata.mtime, mtime);
+        assert_eq!(metadata.modified, modified);
         assert_eq!(metadata.size, 1024);
         assert_eq!(metadata.is_symlink(), true);
         assert_eq!(metadata.is_dir(), false);
