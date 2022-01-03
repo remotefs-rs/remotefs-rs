@@ -27,8 +27,11 @@
  */
 use super::{FileType, UnixPex};
 
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::MetadataExt;
 use std::{
-    path::Path,
+    fs::Metadata as StdMetadata,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -47,8 +50,10 @@ pub struct Metadata {
     pub modified: SystemTime,
     /// File size in bytes
     pub size: u64,
+    /// If file is symlink, contains the path of the file it is pointing to
+    pub symlink: Option<PathBuf>,
     /// File type
-    pub type_: FileType,
+    pub file_type: FileType,
     /// User id
     pub uid: Option<u32>,
 }
@@ -62,7 +67,8 @@ impl Default for Metadata {
             mode: None,
             modified: UNIX_EPOCH,
             size: 0,
-            type_: FileType::File,
+            symlink: None,
+            file_type: FileType::File,
             uid: None,
         }
     }
@@ -105,9 +111,15 @@ impl Metadata {
         self
     }
 
+    /// Construct metadata with symlink
+    pub fn symlink<P: AsRef<Path>>(mut self, p: P) -> Self {
+        self.symlink = Some(p.as_ref().to_path_buf());
+        self
+    }
+
     /// Construct metadata with type
     pub fn file_type(mut self, t: FileType) -> Self {
-        self.type_ = t;
+        self.file_type = t;
         self
     }
 
@@ -119,24 +131,60 @@ impl Metadata {
 
     /// Returns whether the file is a directory
     pub fn is_dir(&self) -> bool {
-        self.type_.is_dir()
+        self.file_type.is_dir()
     }
 
     /// Returns whether the file is a regular file
     pub fn is_file(&self) -> bool {
-        self.type_.is_file()
+        self.file_type.is_file()
     }
 
     /// Returns whether the file is a symbolic link
     pub fn is_symlink(&self) -> bool {
-        self.type_.is_symlink()
+        self.file_type.is_symlink()
     }
 
-    /// Get symlink if any
-    pub fn symlink(&self) -> Option<&Path> {
-        match &self.type_ {
-            FileType::Symlink(s) => Some(s.as_path()),
-            _ => None,
+    /// Set symlink
+    pub fn set_symlink<P: AsRef<Path>>(&mut self, p: P) {
+        self.symlink = Some(p.as_ref().to_path_buf());
+    }
+}
+
+#[cfg(target_family = "windows")]
+impl From<StdMetadata> for Metadata {
+    fn from(metadata: StdMetadata) -> Self {
+        Self {
+            accessed: metadata.accessed().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            created: metadata.created().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            gid: None,
+            file_type: FileType::from(metadata.file_type()),
+            modified: metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            mode: None,
+            size: metadata.len(),
+            symlink: None,
+            uid: None,
+        }
+    }
+}
+
+#[cfg(target_family = "unix")]
+impl From<StdMetadata> for Metadata {
+    fn from(metadata: StdMetadata) -> Self {
+        Self {
+            accessed: metadata.accessed().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            // NOTE: on Unix based system, ctime is NEVER stored!!!
+            created: metadata.created().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            gid: Some(metadata.gid()),
+            file_type: FileType::from(metadata.file_type()),
+            modified: metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            mode: Some(UnixPex::from(metadata.mode())),
+            size: if metadata.is_dir() {
+                metadata.blksize()
+            } else {
+                metadata.len()
+            },
+            symlink: None,
+            uid: Some(metadata.uid()),
         }
     }
 }
@@ -148,7 +196,6 @@ mod test {
     use super::*;
 
     use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
     use std::time::Duration;
 
     #[test]
@@ -160,7 +207,8 @@ mod test {
         assert!(metadata.mode.is_none());
         assert_eq!(metadata.modified, UNIX_EPOCH);
         assert_eq!(metadata.size, 0);
-        assert_eq!(metadata.type_, FileType::File);
+        assert!(metadata.symlink.is_none());
+        assert_eq!(metadata.file_type, FileType::File);
         assert!(metadata.uid.is_none());
     }
 
@@ -184,7 +232,8 @@ mod test {
             ))
             .modified(modified)
             .size(1024)
-            .file_type(FileType::Symlink(PathBuf::from("/tmp/a.txt")))
+            .symlink(Path::new("/tmp/a.txt"))
+            .file_type(FileType::Symlink)
             .uid(10);
         assert_eq!(metadata.accessed, accessed);
         assert_eq!(metadata.created, created);
@@ -196,9 +245,37 @@ mod test {
         assert_eq!(metadata.is_dir(), false);
         assert_eq!(metadata.is_file(), false);
         assert_eq!(
-            metadata.symlink().as_deref().unwrap(),
+            metadata.symlink.as_deref().unwrap(),
             Path::new("/tmp/a.txt")
         );
         assert_eq!(metadata.uid.unwrap(), 10);
+    }
+
+    #[test]
+    #[cfg(target_family = "windows")]
+    fn should_make_metadata_from_std_metadata() {
+        let tempfile = tempfile::NamedTempFile::new().ok().unwrap();
+        let metadata = std::fs::metadata(tempfile.path()).ok().unwrap();
+        let metadata = Metadata::from(metadata);
+        assert!(metadata.is_file());
+        assert!(metadata.symlink.is_none());
+        assert_eq!(metadata.size, 0);
+        assert!(metadata.gid.is_none());
+        assert!(metadata.uid.is_none());
+        assert!(metadata.mode.is_none());
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn should_make_metadata_from_std_metadata() {
+        let tempfile = tempfile::NamedTempFile::new().ok().unwrap();
+        let metadata = std::fs::metadata(tempfile.path()).ok().unwrap();
+        let metadata = Metadata::from(metadata);
+        assert!(metadata.is_file());
+        assert!(metadata.symlink.is_none());
+        assert_eq!(metadata.size, 0);
+        assert!(metadata.gid.is_some());
+        assert!(metadata.uid.is_some());
+        assert!(metadata.mode.is_some());
     }
 }
