@@ -1,6 +1,6 @@
-//! # Aws s3
+//! # Ftp
 //!
-//! Aws s3 client for remotefs
+//! ftp client for remotefs
 
 /**
  * MIT License
@@ -25,208 +25,181 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-// -- mod
-use super::object::S3Object;
-
 use crate::utils::path as path_utils;
-use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
-use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
+use remotefs::fs::{
+    FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
+    UnixPexClass, Welcome, WriteStream,
+};
+use remotefs::File;
 
-use s3::creds::Credentials;
-use s3::serde_types::Object;
-use s3::Region;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::time::SystemTime;
+#[cfg(feature = "secure")]
+use suppaftp::native_tls::TlsConnector;
+pub use suppaftp::FtpStream;
+use suppaftp::{
+    list::{File as FtpFile, PosixPexQuery},
+    types::{FileType as SuppaFtpFileType, Mode, Response},
+    FtpError, Status,
+};
 
-pub use s3::Bucket;
-
-/// Aws s3 file system client
-pub struct AwsS3Fs {
-    bucket: Option<Bucket>,
-    wrkdir: PathBuf,
+/// Ftp file system client
+pub struct FtpFs {
+    /// Client
+    stream: Option<FtpStream>,
     // -- options
-    bucket_name: String,
-    region: String,
-    profile: Option<String>,
-    access_key: Option<String>,
-    secret_key: Option<String>,
-    security_token: Option<String>,
-    session_token: Option<String>,
+    hostname: String,
+    port: u16,
+    /// Username to login as; default: `anonymous`
+    username: String,
+    password: Option<String>,
+    /// Client mode; default: `Mode::Passive`
+    mode: Mode,
+    #[cfg(feature = "secure")]
+    /// use FTPS; default: `false`
+    secure: bool,
+    #[cfg(feature = "secure")]
+    /// Accept invalid certificates when building TLS connector. (Applies only if `secure`). Default: `false`
+    accept_invalid_certs: bool,
+    #[cfg(feature = "secure")]
+    /// Accept invalid hostnames when building TLS connector. (Applies only if `secure`). Default: `false`
+    accept_invalid_hostnames: bool,
 }
 
-impl AwsS3Fs {
-    /// Initialize a new `AwsS3Fs`
-    pub fn new<S: AsRef<str>>(bucket: S, region: S) -> Self {
+impl FtpFs {
+    /// Instantiates a new `FtpFs`
+    pub fn new<S: AsRef<str>>(hostname: S, port: u16) -> Self {
         Self {
-            bucket: None,
-            wrkdir: PathBuf::from("/"),
-            bucket_name: bucket.as_ref().to_string(),
-            region: region.as_ref().to_string(),
-            profile: None,
-            access_key: None,
-            secret_key: None,
-            security_token: None,
-            session_token: None,
+            stream: None,
+            hostname: hostname.as_ref().to_string(),
+            port,
+            username: String::from("anonymous"),
+            password: None,
+            mode: Mode::Passive,
+            #[cfg(feature = "secure")]
+            secure: false,
+            #[cfg(feature = "secure")]
+            accept_invalid_certs: false,
+            #[cfg(feature = "secure")]
+            accept_invalid_hostnames: false,
         }
     }
 
-    /// Set aws profile. If unset, "default" will be used
-    pub fn profile<S: AsRef<str>>(mut self, profile: S) -> Self {
-        self.profile = Some(profile.as_ref().to_string());
+    // -- constructors
+
+    /// Set username
+    pub fn username<S: AsRef<str>>(mut self, username: S) -> Self {
+        self.username = username.as_ref().to_string();
         self
     }
 
-    /// Specify access key for aws connection.
-    /// If unset, will be read from environment variable `AWS_ACCESS_KEY_ID`
-    pub fn access_key<S: AsRef<str>>(mut self, key: S) -> Self {
-        self.access_key = Some(key.as_ref().to_string());
+    /// Set password
+    pub fn password<S: AsRef<str>>(mut self, password: S) -> Self {
+        self.password = Some(password.as_ref().to_string());
         self
     }
 
-    /// Specify secret access key for aws connection.
-    /// If unset, will be read from environment variable `AWS_SECRET_ACCESS_KEY`
-    pub fn secret_access_key<S: AsRef<str>>(mut self, key: S) -> Self {
-        self.secret_key = Some(key.as_ref().to_string());
+    /// Set active mode for client
+    pub fn active_mode(mut self) -> Self {
+        self.mode = Mode::Active;
         self
     }
 
-    /// Specify security token for aws connection.
-    /// If unset, will be read from environment variable `AWS_SECURITY_TOKEN`
-    pub fn security_token<S: AsRef<str>>(mut self, key: S) -> Self {
-        self.security_token = Some(key.as_ref().to_string());
+    /// Set passive mode for client
+    pub fn passive_mode(mut self) -> Self {
+        self.mode = Mode::Passive;
         self
     }
 
-    /// Specify session token for aws connection.
-    /// If unset, will be read from environment variable `AWS_SESSION_TOKEN`
-    pub fn session_token<S: AsRef<str>>(mut self, key: S) -> Self {
-        self.session_token = Some(key.as_ref().to_string());
+    #[cfg(feature = "secure")]
+    /// enable FTPS and configure options
+    pub fn secure(mut self, accept_invalid_certs: bool, accept_invalid_hostnames: bool) -> Self {
+        self.secure = true;
+        self.accept_invalid_certs = accept_invalid_certs;
+        self.accept_invalid_hostnames = accept_invalid_hostnames;
         self
     }
 
-    // -- get ref
+    // -- as_ref
 
-    /// Get a reference to the `Bucket` struct
-    pub fn bucket(&self) -> Option<&Bucket> {
-        self.bucket.as_ref()
+    /// Get reference to inner stream
+    pub fn stream(&mut self) -> Option<&mut FtpStream> {
+        self.stream.as_mut()
     }
 
     // -- private
 
-    /// List objects contained in `p` path
-    fn list_objects(&self, p: &Path, list_dir: bool) -> RemoteResult<Vec<S3Object>> {
-        // Make path relative
-        let key: String = Self::fmt_path(p, list_dir);
-        debug!("Query list directory {}; key: {}", p.display(), key);
-        self.query_objects(key, true)
-    }
-
-    /// Stat an s3 object
-    fn stat_object(&self, p: &Path) -> RemoteResult<S3Object> {
-        let key: String = Self::fmt_path(p, false);
-        debug!("Query stat object {}; key: {}", p.display(), key);
-        let objects = self.query_objects(key, false)?;
-        // Absolutize path
-        let absol: PathBuf = path_utils::absolutize(Path::new("/"), p);
-        // Find associated object
-        match objects
+    /// Parse all lines of LIST command output and instantiates a vector of `File` from it.
+    /// This function also converts from `suppaftp::list::File` to `File`
+    fn parse_list_lines(&mut self, path: &Path, lines: Vec<String>) -> Vec<File> {
+        // Iter and collect
+        lines
             .into_iter()
-            .find(|x| x.path.as_path() == absol.as_path())
-        {
-            Some(obj) => Ok(obj),
-            None => Err(RemoteError::new_ex(
-                RemoteErrorType::NoSuchFileOrDirectory,
-                format!("{}: No such file or directory", p.display()),
-            )),
-        }
-    }
-
-    /// Query objects at key
-    fn query_objects(
-        &self,
-        key: String,
-        only_direct_children: bool,
-    ) -> RemoteResult<Vec<S3Object>> {
-        let results = self.bucket.as_ref().unwrap().list(key.clone(), None);
-        match results {
-            Ok(entries) => {
-                let mut objects: Vec<S3Object> = Vec::new();
-                entries.iter().for_each(|x| {
-                    x.contents
-                        .iter()
-                        .filter(|x| {
-                            if only_direct_children {
-                                Self::list_object_should_be_kept(x, key.as_str())
-                            } else {
-                                true
-                            }
-                        })
-                        .for_each(|x| objects.push(S3Object::from(x)))
-                });
-                debug!("Found objects: {:?}", objects);
-                Ok(objects)
-            }
-            Err(e) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, e)),
-        }
-    }
-
-    /// Returns whether object should be kept after list command.
-    /// The object won't be kept if:
-    ///
-    /// 1. is not a direct child of provided dir
-    fn list_object_should_be_kept(obj: &Object, dir: &str) -> bool {
-        Self::is_direct_child(obj.key.as_str(), dir)
-    }
-
-    /// Checks whether Object's key is direct child of `parent` path.
-    fn is_direct_child(key: &str, parent: &str) -> bool {
-        key == format!("{}{}", parent, S3Object::object_name(key))
-            || key == format!("{}{}/", parent, S3Object::object_name(key))
-    }
-
-    /// Make s3 absolute path from a given path
-    fn resolve(&self, p: &Path) -> PathBuf {
-        path_utils::diff_paths(
-            path_utils::absolutize(self.wrkdir.as_path(), p),
-            &Path::new("/"),
-        )
-        .unwrap_or_default()
-    }
-
-    /// fmt path for fsentry according to format expected by s3
-    fn fmt_path(p: &Path, is_dir: bool) -> String {
-        // prevent root as slash
-        if p == Path::new("/") {
-            return "".to_string();
-        }
-        // Remove root only if absolute
-        #[cfg(target_family = "unix")]
-        let is_absolute: bool = p.is_absolute();
-        // NOTE: don't use is_absolute: on windows won't work
-        #[cfg(target_family = "windows")]
-        let is_absolute: bool = p.display().to_string().starts_with('/');
-        let p: PathBuf = match is_absolute {
-            true => path_utils::diff_paths(p, &Path::new("/")).unwrap_or_default(),
-            false => p.to_path_buf(),
-        };
-        // NOTE: windows only: resolve paths
-        #[cfg(target_family = "windows")]
-        let p: PathBuf = PathBuf::from(path_slash::PathExt::to_slash_lossy(p.as_path()).as_str());
-        // Fmt
-        match is_dir {
-            true => {
-                let mut p: String = p.display().to_string();
-                if !p.ends_with('/') {
-                    p.push('/');
+            .map(FtpFile::try_from) // Try to convert to file
+            .flatten() // Remove errors
+            .map(|f| {
+                let mut abs_path: PathBuf = path.to_path_buf();
+                abs_path.push(f.name());
+                let file_type = if f.is_symlink() {
+                    FileType::Symlink
+                } else if f.is_directory() {
+                    FileType::Directory
+                } else {
+                    FileType::File
+                };
+                let metadata = Metadata {
+                    accessed: SystemTime::UNIX_EPOCH,
+                    created: SystemTime::UNIX_EPOCH,
+                    file_type,
+                    gid: f.gid(),
+                    mode: Some(Self::query_unix_pex(&f)),
+                    modified: f.modified(),
+                    size: f.size() as u64,
+                    symlink: f.symlink().map(|x| path_utils::absolutize(path, x)),
+                    uid: None,
+                };
+                File {
+                    path: abs_path,
+                    metadata,
                 }
-                p
-            }
-            false => p.to_string_lossy().to_string(),
-        }
+            })
+            .collect()
     }
 
-    /// Check connection status
+    /// Returns unix pex from ftp file pex
+    fn query_unix_pex(f: &FtpFile) -> UnixPex {
+        UnixPex::new(
+            UnixPexClass::new(
+                f.can_read(PosixPexQuery::Owner),
+                f.can_write(PosixPexQuery::Owner),
+                f.can_execute(PosixPexQuery::Owner),
+            ),
+            UnixPexClass::new(
+                f.can_read(PosixPexQuery::Group),
+                f.can_write(PosixPexQuery::Group),
+                f.can_execute(PosixPexQuery::Group),
+            ),
+            UnixPexClass::new(
+                f.can_read(PosixPexQuery::Others),
+                f.can_write(PosixPexQuery::Others),
+                f.can_execute(PosixPexQuery::Others),
+            ),
+        )
+    }
+
+    /// Fix provided path; on Windows fixes the backslashes, converting them to slashes
+    /// While on POSIX does nothing
+    #[cfg(target_os = "windows")]
+    fn resolve(p: &Path) -> PathBuf {
+        PathBuf::from(path_slash::PathExt::to_slash_lossy(p).as_str())
+    }
+
+    #[cfg(target_family = "unix")]
+    fn resolve(p: &Path) -> PathBuf {
+        p.to_path_buf()
+    }
+
     fn check_connection(&mut self) -> RemoteResult<()> {
         if self.is_connected() {
             Ok(())
@@ -236,109 +209,146 @@ impl AwsS3Fs {
     }
 }
 
-impl RemoteFs for AwsS3Fs {
+impl RemoteFs for FtpFs {
     fn connect(&mut self) -> RemoteResult<Welcome> {
-        // Load credentials
-        debug!("Loading credentials... (profile {:?})", self.profile);
-        let credentials: Credentials = Credentials::new(
-            self.access_key.as_deref(),
-            self.secret_key.as_deref(),
-            self.security_token.as_deref(),
-            self.session_token.as_deref(),
-            self.profile.as_deref(),
-        )
-        .map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::AuthenticationFailed,
-                format!("Could not load s3 credentials: {}", e),
+        info!("Connecting to {}:{}", self.hostname, self.port);
+        let mut stream =
+            FtpStream::connect(format!("{}:{}", self.hostname, self.port)).map_err(|e| {
+                error!("Failed to connect to remote server: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ConnectionError, e)
+            })?;
+        // If secure, connect TLS
+        #[cfg(feature = "secure")]
+        if self.secure {
+            debug!("Setting up TLS stream...");
+            trace!("Accept invalid certs: {}", self.accept_invalid_certs);
+            trace!(
+                "Accept invalid hostnames: {}",
+                self.accept_invalid_hostnames
+            );
+            let ctx = TlsConnector::builder()
+                .danger_accept_invalid_certs(self.accept_invalid_certs)
+                .danger_accept_invalid_hostnames(self.accept_invalid_hostnames)
+                .build()
+                .map_err(|e| {
+                    error!("Failed to setup TLS stream: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::SslError, e)
+                })?;
+            stream = stream
+                .into_secure(ctx, self.hostname.as_str())
+                .map_err(|e| {
+                    error!("Failed to negotiate TLS with server: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::SslError, e)
+                })?;
+            debug!("TLS handshake OK!");
+        }
+        // Login
+        debug!("Signin in as {}", self.username);
+        stream
+            .login(
+                self.username.as_str(),
+                self.password.as_deref().unwrap_or(""),
             )
-        })?;
-        // Parse region
-        trace!("Parsing region {}", self.region);
-        let region: Region = Region::from_str(self.region.as_str()).map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::AuthenticationFailed,
-                format!("Could not parse s3 region: {}", e),
-            )
-        })?;
-        debug!(
-            "Credentials loaded! Connecting to bucket {}...",
-            self.bucket_name
-        );
-        self.bucket = Some(
-            Bucket::new(self.bucket_name.as_str(), region, credentials).map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::AuthenticationFailed,
-                    format!("Could not connect to bucket {}: {}", self.bucket_name, e),
-                )
-            })?,
-        );
-        info!("Connection successfully established to s3 bucket");
-        Ok(Welcome::default())
+            .map_err(|e| {
+                error!("Authentication failed: {}", e);
+                RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, e)
+            })?;
+        trace!("Setting transfer type to Binary");
+        stream
+            .transfer_type(SuppaFtpFileType::Binary)
+            .map_err(|e| {
+                error!("Failed to set transfer type to Binary: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+            })?;
+        info!("Connection established!");
+        let welcome = Welcome::default().banner(stream.get_welcome_msg().map(|x| x.to_string()));
+        self.stream = Some(stream);
+        Ok(welcome)
     }
 
     fn disconnect(&mut self) -> RemoteResult<()> {
-        info!("Disconnecting from S3 bucket...");
-        match self.bucket.take() {
-            Some(bucket) => {
-                drop(bucket);
-                Ok(())
-            }
-            None => Err(RemoteError::new(RemoteErrorType::NotConnected)),
-        }
+        info!("Disconnecting from FTP server...");
+        self.check_connection()?;
+        let stream = self.stream.as_mut().unwrap();
+        stream.quit().map_err(|e| {
+            error!("Failed to disconnect from remote: {}", e);
+            RemoteError::new_ex(RemoteErrorType::ConnectionError, e)
+        })?;
+        self.stream = None;
+        Ok(())
     }
 
     fn is_connected(&mut self) -> bool {
-        self.bucket.is_some()
+        self.stream.is_some()
     }
 
     fn pwd(&mut self) -> RemoteResult<PathBuf> {
+        debug!("Getting working directory...");
         self.check_connection()?;
-        Ok(self.wrkdir.clone())
+        let stream = self.stream.as_mut().unwrap();
+        stream.pwd().map(PathBuf::from).map_err(|e| {
+            error!("Pwd failed: {}", e);
+            RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+        })
     }
 
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
+        debug!("Changing working directory to {}", dir.display());
         self.check_connection()?;
-        // Always allow entering root
-        if dir == Path::new("/") {
-            self.wrkdir = dir.to_path_buf();
-            debug!("New working directory: {}", self.wrkdir.display());
-            return Ok(self.wrkdir.clone());
-        }
-        // Check if directory exists
-        debug!("Entering directory {}...", dir.display());
-        let dir_p: PathBuf = self.resolve(dir);
-        let dir_s: String = Self::fmt_path(dir_p.as_path(), true);
-        debug!("Searching for key {} (path: {})...", dir_s, dir_p.display());
-        // Check if directory already exists
-        if self
-            .stat_object(PathBuf::from(dir_s.as_str()).as_path())
-            .is_ok()
-        {
-            self.wrkdir = path_utils::absolutize(Path::new("/"), dir_p.as_path());
-            debug!("New working directory: {}", self.wrkdir.display());
-            Ok(self.wrkdir.clone())
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))
-        }
+        let dir: PathBuf = Self::resolve(dir);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .cwd(dir.as_path().to_string_lossy())
+            .map(|_| dir)
+            .map_err(|e| {
+                error!("Failed to change directory: {}", e);
+                RemoteError::new_ex(RemoteErrorType::NoSuchFileOrDirectory, e)
+            })
     }
 
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
+        debug!("Getting list entries for {}", path.display());
         self.check_connection()?;
-        self.list_objects(path, true)
-            .map(|x| x.into_iter().map(|x| x.into()).collect())
+        let path: PathBuf = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .list(Some(&path.as_path().to_string_lossy()))
+            .map(|files| self.parse_list_lines(path.as_path(), files))
+            .map_err(|e| {
+                error!("Failed to list directory: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+            })
     }
 
     fn stat(&mut self, path: &Path) -> RemoteResult<File> {
+        debug!("Getting file information for {}", path.display());
         self.check_connection()?;
-        let path = self.resolve(path);
-        if let Ok(obj) = self.stat_object(path.as_path()) {
-            return Ok(obj.into());
+        // Resolve and absolutize path
+        let wrkdir = self.pwd()?;
+        let path = Self::resolve(path);
+        let path = path_utils::absolutize(wrkdir.as_path(), path.as_path());
+        let parent = match path.parent() {
+            Some(p) => p,
+            None => {
+                // Return root
+                warn!("{} has no parent: returning root", path.display());
+                return Ok(File {
+                    path: PathBuf::from("/"),
+                    metadata: Metadata::default().file_type(FileType::Directory),
+                });
+            }
+        };
+        trace!("Listing entries for stat path file: {}", parent.display());
+        let entries = self.list_dir(parent)?;
+        // Get target
+        let target = entries.into_iter().find(|x| x.path() == path.as_path());
+        match target {
+            None => {
+                error!("Could not find file; no such file or directory");
+                Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))
+            }
+            Some(e) => Ok(e),
         }
-        // Try as a "directory"
-        trace!("Failed to stat object as file; trying as a directory...");
-        let path = PathBuf::from(Self::fmt_path(path.as_path(), true));
-        self.stat_object(path.as_path()).map(|x| x.into())
     }
 
     fn setstat(&mut self, _path: &Path, _metadata: Metadata) -> RemoteResult<()> {
@@ -346,6 +356,7 @@ impl RemoteFs for AwsS3Fs {
     }
 
     fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
+        debug!("Checking whether {} exists", path.display());
         match self.stat(path) {
             Ok(_) => Ok(true),
             Err(RemoteError {
@@ -357,75 +368,48 @@ impl RemoteFs for AwsS3Fs {
     }
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
+        debug!("Removing file {}", path.display());
         self.check_connection()?;
-        let path = Self::fmt_path(self.resolve(path).as_path(), true);
-        debug!("Removing object {}...", path);
-        self.bucket
-            .as_ref()
-            .unwrap()
-            .delete_object(path)
-            .map(|_| ())
-            .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not remove file: {}", e),
-                )
-            })
+        let path = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        stream.rm(&path.as_path().to_string_lossy()).map_err(|e| {
+            error!("Failed to remove file {}", e);
+            RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+        })
     }
 
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
+        debug!("Removing file {}", path.display());
         self.check_connection()?;
-        if !self.exists(path).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        println!("{}", self.resolve(path).as_path().display());
-        let path = Self::fmt_path(self.resolve(path).as_path(), true);
-        debug!("Removing object {}...", path);
-        self.bucket
-            .as_ref()
-            .unwrap()
-            .delete_object(path)
-            .map(|_| ())
+        let path = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .rmdir(&path.as_path().to_string_lossy())
             .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not remove directory: {}", e),
-                )
+                error!("Failed to remove directory {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
             })
-    }
-
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        debug!("Removing all content of {}", path.display());
-        if self.remove_dir(path).is_err() {
-            self.remove_file(path)
-        } else {
-            Ok(())
-        }
     }
 
     fn create_dir(&mut self, path: &Path, _mode: UnixPex) -> RemoteResult<()> {
+        debug!("Trying to create directory {}", path.display());
         self.check_connection()?;
-        let dir: String = Self::fmt_path(self.resolve(path).as_path(), true);
-        debug!("Making directory {}...", dir);
-        // Check if directory already exists
-        if self
-            .stat_object(PathBuf::from(dir.as_str()).as_path())
-            .is_ok()
-        {
-            error!("Directory {} already exists", dir);
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
+        let path = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        match stream.mkdir(&path.as_path().to_string_lossy()) {
+            Ok(_) => Ok(()),
+            Err(FtpError::UnexpectedResponse(Response {
+                status: Status::FileUnavailable,
+                ..
+            })) => {
+                error!("Failed to create directory: directory already exists");
+                Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists))
+            }
+            Err(e) => {
+                error!("Failed to create directory: {}", e);
+                Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
+            }
         }
-        self.bucket
-            .as_ref()
-            .unwrap()
-            .put_object(dir.as_str(), &[])
-            .map(|_| ())
-            .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::FileCreateDenied,
-                    format!("Could not make directory: {}", e),
-                )
-            })
     }
 
     fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
@@ -436,72 +420,90 @@ impl RemoteFs for AwsS3Fs {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
-    fn mov(&mut self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        debug!("Trying to rename {} to {}", src.display(), dest.display());
+        self.check_connection()?;
+        let src = Self::resolve(src);
+        let dest = Self::resolve(dest);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .rename(
+                &src.as_path().to_string_lossy(),
+                &dest.as_path().to_string_lossy(),
+            )
+            .map_err(|e| {
+                error!("Failed to rename file: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+            })
     }
 
     fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
-    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn open(&mut self, _path: &Path) -> RemoteResult<ReadStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create_file(
-        &mut self,
-        path: &Path,
-        _metadata: &Metadata,
-        mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
+    fn append(&mut self, path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
+        debug!("Opening {} for append", path.display());
         self.check_connection()?;
-        let src = self.resolve(path);
-        let key = Self::fmt_path(src.as_path(), false);
-        debug!("Query PUT for key '{}'", key);
-        self.bucket
-            .as_ref()
-            .unwrap()
-            .put_object_stream(&mut reader, key.as_str())
-            .map(|_| ())
+        let path = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .append_with_stream(&path.as_path().to_string_lossy())
+            .map(|x| Box::new(x) as Box<dyn Write>)
+            .map(WriteStream::from)
             .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not put file: {}", e),
-                )
+                format!("Failed to open file: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
             })
     }
 
-    fn open_file(
-        &mut self,
-        src: &Path,
-        mut dest: Box<dyn std::io::Write + Send>,
-    ) -> RemoteResult<()> {
+    fn create(&mut self, path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
+        debug!("Opening {} for write", path.display());
         self.check_connection()?;
-        if !self.exists(src).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        let src = self.resolve(src);
-        let key = Self::fmt_path(src.as_path(), false);
-        info!("Query GET for key '{}'", key);
-        self.bucket
-            .as_ref()
-            .unwrap()
-            .get_object_stream(key.as_str(), &mut dest)
-            .map(|_| ())
+        let path = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .put_with_stream(&path.as_path().to_string_lossy())
+            .map(|x| Box::new(x) as Box<dyn Write>)
+            .map(WriteStream::from)
             .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not get file: {}", e),
-                )
+                format!("Failed to open file: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
             })
+    }
+
+    fn open(&mut self, path: &Path) -> RemoteResult<ReadStream> {
+        debug!("Opening {} for read", path.display());
+        self.check_connection()?;
+        let path = Self::resolve(path);
+        let stream = self.stream.as_mut().unwrap();
+        stream
+            .retr_as_stream(&path.as_path().to_string_lossy())
+            .map(|x| Box::new(x) as Box<dyn Read>)
+            .map(ReadStream::from)
+            .map_err(|e| {
+                format!("Failed to open file: {}", e);
+                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+            })
+    }
+
+    fn on_read(&mut self, readable: ReadStream) -> RemoteResult<()> {
+        debug!("Finalizing read stream");
+        self.check_connection()?;
+        let stream = self.stream.as_mut().unwrap();
+        stream.finalize_retr_stream(readable).map_err(|e| {
+            error!("Failed to finalize read stream: {}", e);
+            RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+        })
+    }
+
+    fn on_written(&mut self, writable: WriteStream) -> RemoteResult<()> {
+        debug!("Finalizing write stream");
+        self.check_connection()?;
+        let stream = self.stream.as_mut().unwrap();
+        stream.finalize_put_stream(writable).map_err(|e| {
+            error!("Failed to finalize write stream: {}", e);
+            RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+        })
     }
 }
 
@@ -511,116 +513,108 @@ mod test {
     use super::*;
 
     use pretty_assertions::assert_eq;
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     use serial_test::serial;
-    #[cfg(feature = "with-s3-ci")]
-    use std::env;
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     use std::io::Cursor;
-    #[cfg(feature = "with-s3-ci")]
-    use std::time::SystemTime;
 
     #[test]
-    fn should_init_s3() {
-        let s3 = AwsS3Fs::new("aws-s3-test", "eu-central-1");
-        assert_eq!(s3.wrkdir.as_path(), Path::new("/"));
-        assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
-        assert_eq!(s3.region.as_str(), "eu-central-1");
-        assert!(s3.bucket.is_none());
-        assert!(s3.access_key.is_none());
-        assert!(s3.profile.is_none());
-        assert!(s3.secret_key.is_none());
-        assert!(s3.security_token.is_none());
-        assert!(s3.session_token.is_none());
-        assert!(s3.secret_key.is_none());
-        assert!(s3.bucket.is_none());
+    fn should_initialize_ftp_filesystem() {
+        let client = FtpFs::new("127.0.0.1", 21);
+        assert!(client.stream.is_none());
+        assert_eq!(client.hostname.as_str(), "127.0.0.1");
+        assert_eq!(client.port, 21);
+        assert_eq!(client.username.as_str(), "anonymous");
+        assert!(client.password.is_none());
+        assert_eq!(client.mode, Mode::Passive);
+        #[cfg(feature = "secure")]
+        assert_eq!(client.secure, false);
+        #[cfg(feature = "secure")]
+        assert_eq!(client.accept_invalid_certs, false);
+        #[cfg(feature = "secure")]
+        assert_eq!(client.accept_invalid_hostnames, false);
     }
 
     #[test]
-    fn should_init_s3_with_options() {
-        let s3 = AwsS3Fs::new("aws-s3-test", "eu-central-1")
-            .access_key("AKIA0000")
-            .profile("default")
-            .secret_access_key("PASSWORD")
-            .security_token("secret")
-            .session_token("token");
-        assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
-        assert_eq!(s3.region.as_str(), "eu-central-1");
-        assert_eq!(s3.access_key.as_deref().unwrap(), "AKIA0000");
-        assert_eq!(s3.secret_key.as_deref().unwrap(), "PASSWORD");
-        assert_eq!(s3.security_token.as_deref().unwrap(), "secret");
-        assert_eq!(s3.session_token.as_deref().unwrap(), "token");
+    fn should_build_ftp_filesystem() {
+        let client = FtpFs::new("127.0.0.1", 21)
+            .username("test")
+            .password("omar")
+            .passive_mode()
+            .active_mode();
+        assert!(client.stream.is_none());
+        assert_eq!(client.hostname.as_str(), "127.0.0.1");
+        assert_eq!(client.port, 21);
+        assert_eq!(client.username.as_str(), "test");
+        assert_eq!(client.password.as_deref().unwrap(), "omar");
+        assert_eq!(client.mode, Mode::Active);
     }
 
     #[test]
-    fn s3_is_direct_child() {
-        assert_eq!(AwsS3Fs::is_direct_child("pippo/", ""), true);
-        assert_eq!(AwsS3Fs::is_direct_child("pippo/sottocartella/", ""), false);
-        assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/", "pippo/"),
-            true
-        );
-        assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/", "pippo"), // This case must be handled indeed
-            false
-        );
-        assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/readme.md", "pippo/sottocartella/"),
-            true
-        );
-        assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/readme.md", "pippo/sottocartella/"),
-            true
-        );
+    #[cfg(feature = "secure")]
+    fn should_build_secure_ftp_filesystem() {
+        let client = FtpFs::new("127.0.0.1", 21)
+            .username("test")
+            .password("omar")
+            .secure(true, true)
+            .passive_mode()
+            .active_mode();
+        assert!(client.stream.is_none());
+        assert_eq!(client.hostname.as_str(), "127.0.0.1");
+        assert_eq!(client.port, 21);
+        assert_eq!(client.username.as_str(), "test");
+        assert_eq!(client.password.as_deref().unwrap(), "omar");
+        assert_eq!(client.mode, Mode::Active);
+        assert_eq!(client.secure, true);
+        assert_eq!(client.accept_invalid_certs, true);
+        assert_eq!(client.accept_invalid_hostnames, true);
     }
 
     #[test]
-    fn s3_resolve() {
-        let mut s3 = AwsS3Fs::new("aws-s3-test", "eu-central-1");
-        s3.wrkdir = PathBuf::from("/tmp");
-        // Absolute
-        assert_eq!(
-            s3.resolve(&Path::new("/tmp/sottocartella/")).as_path(),
-            Path::new("tmp/sottocartella")
-        );
-        // Relative
-        assert_eq!(
-            s3.resolve(&Path::new("subfolder/")).as_path(),
-            Path::new("tmp/subfolder")
-        );
+    #[cfg(feature = "secure")]
+    fn should_connect_with_ftps() {
+        let mut client = FtpFs::new("test.rebex.net", 21)
+            .username("demo")
+            .password("password")
+            .secure(false, false)
+            .passive_mode();
+        assert!(client.connect().is_ok());
+        assert!(client.disconnect().is_ok());
     }
 
     #[test]
-    fn s3_fmt_path() {
-        assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("/tmp/omar.txt"), false).as_str(),
-            "tmp/omar.txt"
-        );
-        assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("omar.txt"), false).as_str(),
-            "omar.txt"
-        );
-        assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("/tmp/subfolder"), true).as_str(),
-            "tmp/subfolder/"
-        );
-        assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("tmp/subfolder"), true).as_str(),
-            "tmp/subfolder/"
-        );
-        assert_eq!(AwsS3Fs::fmt_path(&Path::new("tmp"), true).as_str(), "tmp/");
-        assert_eq!(AwsS3Fs::fmt_path(&Path::new("tmp/"), true).as_str(), "tmp/");
-        assert_eq!(AwsS3Fs::fmt_path(&Path::new("/"), true).as_str(), "");
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_append_to_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
+        // Verify size
+        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
+        // Append to file
+        let file_data = "Hello, world!\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .append_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
+        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
+        finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_append_to_file() {
         crate::mock::logger();
         let mut client = setup_client();
         // Create file
-        let p = Path::new("a.txt");
+        let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
@@ -631,7 +625,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_change_directory() {
         crate::mock::logger();
@@ -643,7 +637,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_change_directory() {
         crate::mock::logger();
@@ -655,24 +649,17 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_copy_file() {
         crate::mock::logger();
         let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
+        assert!(client.copy(Path::new("a.txt"), Path::new("b.txt")).is_err());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_create_directory() {
         crate::mock::logger();
@@ -685,7 +672,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_create_directory_cause_already_exists() {
         crate::mock::logger();
@@ -706,7 +693,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_create_directory() {
         crate::mock::logger();
@@ -722,7 +709,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_create_file() {
         crate::mock::logger();
@@ -731,26 +718,43 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_not_create_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_exec_command() {
         crate::mock::logger();
         let mut client = setup_client();
+        // Create file
         assert!(client.exec("echo 5").is_err());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_tell_whether_file_exists() {
         crate::mock::logger();
@@ -759,9 +763,9 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Verify size
         assert_eq!(client.exists(p).ok().unwrap(), true);
         assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
@@ -773,7 +777,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_list_dir() {
         crate::mock::logger();
@@ -783,9 +787,9 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Verify size
         let file = client
             .list_dir(wrkdir.as_path())
@@ -799,13 +803,35 @@ mod test {
         expected_path.push(p);
         assert_eq!(file.path.as_path(), expected_path.as_path());
         assert_eq!(file.extension().as_deref().unwrap(), "txt");
+        assert!(file.is_file());
         assert_eq!(file.metadata.size, 10);
-        assert_eq!(file.metadata.mode, None);
+        assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_move_file() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
+        // Verify size
+        let dest = Path::new("b.txt");
+        assert!(client.mov(p, dest).is_ok());
+        assert_eq!(client.exists(p).ok().unwrap(), false);
+        assert_eq!(client.exists(dest).ok().unwrap(), true);
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_move_file() {
         crate::mock::logger();
@@ -814,16 +840,20 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let dest = Path::new("b.txt");
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
+        // Verify size
+        let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
         assert!(client.mov(p, dest).is_err());
+        assert!(client
+            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
+            .is_err());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_open_file() {
         crate::mock::logger();
@@ -832,9 +862,9 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
         assert!(client.open_file(p, buffer).is_ok());
@@ -842,7 +872,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_open_file() {
         crate::mock::logger();
@@ -856,7 +886,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_print_working_directory() {
         crate::mock::logger();
@@ -866,7 +896,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_remove_dir_all() {
         crate::mock::logger();
@@ -882,10 +912,8 @@ mod test {
         file_path.push(Path::new("a.txt"));
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
         assert!(client
-            .create_file(file_path.as_path(), &metadata, Box::new(reader))
+            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
             .is_ok());
         // Remove dir
         assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
@@ -893,7 +921,20 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_not_remove_dir_all() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Remove dir
+        assert!(client
+            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+            .is_err());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_remove_dir() {
         crate::mock::logger();
@@ -909,18 +950,32 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_remove_dir() {
         crate::mock::logger();
         let mut client = setup_client();
+        // Create dir
+        let mut dir_path = client.pwd().ok().unwrap();
+        dir_path.push(Path::new("test/"));
+        assert!(client
+            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+            .is_ok());
+        // Create file
+        let mut file_path = dir_path.clone();
+        file_path.push(Path::new("a.txt"));
+        let file_data = "test data\n";
+        let reader = Cursor::new(file_data.as_bytes());
+        assert!(client
+            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Remove dir
-        assert!(client.remove_dir(Path::new("test/")).is_err());
+        assert!(client.remove_dir(dir_path.as_path()).is_err());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_remove_file() {
         crate::mock::logger();
@@ -929,39 +984,34 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         assert!(client.remove_file(p).is_ok());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_setstat_file() {
         crate::mock::logger();
         let mut client = setup_client();
         // Create file
         let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         assert!(client
             .setstat(
                 p,
                 Metadata {
                     accessed: SystemTime::UNIX_EPOCH,
                     created: SystemTime::UNIX_EPOCH,
-                    gid: Some(1000),
-                    file_type: remotefs::fs::FileType::File,
+                    gid: Some(1),
+                    file_type: FileType::File,
                     mode: Some(UnixPex::from(0o755)),
                     modified: SystemTime::UNIX_EPOCH,
                     size: 7,
                     symlink: None,
-                    uid: Some(1000),
+                    uid: Some(1),
                 }
             )
             .is_err());
@@ -969,7 +1019,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_stat_file() {
         crate::mock::logger();
@@ -978,21 +1028,37 @@ mod test {
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         let entry = client.stat(p).ok().unwrap();
         assert_eq!(entry.name(), "a.sh");
         let mut expected_path = client.pwd().ok().unwrap();
         expected_path.push("a.sh");
         assert_eq!(entry.path(), expected_path.as_path());
         let meta = entry.metadata();
+        assert_eq!(meta.mode.unwrap(), UnixPex::from(0o644));
         assert_eq!(meta.size, 7);
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_stat_root() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        // Create file
+        let p = Path::new("/");
+        let entry = client.stat(p).ok().unwrap();
+        assert_eq!(entry.name(), "/");
+        assert_eq!(entry.path(), Path::new("/"));
+        assert!(entry.is_dir());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_stat_file() {
         crate::mock::logger();
@@ -1004,51 +1070,22 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
-    #[serial]
-    fn should_make_symlink() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let symlink = Path::new("b.sh");
-        assert!(client.symlink(symlink, p).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     #[serial]
     fn should_not_make_symlink() {
         crate::mock::logger();
         let mut client = setup_client();
         // Create file
         let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         let symlink = Path::new("b.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(symlink, &metadata, Box::new(reader))
-            .is_ok());
         assert!(client.symlink(symlink, p).is_err());
-        assert!(client.remove_file(symlink).is_ok());
-        assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
         finalize_client(client);
     }
 
     #[test]
-    fn should_return_errors_on_uninitialized_client() {
-        let mut client = AwsS3Fs::new("aws-s3-test", "eu-central-1");
+    fn should_return_not_connected_error() {
+        crate::mock::logger();
+        let mut client = FtpFs::new("127.0.0.1", 21);
         assert!(client.change_dir(Path::new("/tmp")).is_err());
         assert!(client
             .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
@@ -1080,13 +1117,11 @@ mod test {
 
     // -- test utils
 
-    #[cfg(feature = "with-s3-ci")]
-    fn setup_client() -> AwsS3Fs {
-        // Gather s3 environment args
-        let bucket = env!("AWS_S3_BUCKET");
-        let region = env!("AWS_S3_REGION");
-        // Get transfer
-        let mut client = AwsS3Fs::new(bucket, region);
+    #[cfg(feature = "with-containers")]
+    fn setup_client() -> FtpFs {
+        let mut client = FtpFs::new("127.0.0.1", 10021)
+            .username("test")
+            .password("test");
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
@@ -1098,8 +1133,8 @@ mod test {
         client
     }
 
-    #[cfg(feature = "with-s3-ci")]
-    fn finalize_client(mut client: AwsS3Fs) {
+    #[cfg(feature = "with-containers")]
+    fn finalize_client(mut client: FtpFs) {
         // Get working directory
         let wrkdir = client.pwd().ok().unwrap();
         // Remove directory
@@ -1107,7 +1142,7 @@ mod test {
         assert!(client.disconnect().is_ok());
     }
 
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
     fn generate_tempdir() -> String {
         use rand::{distributions::Alphanumeric, thread_rng, Rng};
         let mut rng = thread_rng();
@@ -1116,6 +1151,6 @@ mod test {
             .map(char::from)
             .take(8)
             .collect();
-        format!("/github-ci/temp_{}/", name)
+        format!("/temp_{}", name)
     }
 }

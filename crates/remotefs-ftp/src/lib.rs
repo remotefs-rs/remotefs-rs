@@ -1,20 +1,9 @@
-#![crate_name = "remotefs_aws_s3"]
+#![crate_name = "remotefs_ftp"]
 #![crate_type = "lib"]
 
-//! # remotefs-aws-s3
+//! # remotefs-ftp
 //!
-//! remotefs is a library that provides a file system structure to work with all the most used file transfer protocols.
-//! This is achieved through a trait called `RemoteFs` which exposes methods to operate on the remote file system.
-//! Currently the library exposes a client for **Sftp**, **Scp**, **Ftp** and **Aws-s3**.
-//!
-//! ## Why remotefs
-//!
-//! You might be wondering what's the reasons behind remotefs.
-//! The first reason is to provide an easy way to operate with multiple protocols at the same time.
-//! For example, in [termscp](https://github.com/veeso/termscp), this came very handily to me.
-//! The second reason is that often, users need to implement just a simple client to operate on a remote file system, and they have to waste a lot of time in understanding how the protocol works just to achieve a single task.
-//!
-//! With remotefs this is no more a problem: all you need is to configure the options to connect to the remote host and you're ready to deal with the remote file system, as it were mounted on your pc.
+//! remotefs-ftp is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the FTP/FTPS protocols.
 //!
 //! ## Get started
 //!
@@ -22,26 +11,26 @@
 //!
 //! ```toml
 //! remotefs = "^0.2.0"
-//! remotefs-aws-s3 = "^0.1.0"
+//! remotefs-ftp = "^0.1.0"
 //! ```
 //!
 //! these features are supported:
 //!
 //! - `find`: enable `find()` method for RemoteFs. (*enabled by default*)
+//! - `secure`: enable FTPS
 //! - `no-log`: disable logging. By default, this library will log via the `log` crate.
 //!
 //!
-//! ### Aws s3 client
+//! ### FTP client
 //!
 //! ```rust,ignore
 //! use remotefs::RemoteFs;
-//! use remotefs_aws_s3::AwsS3Fs;
+//! use remotefs::client::ftp::FtpFs;
 //! use std::path::Path;
 //!
-//! let mut client = AwsS3Fs::new("test-bucket", "eu-west-1")
-//!     .profile("default")
-//!     .access_key("AKIAxxxxxxxxxxxx")
-//!     .secret_access_key("****************");
+//! let mut client = FtpFs::new("127.0.0.1", 21)
+//!     .username("test")
+//!     .password("password");
 //! // connect
 //! assert!(client.connect().is_ok());
 //! // get working directory
@@ -83,10 +72,8 @@
 extern crate log;
 
 pub mod client;
-pub use client::AwsS3Fs;
+pub use client::FtpFs;
 
-// -- object
-pub(crate) mod object;
 // -- utils
 pub(crate) mod utils;
 // -- mock

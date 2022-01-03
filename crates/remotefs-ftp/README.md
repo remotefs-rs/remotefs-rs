@@ -1,14 +1,14 @@
-# remotefs Aws S3
+# remotefs FTP
 
 <p align="center">
-  <a href="https://veeso.github.io/remotefs-aws-s3/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+  <a href="https://veeso.github.io/remotefs-ftp/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
   ·
-  <a href="https://veeso.github.io/remotefs-aws-s3/#get-started" target="_blank">Get started</a>
+  <a href="https://veeso.github.io/remotefs-ftp/#get-started" target="_blank">Get started</a>
   ·
-  <a href="https://docs.rs/remotefs-aws-s3" target="_blank">Documentation</a>
+  <a href="https://docs.rs/remotefs-ftp" target="_blank">Documentation</a>
 </p>
 
-<p align="center">~ Remotefs Aws S3 client ~</p>
+<p align="center">~ Remotefs FTP client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
 <p align="center">Current version: 0.1.0 (05/01/2022)</p>
@@ -19,19 +19,19 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/stargazers"
+  <a href="https://github.com/veeso/remotefs-rs-ftp/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-aws-s3.svg"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs-ftp.svg"
       alt="Repo stars"
   /></a>
-  <a href="https://crates.io/crates/remotefs-aws-s3"
+  <a href="https://crates.io/crates/remotefs-ftp"
     ><img
-      src="https://img.shields.io/crates/d/remotefs-aws-s3.svg"
+      src="https://img.shields.io/crates/d/remotefs-ftp.svg"
       alt="Downloads counter"
   /></a>
-  <a href="https://crates.io/crates/remotefs-aws-s3"
+  <a href="https://crates.io/crates/remotefs-ftp"
     ><img
-      src="https://img.shields.io/crates/v/remotefs-aws-s3.svg"
+      src="https://img.shields.io/crates/v/remotefs-ftp.svg"
       alt="Latest version"
   /></a>
   <a href="https://ko-fi.com/veeso">
@@ -41,52 +41,53 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/actions"
+  <a href="https://github.com/veeso/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-aws-s3/workflows/Linux/badge.svg"
+      src="https://github.com/veeso/remotefs-rs-ftp/workflows/Linux/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/actions"
+  <a href="https://github.com/veeso/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-aws-s3/workflows/MacOS/badge.svg"
+      src="https://github.com/veeso/remotefs-rs-ftp/workflows/MacOS/badge.svg"
       alt="MacOS CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/actions"
+  <a href="https://github.com/veeso/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-aws-s3/workflows/Windows/badge.svg"
+      src="https://github.com/veeso/remotefs-rs-ftp/workflows/Windows/badge.svg"
       alt="Windows CI"
   /></a>
-  <a href="https://coveralls.io/github/veeso/remotefs-rs-aws-s3"
+  <a href="https://coveralls.io/github/veeso/remotefs-rs-ftp"
     ><img
-      src="https://coveralls.io/repos/github/veeso/remotefs-rs-aws-s3/badge.svg"
+      src="https://coveralls.io/repos/github/veeso/remotefs-rs-ftp/badge.svg"
       alt="Coveralls"
   /></a>
-  <a href="https://docs.rs/remotefs-aws-s3"
+  <a href="https://docs.rs/remotefs-ftp"
     ><img
-      src="https://docs.rs/remotefs-aws-s3/badge.svg"
+      src="https://docs.rs/remotefs-ftp/badge.svg"
       alt="Docs"
   /></a>
 </p>
 
 ---
 
-## About remotefs-aws-s3 ☁️
+## About remotefs-ftp ☁️
 
-remotefs-aws-s3 is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the Aws S3 protocol.
+remotefs-ftp is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the FTP/FTPS protocols.
 
 ---
 
 ## Get started 🚀
 
-First of all, add `remotefs-aws-s3` to your project dependencies:
+First of all, add `remotefs-ftp` to your project dependencies:
 
 ```toml
-remotefs-aws-s3 = "^0.1.0"
+remotefs-ftp = "^0.1.0"
 ```
 
 these features are supported:
 
 - `find`: enable `find()` method on client (*enabled by default*)
+- `secure`: enable **FTPS**
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ---
@@ -124,7 +125,7 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 
 ## Support the developer ☕
 
-If you like remotefs-aws-s3 and you're grateful for the work I've done, please consider a little donation 🥳
+If you like remotefs-ftp and you're grateful for the work I've done, please consider a little donation 🥳
 
 You can make a donation with one of these platforms:
 
@@ -150,14 +151,14 @@ View remotefs' changelog [HERE](CHANGELOG.md)
 
 ## Powered by 💪
 
-remotefs-aws-s3 is powered by these aweseome projects:
+remotefs-ftp is powered by these aweseome projects:
 
-- [rust-s3](https://github.com/durch/rust-s3)
+- [suppaftp](https://github.com/veeso/suppaftp)
 
 ---
 
 ## License 📃
 
-remotefs-aws-s3 is licensed under the MIT license.
+remotefs-ftp is licensed under the MIT license.
 
 You can read the entire license [HERE](LICENSE)
