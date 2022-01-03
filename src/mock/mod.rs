@@ -27,15 +27,6 @@
  */
 use crate::RemoteFs;
 
-#[cfg(feature = "ssh")]
-pub mod ssh;
-
-// -- logger
-
-pub fn logger() {
-    let _ = env_logger::builder().is_test(true).try_init();
-}
-
 // -- mock
 pub struct MockRemoteFs;
 
@@ -66,18 +57,16 @@ impl RemoteFs for MockRemoteFs {
     }
 
     #[allow(unused)]
-    fn list_dir(&mut self, path: &std::path::Path) -> crate::RemoteResult<Vec<crate::Entry>> {
+    fn list_dir(&mut self, path: &std::path::Path) -> crate::RemoteResult<Vec<crate::File>> {
         Ok(vec![])
     }
 
     #[allow(unused)]
-    fn stat(&mut self, path: &std::path::Path) -> crate::RemoteResult<crate::Entry> {
-        Ok(crate::Entry::File(crate::File {
-            name: "foo".to_string(),
+    fn stat(&mut self, path: &std::path::Path) -> crate::RemoteResult<crate::File> {
+        Ok(crate::File {
             path: std::path::PathBuf::from("/foo"),
-            extension: None,
             metadata: crate::fs::Metadata::default(),
-        }))
+        })
     }
 
     #[allow(unused)]

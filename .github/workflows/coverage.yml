@@ -13,8 +13,6 @@ jobs:
       - uses: actions/checkout@v2
       - name: Install dependencies
         run: sudo apt update && sudo apt install -y libssh2-1-dev libssl-dev
-      - name: Setup containers
-        run: docker-compose -f "tests/docker-compose.yml" up -d --build
       - name: Setup nightly toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -24,7 +22,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --lib --no-default-features --features ssh,ftp,aws-s3,github-actions,with-containers --no-fail-fast
+          args: --lib --no-default-features --features find,github-actions --no-fail-fast
         env:
           RUST_LOG: trace
           CARGO_INCREMENTAL: "0"

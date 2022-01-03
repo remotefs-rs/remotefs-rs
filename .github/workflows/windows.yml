@@ -14,8 +14,8 @@ jobs:
       - name: Build
         run: cargo build --all-features
       - name: Run tests
-        run: cargo test --verbose --no-default-features --features ssh,ftp,aws-s3,github-actions --no-fail-fast
+        run: cargo test --verbose --no-default-features --features find,github-actions --no-fail-fast
         env:
           RUST_LOG: trace
       - name: Clippy
-        run: cargo clippy --features ssh,ftp,aws-s3 -- -Dwarnings
+        run: cargo clippy -- -Dwarnings

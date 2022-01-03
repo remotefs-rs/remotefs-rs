@@ -25,6 +25,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
+use std::error::Error as StdError;
 use std::fmt;
 use thiserror::Error;
 
@@ -102,6 +103,12 @@ impl fmt::Display for RemoteError {
     }
 }
 
+impl StdError for RemoteError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&self.kind)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -175,5 +182,11 @@ mod test {
         );
         let err = RemoteError::new(RemoteErrorType::UnsupportedFeature);
         assert_eq!(err.kind, RemoteErrorType::UnsupportedFeature);
+    }
+
+    #[test]
+    fn should_report_error_cause() {
+        let error = RemoteError::new(RemoteErrorType::UnsupportedFeature);
+        assert!(error.source().is_some());
     }
 }

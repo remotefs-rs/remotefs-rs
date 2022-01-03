@@ -1,10 +1,23 @@
 # Changelog
 
 - [Changelog](#changelog)
+  - [0.2.0](#020)
   - [0.1.1](#011)
   - [0.1.0](#010)
 
 ---
+
+## 0.2.0
+
+Released on ??
+
+- Moved protocols to **extern crates**:
+  - [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
+  - [ftp](https://github.com/veeso/remotefs-rs-ftp)
+  - [ssh](https://github.com/veeso/remotefs-rs-ssh)
+- Merged `File`, `Directory` and `Entry` into a unique struct called `File`. File types (symlink, file, directory) are now differentiated by the `file_type` attribute in `Metadata`.
+- `find` method is now optional, via the `find` feature (enabled by default)
+- Implemented `From` trait for `Metadata`.
 
 ## 0.1.1
 
