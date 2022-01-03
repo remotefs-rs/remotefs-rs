@@ -131,7 +131,7 @@ impl RemoteFs for MockRemoteFs {
         &mut self,
         path: &std::path::Path,
         metadata: &crate::fs::Metadata,
-    ) -> crate::RemoteResult<Box<dyn std::io::Write>> {
+    ) -> crate::RemoteResult<crate::fs::WriteStream> {
         Err(crate::RemoteError::new(
             crate::RemoteErrorType::UnsupportedFeature,
         ))
@@ -142,14 +142,14 @@ impl RemoteFs for MockRemoteFs {
         &mut self,
         path: &std::path::Path,
         metadata: &crate::fs::Metadata,
-    ) -> crate::RemoteResult<Box<dyn std::io::Write>> {
+    ) -> crate::RemoteResult<crate::fs::WriteStream> {
         Err(crate::RemoteError::new(
             crate::RemoteErrorType::UnsupportedFeature,
         ))
     }
 
     #[allow(unused)]
-    fn open(&mut self, path: &std::path::Path) -> crate::RemoteResult<Box<dyn std::io::Read>> {
+    fn open(&mut self, path: &std::path::Path) -> crate::RemoteResult<crate::fs::ReadStream> {
         Err(crate::RemoteError::new(
             crate::RemoteErrorType::UnsupportedFeature,
         ))
