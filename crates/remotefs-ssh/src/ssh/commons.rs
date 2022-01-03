@@ -31,7 +31,7 @@ use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use ssh2::{MethodType as SshMethodType, Session};
 use std::io::Read;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 // -- connect
@@ -114,6 +114,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
                 &ssh_config.username,
                 rsa_key,
                 opts.password.as_deref(),
+                ssh_config.params.identity_file.as_deref(),
             )?;
         }
         None => {
@@ -195,17 +196,31 @@ fn session_auth_with_rsakey(
     username: &str,
     private_key: &Path,
     password: Option<&str>,
+    identity_file: Option<&[PathBuf]>,
 ) -> RemoteResult<()> {
     debug!("Authenticating with username '{}' and RSA key", username);
-    if let Err(err) = session.userauth_pubkey_file(username, None, private_key, password) {
-        error!("Authentication failed: {}", err);
-        Err(RemoteError::new_ex(
-            RemoteErrorType::AuthenticationFailed,
-            err,
-        ))
-    } else {
-        Ok(())
+    let mut keys = vec![private_key];
+    if let Some(identity_file) = identity_file {
+        let other_keys: Vec<&Path> = identity_file.iter().map(|x| x.as_path()).collect();
+        keys.extend(other_keys);
     }
+    // iterate over keys
+    for key in keys.into_iter() {
+        trace!("Trying to authenticate with RSA key at '{}'", key.display());
+        match session.userauth_pubkey_file(username, None, key, password) {
+            Ok(_) => {
+                debug!("Authenticated with key at '{}'", key.display());
+                return Ok(());
+            }
+            Err(err) => {
+                error!("Authentication failed: {}", err);
+            }
+        }
+    }
+    Err(RemoteError::new_ex(
+        RemoteErrorType::AuthenticationFailed,
+        "could not find any suitable RSA key to authenticate with",
+    ))
 }
 
 /// Authenticate on session with username and password
