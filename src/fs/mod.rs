@@ -30,6 +30,7 @@
 use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "find")]
 use wildmatch::WildMatch;
 // -- modules
 mod errors;
@@ -259,6 +260,7 @@ pub trait RemoteFs {
 
     /// Find files from current directory (in all subdirectories) whose name matches the provided search
     /// Search supports wildcards ('?', '*')
+    #[cfg(feature = "find")]
     fn find(&mut self, search: &str) -> RemoteResult<Vec<File>> {
         match self.is_connected() {
             true => {
@@ -278,6 +280,7 @@ pub trait RemoteFs {
     ///
     /// NOTE: DON'T RE-IMPLEMENT THIS FUNCTION, unless the file transfer provides a faster way to do so
     /// NOTE: don't call this method from outside; consider it as private
+    #[cfg(feature = "find")]
     fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<File>> {
         let mut drained: Vec<File> = Vec::new();
         // Scan directory

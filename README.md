@@ -111,6 +111,7 @@ remotefs = "^0.2.0"
 
 these features are supported:
 
+- `find`: enable the `find()` method on `RemoteFs` trait (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ### Client libraries
