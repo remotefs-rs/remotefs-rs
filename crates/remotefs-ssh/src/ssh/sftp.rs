@@ -27,12 +27,12 @@
  */
 use super::{commons, SftpReadStream, SftpWriteStream, SshOpts};
 use crate::utils::path as path_utils;
+
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     Welcome, WriteStream,
 };
 use remotefs::File;
-
 use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};

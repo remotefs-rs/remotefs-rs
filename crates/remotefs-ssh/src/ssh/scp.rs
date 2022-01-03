@@ -29,14 +29,14 @@ use super::{commons, SshOpts};
 use crate::utils::fmt as fmt_utils;
 use crate::utils::parser as parser_utils;
 use crate::utils::path as path_utils;
+
+use regex::Regex;
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     UnixPexClass, Welcome, WriteStream,
 };
 use remotefs::File;
-
-use regex::Regex;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -630,9 +630,7 @@ impl RemoteFs for ScpFs {
             metadata.size,
             Some((modified, accessed)),
         ) {
-            Ok(channel) => Ok(WriteStream::from(
-                Box::new(BufWriter::with_capacity(65536, channel)) as Box<dyn Write>,
-            )),
+            Ok(channel) => Ok(WriteStream::from(Box::new(channel) as Box<dyn Write>)),
             Err(err) => {
                 error!("Failed to create file: {}", err);
                 Err(RemoteError::new_ex(RemoteErrorType::FileCreateDenied, err))
@@ -651,9 +649,7 @@ impl RemoteFs for ScpFs {
         self.session.as_mut().unwrap().set_blocking(true);
         trace!("blocked channel");
         match self.session.as_mut().unwrap().scp_recv(path.as_path()) {
-            Ok((channel, _)) => Ok(ReadStream::from(Box::new(BufReader::with_capacity(
-                65536, channel,
-            )) as Box<dyn Read>)),
+            Ok((channel, _)) => Ok(ReadStream::from(Box::new(channel) as Box<dyn Read>)),
             Err(err) => {
                 error!("Failed to open file: {}", err);
                 Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err))
