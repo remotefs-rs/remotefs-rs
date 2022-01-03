@@ -16,7 +16,8 @@ version = "0.1.0"
 [dependencies]
 chrono = "^0.4.19"
 log = "^0.4.14"
-remotefs = "^0.1.0"
+#remotefs = "^0.2.0"
+remotefs = { git = "https://github.com/veeso/remotefs-rs", branch = "seek" } 
 rust-s3 = { version = "^0.28.0", default-features = false, features = [ "sync-native-tls", "sync" ] }
 thiserror = "^1.0.0"
 
@@ -28,13 +29,18 @@ serial_test = "^0.5.1"
 tempfile = "^3.2.0"
 
 [features]
-default = [ ]
+default = [ "find" ]
 # misc
+find = [ "remotefs/find" ]
 no-log = [ "log/max_level_off" ]
 # tests
 github-actions = []
 with-s3-ci = [ ]
 with-containers = []
+
+[target."cfg(target_os = \"windows\")"]
+[target."cfg(target_os = \"windows\")".dependencies]
+path-slash = "^0.1.4"
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]

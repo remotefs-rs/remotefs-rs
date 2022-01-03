@@ -29,8 +29,8 @@
 use super::object::S3Object;
 
 use crate::utils::path as path_utils;
-use remotefs::fs::{Metadata, UnixPex, Welcome};
-use remotefs::{Entry, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
+use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
+use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
 use s3::creds::Credentials;
 use s3::serde_types::Object;
@@ -323,13 +323,13 @@ impl RemoteFs for AwsS3Fs {
         }
     }
 
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<Entry>> {
+    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
         self.check_connection()?;
         self.list_objects(path, true)
             .map(|x| x.into_iter().map(|x| x.into()).collect())
     }
 
-    fn stat(&mut self, path: &Path) -> RemoteResult<Entry> {
+    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
         self.check_connection()?;
         let path = self.resolve(path);
         if let Ok(obj) = self.stat_object(path.as_path()) {
@@ -444,23 +444,15 @@ impl RemoteFs for AwsS3Fs {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
-    fn append(
-        &mut self,
-        _path: &Path,
-        _metadata: &Metadata,
-    ) -> RemoteResult<Box<dyn std::io::Write>> {
+    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
-    fn create(
-        &mut self,
-        _path: &Path,
-        _metadata: &Metadata,
-    ) -> RemoteResult<Box<dyn std::io::Write>> {
+    fn create(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
-    fn open(&mut self, _path: &Path) -> RemoteResult<Box<dyn Read>> {
+    fn open(&mut self, _path: &Path) -> RemoteResult<ReadStream> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
@@ -801,13 +793,12 @@ mod test {
             .unwrap()
             .get(0)
             .unwrap()
-            .clone()
-            .unwrap_file();
-        assert_eq!(file.name.as_str(), "a.txt");
+            .clone();
+        assert_eq!(file.name().as_str(), "a.txt");
         let mut expected_path = wrkdir;
         expected_path.push(p);
         assert_eq!(file.path.as_path(), expected_path.as_path());
-        assert_eq!(file.extension.as_deref().unwrap(), "txt");
+        assert_eq!(file.extension().as_deref().unwrap(), "txt");
         assert_eq!(file.metadata.size, 10);
         assert_eq!(file.metadata.mode, None);
         finalize_client(client);
@@ -962,11 +953,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    atime: SystemTime::UNIX_EPOCH,
-                    ctime: SystemTime::UNIX_EPOCH,
+                    accessed: SystemTime::UNIX_EPOCH,
+                    created: SystemTime::UNIX_EPOCH,
                     gid: Some(1000),
+                    file_type: remotefs::fs::FileType::File,
                     mode: Some(UnixPex::from(0o755)),
-                    mtime: SystemTime::UNIX_EPOCH,
+                    modified: SystemTime::UNIX_EPOCH,
                     size: 7,
                     symlink: None,
                     uid: Some(1000),

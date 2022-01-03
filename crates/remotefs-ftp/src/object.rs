@@ -28,8 +28,8 @@
  */
 use crate::utils::parser as parser_utils;
 use crate::utils::path as path_utils;
-use remotefs::fs::Metadata;
-use remotefs::{Directory, Entry, File};
+use remotefs::fs::{FileType, Metadata};
+use remotefs::File;
 
 use s3::serde_types::Object;
 use std::path::{Path, PathBuf};
@@ -69,24 +69,12 @@ impl From<&Object> for S3Object {
     }
 }
 
-impl From<S3Object> for Entry {
+impl From<S3Object> for File {
     fn from(obj: S3Object) -> Self {
         let path: PathBuf = path_utils::absolutize(Path::new("/"), obj.path.as_path());
-        match obj.is_dir {
-            true => Entry::Directory(Directory {
-                name: obj.name.clone(),
-                path,
-                metadata: obj.into(),
-            }),
-            false => Entry::File(File {
-                name: obj.name.clone(),
-                extension: obj
-                    .path
-                    .extension()
-                    .map(|x| x.to_string_lossy().to_string()),
-                path,
-                metadata: obj.into(),
-            }),
+        File {
+            path,
+            metadata: obj.into(),
         }
     }
 }
@@ -94,11 +82,16 @@ impl From<S3Object> for Entry {
 impl From<S3Object> for Metadata {
     fn from(obj: S3Object) -> Self {
         Self {
-            atime: SystemTime::UNIX_EPOCH,
-            ctime: SystemTime::UNIX_EPOCH,
+            accessed: SystemTime::UNIX_EPOCH,
+            created: SystemTime::UNIX_EPOCH,
+            file_type: if obj.is_dir {
+                FileType::Directory
+            } else {
+                FileType::File
+            },
             gid: None,
             mode: None,
-            mtime: obj.last_modified,
+            modified: obj.last_modified,
             size: obj.size,
             symlink: None,
             uid: None,
@@ -196,17 +189,18 @@ mod test {
             is_dir: false,
             last_modified: UNIX_EPOCH,
         };
-        let entry = Entry::from(obj).unwrap_file();
-        assert_eq!(entry.name.as_str(), "chiedo.gif");
+        let entry = File::from(obj);
+        assert_eq!(entry.name().as_str(), "chiedo.gif");
+        assert!(entry.is_file());
         assert_eq!(
             entry.path.as_path(),
             Path::new("/pippo/sottocartella/chiedo.gif")
         );
-        assert_eq!(entry.metadata.ctime, UNIX_EPOCH);
-        assert_eq!(entry.metadata.mtime, UNIX_EPOCH);
-        assert_eq!(entry.metadata.atime, UNIX_EPOCH);
+        assert_eq!(entry.metadata.created, UNIX_EPOCH);
+        assert_eq!(entry.metadata.modified, UNIX_EPOCH);
+        assert_eq!(entry.metadata.accessed, UNIX_EPOCH);
         assert_eq!(entry.metadata.size, 1516966);
-        assert_eq!(entry.extension.unwrap().as_str(), "gif");
+        assert_eq!(entry.extension().unwrap().as_str(), "gif");
         assert_eq!(entry.metadata.uid, None);
         assert_eq!(entry.metadata.gid, None);
         assert_eq!(entry.metadata.mode, None);
@@ -221,12 +215,13 @@ mod test {
             is_dir: true,
             last_modified: UNIX_EPOCH,
         };
-        let entry = Entry::from(obj).unwrap_dir();
-        assert_eq!(entry.name.as_str(), "temp");
+        let entry = File::from(obj);
+        assert!(entry.is_dir());
+        assert_eq!(entry.name().as_str(), "temp");
         assert_eq!(entry.path.as_path(), Path::new("/temp"));
-        assert_eq!(entry.metadata.ctime, UNIX_EPOCH);
-        assert_eq!(entry.metadata.mtime, UNIX_EPOCH);
-        assert_eq!(entry.metadata.atime, UNIX_EPOCH);
+        assert_eq!(entry.metadata.created, UNIX_EPOCH);
+        assert_eq!(entry.metadata.modified, UNIX_EPOCH);
+        assert_eq!(entry.metadata.accessed, UNIX_EPOCH);
         assert_eq!(entry.metadata.size, 0);
         assert_eq!(entry.metadata.uid, None);
         assert_eq!(entry.metadata.gid, None);
