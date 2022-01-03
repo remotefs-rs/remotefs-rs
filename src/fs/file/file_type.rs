@@ -25,7 +25,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-use std::fs::FileType as StdFileType;
+use std::path::PathBuf;
 
 /// Describes the file type (directory, regular file or symlink)
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -36,7 +36,7 @@ pub enum FileType {
     File,
     /// Symbolic link. If the file is a symlink pointing to a directory,
     /// this will be still considered a Symlink.
-    Symlink,
+    Symlink(PathBuf),
 }
 
 impl Default for FileType {
@@ -58,19 +58,7 @@ impl FileType {
 
     /// Returns whether file is symlink
     pub fn is_symlink(&self) -> bool {
-        matches!(self, Self::Symlink)
-    }
-}
-
-impl From<StdFileType> for FileType {
-    fn from(t: StdFileType) -> Self {
-        if t.is_symlink() {
-            Self::Symlink
-        } else if t.is_dir() {
-            Self::Directory
-        } else {
-            Self::File
-        }
+        matches!(self, Self::Symlink(_))
     }
 }
 
@@ -89,8 +77,8 @@ mod test {
         assert_eq!(FileType::File.is_dir(), false);
         assert_eq!(FileType::File.is_file(), true);
         assert_eq!(FileType::File.is_symlink(), false);
-        assert_eq!(FileType::Symlink.is_dir(), false);
-        assert_eq!(FileType::Symlink.is_file(), false);
-        assert_eq!(FileType::Symlink.is_symlink(), true);
+        assert_eq!(FileType::Symlink(PathBuf::default()).is_dir(), false);
+        assert_eq!(FileType::Symlink(PathBuf::default()).is_file(), false);
+        assert_eq!(FileType::Symlink(PathBuf::default()).is_symlink(), true);
     }
 }
