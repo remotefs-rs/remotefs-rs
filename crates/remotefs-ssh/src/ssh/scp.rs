@@ -830,7 +830,13 @@ mod test {
         let reader = Cursor::new(file_data.as_bytes());
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &metadata, Box::new(reader))
+                .ok()
+                .unwrap(),
+            10
+        );
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         finalize_client(client);
@@ -986,12 +992,11 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata::default().size(file_data.len() as u64);
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client.open_file(p, buffer).is_ok());
+        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
         finalize_client(client);
     }
 
@@ -1199,7 +1204,13 @@ mod test {
         let reader = Cursor::new(file_data.as_bytes());
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &metadata, Box::new(reader))
+                .ok()
+                .unwrap(),
+            7
+        );
         let entry = client.stat(p).ok().unwrap();
         assert_eq!(entry.name(), "a.sh");
         let mut expected_path = client.pwd().ok().unwrap();

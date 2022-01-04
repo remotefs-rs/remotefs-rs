@@ -497,7 +497,7 @@ impl RemoteFs for SftpFs {
         path: &Path,
         metadata: &Metadata,
         mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
+    ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.append(path, metadata)?;
             trace!("Opened remote file");
@@ -518,8 +518,9 @@ impl RemoteFs for SftpFs {
                 }
                 bytes += bytes_read;
             }
+            self.on_written(stream)?;
             trace!("Written {} bytes to destination", bytes);
-            self.on_written(stream)
+            Ok(bytes as u64)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -530,7 +531,7 @@ impl RemoteFs for SftpFs {
         path: &Path,
         metadata: &Metadata,
         mut reader: Box<dyn std::io::Read>,
-    ) -> RemoteResult<()> {
+    ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.create(path, metadata)?;
             trace!("Opened remote file");
@@ -551,14 +552,15 @@ impl RemoteFs for SftpFs {
                 }
                 bytes += bytes_read;
             }
+            self.on_written(stream)?;
             trace!("Written {} bytes to destination", bytes);
-            self.on_written(stream)
+            Ok(bytes as u64)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
 
-    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<()> {
+    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
         if self.is_connected() {
             let transfer_size = self.stat(src)?.metadata().size as usize;
             let mut stream = self.open(src)?;
@@ -581,7 +583,7 @@ impl RemoteFs for SftpFs {
             }
             self.on_read(stream)?;
             trace!("Copied {} bytes to destination", bytes);
-            Ok(())
+            Ok(bytes as u64)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -620,17 +622,25 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &Metadata::default().size(10), Box::new(reader))
+                .ok()
+                .unwrap(),
+            10
+        );
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .append_file(p, &Metadata::default().size(14), Box::new(reader))
-            .is_ok());
+        assert_eq!(
+            client
+                .append_file(p, &Metadata::default().size(14), Box::new(reader))
+                .ok()
+                .unwrap(),
+            14
+        );
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
         finalize_client(client);
     }
@@ -772,9 +782,13 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &Metadata::default().size(10), Box::new(reader))
+                .ok()
+                .unwrap(),
+            10
+        );
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         finalize_client(client);
@@ -935,7 +949,7 @@ mod test {
             .is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client.open_file(p, buffer).is_ok());
+        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
         finalize_client(client);
     }
 
