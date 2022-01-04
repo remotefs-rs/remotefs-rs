@@ -35,11 +35,13 @@ use wildmatch::WildMatch;
 // -- modules
 mod errors;
 mod file;
+pub mod stream;
 mod welcome;
 
 // -- export
 pub use errors::{RemoteError, RemoteErrorType, RemoteResult};
 pub use file::{File, FileType, Metadata, UnixPex, UnixPexClass};
+pub use stream::{ReadStream, WriteStream};
 pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
@@ -143,7 +145,7 @@ pub trait RemoteFs {
     ///
     /// metadata should be the same of the local file.
     /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
-    fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
+    fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream>;
 
     /// Create file at path for write.
     /// If the file already exists, its content will be overwritten
@@ -152,10 +154,10 @@ pub trait RemoteFs {
     ///
     /// metadata should be the same of the local file.
     /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
-    fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<Box<dyn Write>>;
+    fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream>;
 
     /// Open file at specified path for read.
-    fn open(&mut self, path: &Path) -> RemoteResult<Box<dyn Read>>;
+    fn open(&mut self, path: &Path) -> RemoteResult<ReadStream>;
 
     /// Finalize `create_file` and `append_file` methods.
     /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
@@ -166,7 +168,7 @@ pub trait RemoteFs {
     /// ### Default implementation
     ///
     /// By default this function returns already `Ok(())`
-    fn on_written(&mut self, _writable: Box<dyn Write>) -> RemoteResult<()> {
+    fn on_written(&mut self, _writable: WriteStream) -> RemoteResult<()> {
         Ok(())
     }
 
@@ -179,7 +181,7 @@ pub trait RemoteFs {
     /// ### Default implementation
     ///
     /// By default this function returns already `Ok(())`
-    fn on_read(&mut self, _readable: Box<dyn Read>) -> RemoteResult<()> {
+    fn on_read(&mut self, _readable: ReadStream) -> RemoteResult<()> {
         Ok(())
     }
 
