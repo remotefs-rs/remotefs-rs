@@ -43,6 +43,13 @@ enum StreamReader {
     ReadAndSeek(Box<dyn ReadAndSeek>),
 }
 
+impl ReadStream {
+    /// Returns whether `ReadStream` is seekable
+    pub fn seekable(&self) -> bool {
+        matches!(self.stream, StreamReader::ReadAndSeek(_))
+    }
+}
+
 impl From<Box<dyn Read>> for ReadStream {
     fn from(reader: Box<dyn Read>) -> Self {
         Self {
@@ -106,6 +113,13 @@ pub struct WriteStream {
 enum StreamWriter {
     Write(Box<dyn Write>),
     WriteAndSeek(Box<dyn WriteAndSeek>),
+}
+
+impl WriteStream {
+    /// Returns whether `WriteStream` is seekable
+    pub fn seekable(&self) -> bool {
+        matches!(self.stream, StreamWriter::WriteAndSeek(_))
+    }
 }
 
 impl From<Box<dyn Write>> for WriteStream {
@@ -184,7 +198,8 @@ mod test {
         let temp = NamedTempFile::new().expect("Could not make tempfile");
         let file: Box<dyn Read> =
             Box::new(File::open(temp.path()).expect("Could not open tempfile"));
-        let _ = ReadStream::from(file);
+        let s = ReadStream::from(file);
+        assert_eq!(s.seekable(), false);
     }
 
     #[test]
@@ -192,7 +207,8 @@ mod test {
         let temp = NamedTempFile::new().expect("Could not make tempfile");
         let file: Box<dyn ReadAndSeek> =
             Box::new(File::open(temp.path()).expect("Could not open tempfile"));
-        let _ = ReadStream::from(file);
+        let s = ReadStream::from(file);
+        assert_eq!(s.seekable(), true);
     }
 
     #[test]
@@ -200,7 +216,8 @@ mod test {
         let temp = NamedTempFile::new().expect("Could not make tempfile");
         let file: Box<dyn Write> =
             Box::new(File::create(temp.path()).expect("Could not open tempfile"));
-        let _ = WriteStream::from(file);
+        let s = WriteStream::from(file);
+        assert_eq!(s.seekable(), false);
     }
 
     #[test]
@@ -208,6 +225,7 @@ mod test {
         let temp = NamedTempFile::new().expect("Could not make tempfile");
         let file: Box<dyn WriteAndSeek> =
             Box::new(File::create(temp.path()).expect("Could not open tempfile"));
-        let _ = WriteStream::from(file);
+        let s = WriteStream::from(file);
+        assert_eq!(s.seekable(), true);
     }
 }
