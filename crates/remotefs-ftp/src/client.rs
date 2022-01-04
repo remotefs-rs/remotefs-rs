@@ -34,7 +34,6 @@ use remotefs::File;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 #[cfg(feature = "secure")]
 use suppaftp::native_tls::TlsConnector;
 pub use suppaftp::FtpStream;
@@ -149,12 +148,12 @@ impl FtpFs {
                     FileType::File
                 };
                 let metadata = Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: None,
+                    created: None,
                     file_type,
                     gid: f.gid(),
                     mode: Some(Self::query_unix_pex(&f)),
-                    modified: f.modified(),
+                    modified: Some(f.modified()),
                     size: f.size() as u64,
                     symlink: f.symlink().map(|x| path_utils::absolutize(path, x)),
                     uid: None,

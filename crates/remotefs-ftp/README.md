@@ -98,28 +98,28 @@ The following table states the compatibility for the client client and the remot
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Aws-S3 |
-|----------------|--------|
-| append_file    | No     |
-| append         | No     |
-| change_dir     | Yes    |
-| copy           | No     |
-| create_dir     | Yes    |
-| create_file    | Yes    |
-| create         | No     |
-| exec           | No     |
-| exists         | Yes    |
-| list_dir       | Yes    |
-| mov            | No     |
-| open_file      | Yes    |
-| open           | No     |
-| pwd            | Yes    |
-| remove_dir_all | Yes    |
-| remove_dir     | Yes    |
-| remove_file    | Yes    |
-| setstat        | No     |
-| stat           | Yes    |
-| symlink        | No     |
+| Client/Method  | Ftp |
+|----------------|-----|
+| append_file    | Yes |
+| append         | Yes |
+| change_dir     | Yes |
+| copy           | No  |
+| create_dir     | Yes |
+| create_file    | Yes |
+| create         | Yes |
+| exec           | No  |
+| exists         | Yes |
+| list_dir       | Yes |
+| mov            | Yes |
+| open_file      | Yes |
+| open           | Yes |
+| pwd            | Yes |
+| remove_dir_all | Yes |
+| remove_dir     | Yes |
+| remove_file    | Yes |
+| setstat        | No  |
+| stat           | Yes |
+| symlink        | No  |
 
 ---
 

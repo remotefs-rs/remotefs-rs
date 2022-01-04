@@ -16,7 +16,7 @@ version = "0.1.0"
 [dependencies]
 log = "^0.4.14"
 #remotefs = "^0.2.0"
-remotefs = { git = "https://github.com/veeso/remotefs-rs", branch = "seek" } 
+remotefs = { git = "https://github.com/veeso/remotefs-rs", branch = "0.2.0" } 
 suppaftp = "^4.2.0"
 
 [dev-dependencies]
