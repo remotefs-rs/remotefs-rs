@@ -11,7 +11,7 @@
 <p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (FIXME:/12/2021)</p>
+<p align="center">Current version: 0.2.0 (04/01/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -114,13 +114,27 @@ these features are supported:
 - `find`: enable the `find()` method on `RemoteFs` trait (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
-### Client libraries
+### Client libraries 🔌
 
-In order to use the existing client library, you'll need to add them to your Cargo.toml:
+In order to use the existing client library, you'll need to add them to your Cargo.toml, along to remotefs:
 
 - [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
+
+    ```toml
+    remotefs-aws-s3 = "^0.1.0"
+    ```
+
 - [ftp](https://github.com/veeso/remotefs-rs-ftp)
+
+    ```toml
+    remotefs-ftp = { version = "^0.1.0", features = [ "secure" ] }
+    ```
+
 - [ssh](https://github.com/veeso/remotefs-rs-ssh)
+
+    ```toml
+    remotefs-ssh = "^0.1.0"
+    ```
 
 ---
 
