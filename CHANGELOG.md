@@ -21,6 +21,7 @@ Released on ??
 - `create` and `append` will now return a `WriteStream` instead of a box, which will contain the inner stream which supports `Write` and may support `Seek` (according to the protocol).
 - `read` will now return a `ReadStream` instead of a box, which will contain the inner stream which supports `Read` and may support `Seek` (according to the protocol).
 - Metadata times (`created`, `accessed` and `modified`) are now `Option<SystemTime>` in order to provide the user to handle unset times, in case it is not supported by the remote server.
+- `append_file`, `create_file` and `open_file` will now return the amount of bytes transferred between the client and the server
 
 ## 0.1.1
 

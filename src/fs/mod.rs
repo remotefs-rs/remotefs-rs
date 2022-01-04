@@ -189,6 +189,7 @@ pub trait RemoteFs {
     /// This method **SHOULD** be implemented **ONLY** when streams are not supported by the current file transfer.
     /// The developer using the client should FIRST try with `create` followed by `on_written`
     /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    /// In case of success, returns the amount of bytes written to the remote file
     ///
     /// ### Default implementation
     ///
@@ -198,14 +199,15 @@ pub trait RemoteFs {
         path: &Path,
         metadata: &Metadata,
         mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
+    ) -> RemoteResult<u64> {
         if self.is_connected() {
             trace!("Opened remote file");
             let mut stream = self.append(path, metadata)?;
             let sz = io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            self.on_written(stream)?;
             trace!("Written {} bytes to destination", sz);
-            self.on_written(stream)
+            Ok(sz)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -215,6 +217,7 @@ pub trait RemoteFs {
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// The developer using the client should FIRST try with `create` followed by `on_written`
     /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    /// In case of success, returns the amount of bytes written to the remote file
     ///
     /// ### Default implementation
     ///
@@ -224,14 +227,15 @@ pub trait RemoteFs {
         path: &Path,
         metadata: &Metadata,
         mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
+    ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.create(path, metadata)?;
             trace!("Opened remote file");
             let sz = io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+            self.on_written(stream)?;
             trace!("Written {} bytes to destination", sz);
-            self.on_written(stream)
+            Ok(sz)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
@@ -242,11 +246,12 @@ pub trait RemoteFs {
     /// (since it would work thanks to the default implementation)
     /// The developer using the client should FIRST try with `open` followed by `on_sent`
     /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    /// In case of success, returns the amount of bytes written to the local stream
     ///
     /// ### Default implementation
     ///
     /// By default this function uses the streams function to copy content from reader to writer
-    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<()> {
+    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.open(src)?;
             trace!("File opened");
@@ -254,7 +259,7 @@ pub trait RemoteFs {
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_read(stream)?;
             trace!("Copied {} bytes to destination", sz);
-            Ok(())
+            Ok(sz)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
