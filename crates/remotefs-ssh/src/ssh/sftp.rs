@@ -34,6 +34,7 @@ use remotefs::fs::{
 };
 use remotefs::File;
 use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -488,6 +489,103 @@ impl RemoteFs for SftpFs {
                 RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
             })
     }
+
+    // -- override (std::io::copy is VERY slow on SFTP <https://github.com/veeso/remotefs-rs/issues/6>)
+
+    fn append_file(
+        &mut self,
+        path: &Path,
+        metadata: &Metadata,
+        mut reader: Box<dyn Read>,
+    ) -> RemoteResult<()> {
+        if self.is_connected() {
+            let mut stream = self.append(path, metadata)?;
+            trace!("Opened remote file");
+            let mut bytes: usize = 0;
+            let transfer_size = metadata.size as usize;
+            while bytes < transfer_size {
+                let mut buffer: [u8; 65535] = [0; 65535];
+                let bytes_read = reader.read(&mut buffer).map_err(|e| {
+                    error!("Failed to read from file: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::IoError, e)
+                })?;
+                let mut delta = 0;
+                while delta < bytes_read {
+                    delta += stream.write(&buffer[delta..bytes_read]).map_err(|e| {
+                        error!("Failed to write to stream: {}", e);
+                        RemoteError::new_ex(RemoteErrorType::IoError, e)
+                    })?;
+                }
+                bytes += bytes_read;
+            }
+            trace!("Written {} bytes to destination", bytes);
+            self.on_written(stream)
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        }
+    }
+
+    fn create_file(
+        &mut self,
+        path: &Path,
+        metadata: &Metadata,
+        mut reader: Box<dyn std::io::Read>,
+    ) -> RemoteResult<()> {
+        if self.is_connected() {
+            let mut stream = self.create(path, metadata)?;
+            trace!("Opened remote file");
+            let mut bytes: usize = 0;
+            let transfer_size = metadata.size as usize;
+            while bytes < transfer_size {
+                let mut buffer: [u8; 65535] = [0; 65535];
+                let bytes_read = reader.read(&mut buffer).map_err(|e| {
+                    error!("Failed to read from file: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::IoError, e)
+                })?;
+                let mut delta = 0;
+                while delta < bytes_read {
+                    delta += stream.write(&buffer[delta..bytes_read]).map_err(|e| {
+                        error!("Failed to write to stream: {}", e);
+                        RemoteError::new_ex(RemoteErrorType::IoError, e)
+                    })?;
+                }
+                bytes += bytes_read;
+            }
+            trace!("Written {} bytes to destination", bytes);
+            self.on_written(stream)
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        }
+    }
+
+    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<()> {
+        if self.is_connected() {
+            let transfer_size = self.stat(src)?.metadata().size as usize;
+            let mut stream = self.open(src)?;
+            trace!("File opened");
+            let mut bytes: usize = 0;
+            while bytes < transfer_size {
+                let mut buffer: [u8; 65535] = [0; 65535];
+                let bytes_read = stream.read(&mut buffer).map_err(|e| {
+                    error!("Failed to read from stream: {}", e);
+                    RemoteError::new_ex(RemoteErrorType::IoError, e)
+                })?;
+                let mut delta = 0;
+                while delta < bytes_read {
+                    delta += dest.write(&buffer[delta..bytes_read]).map_err(|e| {
+                        error!("Failed to write to file: {}", e);
+                        RemoteError::new_ex(RemoteErrorType::IoError, e)
+                    })?;
+                }
+                bytes += bytes_read;
+            }
+            self.on_read(stream)?;
+            trace!("Copied {} bytes to destination", bytes);
+            Ok(())
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -523,7 +621,7 @@ mod test {
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
             .is_ok());
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
@@ -531,7 +629,7 @@ mod test {
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
         assert!(client
-            .append_file(p, &Metadata::default(), Box::new(reader))
+            .append_file(p, &Metadata::default().size(14), Box::new(reader))
             .is_ok());
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
         finalize_client(client);
@@ -675,7 +773,7 @@ mod test {
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
             .is_ok());
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
@@ -748,7 +846,7 @@ mod test {
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
             .is_ok());
         // Verify size
         let file = client
@@ -833,7 +931,7 @@ mod test {
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
             .is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
@@ -1042,7 +1140,7 @@ mod test {
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
+            .create_file(p, &Metadata::default().size(7), Box::new(reader))
             .is_ok());
         let entry = client.stat(p).ok().unwrap();
         assert_eq!(entry.name(), "a.sh");
