@@ -1002,12 +1002,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: None,
+                    created: None,
                     gid: Some(1),
                     file_type: FileType::File,
                     mode: Some(UnixPex::from(0o755)),
-                    modified: SystemTime::UNIX_EPOCH,
+                    modified: None,
                     size: 7,
                     symlink: None,
                     uid: Some(1),
