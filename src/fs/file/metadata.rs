@@ -32,22 +32,22 @@ use std::os::unix::fs::MetadataExt;
 use std::{
     fs::Metadata as StdMetadata,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::SystemTime,
 };
 
 /// File metadata
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Metadata {
     /// Last access time
-    pub accessed: SystemTime,
+    pub accessed: Option<SystemTime>,
     /// Creation time
-    pub created: SystemTime,
+    pub created: Option<SystemTime>,
     /// Group id
     pub gid: Option<u32>,
     /// Unix permissions
     pub mode: Option<UnixPex>,
     /// Modify time
-    pub modified: SystemTime,
+    pub modified: Option<SystemTime>,
     /// File size in bytes
     pub size: u64,
     /// If file is symlink, contains the path of the file it is pointing to
@@ -61,11 +61,11 @@ pub struct Metadata {
 impl Default for Metadata {
     fn default() -> Self {
         Self {
-            accessed: UNIX_EPOCH,
-            created: UNIX_EPOCH,
+            accessed: None,
+            created: None,
             gid: None,
             mode: None,
-            modified: UNIX_EPOCH,
+            modified: None,
             size: 0,
             symlink: None,
             file_type: FileType::File,
@@ -77,13 +77,13 @@ impl Default for Metadata {
 impl Metadata {
     /// Construct metadata with accessed
     pub fn accessed(mut self, accessed: SystemTime) -> Self {
-        self.accessed = accessed;
+        self.accessed = Some(accessed);
         self
     }
 
     /// Construct metadata with created
     pub fn created(mut self, created: SystemTime) -> Self {
-        self.created = created;
+        self.created = Some(created);
         self
     }
 
@@ -101,7 +101,7 @@ impl Metadata {
 
     /// Construct metadata with modify time
     pub fn modified(mut self, modified: SystemTime) -> Self {
-        self.modified = modified;
+        self.modified = Some(modified);
         self
     }
 
@@ -154,11 +154,11 @@ impl Metadata {
 impl From<StdMetadata> for Metadata {
     fn from(metadata: StdMetadata) -> Self {
         Self {
-            accessed: metadata.accessed().ok().unwrap_or(SystemTime::UNIX_EPOCH),
-            created: metadata.created().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            accessed: metadata.accessed().ok(),
+            created: metadata.created().ok(),
             gid: None,
             file_type: FileType::from(metadata.file_type()),
-            modified: metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            modified: metadata.modified().ok(),
             mode: None,
             size: metadata.len(),
             symlink: None,
@@ -171,12 +171,11 @@ impl From<StdMetadata> for Metadata {
 impl From<StdMetadata> for Metadata {
     fn from(metadata: StdMetadata) -> Self {
         Self {
-            accessed: metadata.accessed().ok().unwrap_or(SystemTime::UNIX_EPOCH),
-            // NOTE: on Unix based system, ctime is NEVER stored!!!
-            created: metadata.created().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            accessed: metadata.accessed().ok(),
+            created: metadata.created().ok(),
             gid: Some(metadata.gid()),
             file_type: FileType::from(metadata.file_type()),
-            modified: metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH),
+            modified: metadata.modified().ok(),
             mode: Some(UnixPex::from(metadata.mode())),
             size: if metadata.is_dir() {
                 metadata.blksize()
@@ -196,16 +195,16 @@ mod test {
     use super::*;
 
     use pretty_assertions::assert_eq;
-    use std::time::Duration;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn should_initialize_metadata() {
         let metadata = Metadata::default();
-        assert_eq!(metadata.accessed, UNIX_EPOCH);
-        assert_eq!(metadata.created, UNIX_EPOCH);
+        assert!(metadata.accessed.is_none());
+        assert!(metadata.created.is_none());
         assert!(metadata.gid.is_none());
         assert!(metadata.mode.is_none());
-        assert_eq!(metadata.modified, UNIX_EPOCH);
+        assert!(metadata.modified.is_none());
         assert_eq!(metadata.size, 0);
         assert!(metadata.symlink.is_none());
         assert_eq!(metadata.file_type, FileType::File);
@@ -235,11 +234,11 @@ mod test {
             .symlink(Path::new("/tmp/a.txt"))
             .file_type(FileType::Symlink)
             .uid(10);
-        assert_eq!(metadata.accessed, accessed);
-        assert_eq!(metadata.created, created);
+        assert_eq!(metadata.accessed, Some(accessed));
+        assert_eq!(metadata.created, Some(created));
         assert_eq!(metadata.gid.unwrap(), 14);
         assert!(metadata.mode.is_some());
-        assert_eq!(metadata.modified, modified);
+        assert_eq!(metadata.modified, Some(modified));
         assert_eq!(metadata.size, 1024);
         assert_eq!(metadata.is_symlink(), true);
         assert_eq!(metadata.is_dir(), false);
