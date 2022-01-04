@@ -459,9 +459,9 @@ impl RemoteFs for AwsS3Fs {
     fn create_file(
         &mut self,
         path: &Path,
-        _metadata: &Metadata,
+        metadata: &Metadata,
         mut reader: Box<dyn Read>,
-    ) -> RemoteResult<()> {
+    ) -> RemoteResult<u64> {
         self.check_connection()?;
         let src = self.resolve(path);
         let key = Self::fmt_path(src.as_path(), false);
@@ -470,20 +470,20 @@ impl RemoteFs for AwsS3Fs {
             .as_ref()
             .unwrap()
             .put_object_stream(&mut reader, key.as_str())
-            .map(|_| ())
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     format!("Could not put file: {}", e),
                 )
             })
+            .map(|_| metadata.size)
     }
 
     fn open_file(
         &mut self,
         src: &Path,
         mut dest: Box<dyn std::io::Write + Send>,
-    ) -> RemoteResult<()> {
+    ) -> RemoteResult<u64> {
         self.check_connection()?;
         if !self.exists(src).ok().unwrap_or(false) {
             return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
@@ -495,13 +495,13 @@ impl RemoteFs for AwsS3Fs {
             .as_ref()
             .unwrap()
             .get_object_stream(key.as_str(), &mut dest)
-            .map(|_| ())
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     format!("Could not get file: {}", e),
                 )
             })
+            .map(|_| 0)
     }
 }
 
@@ -733,7 +733,13 @@ mod test {
         let reader = Cursor::new(file_data.as_bytes());
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &metadata, Box::new(reader))
+                .ok()
+                .unwrap(),
+            10
+        );
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         finalize_client(client);
@@ -837,7 +843,7 @@ mod test {
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client.open_file(p, buffer).is_ok());
+        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 0);
         finalize_client(client);
     }
 
