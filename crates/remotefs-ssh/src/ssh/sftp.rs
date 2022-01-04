@@ -92,12 +92,16 @@ impl SftpFs {
         let gid = metadata.gid;
         let mode = metadata.perm.map(UnixPex::from);
         let size = metadata.size.unwrap_or(0);
-        let accessed = SystemTime::UNIX_EPOCH
-            .checked_add(Duration::from_secs(metadata.atime.unwrap_or(0)))
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let modified: SystemTime = SystemTime::UNIX_EPOCH
-            .checked_add(Duration::from_secs(metadata.mtime.unwrap_or(0)))
-            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let accessed = metadata.atime.map(|x| {
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_secs(x))
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        });
+        let modified = metadata.mtime.map(|x| {
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_secs(x))
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+        });
         let symlink = match metadata.file_type().is_symlink() {
             false => None,
             true => match self.sftp.as_ref().unwrap().readlink(path) {
@@ -121,7 +125,7 @@ impl SftpFs {
         };
         let entry_metadata = Metadata {
             accessed,
-            created: SystemTime::UNIX_EPOCH,
+            created: None,
             file_type,
             gid,
             mode,
@@ -138,21 +142,23 @@ impl SftpFs {
     }
 
     fn metadata_to_filestat(metadata: Metadata) -> FileStat {
+        let atime = metadata
+            .accessed
+            .map(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .flatten()
+            .map(|x| x.as_secs());
+        let mtime = metadata
+            .modified
+            .map(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .flatten()
+            .map(|x| x.as_secs());
         FileStat {
             size: Some(metadata.size),
             uid: metadata.uid,
             gid: metadata.gid,
             perm: metadata.mode.map(u32::from),
-            atime: metadata
-                .accessed
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .ok()
-                .map(|x| x.as_secs()),
-            mtime: metadata
-                .modified
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .ok()
-                .map(|x| x.as_secs()),
+            atime,
+            mtime,
         }
     }
 }
@@ -973,12 +979,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
                     file_type: FileType::File,
                     gid: Some(1000),
                     mode: Some(UnixPex::from(0o755)),
-                    modified: SystemTime::UNIX_EPOCH,
+                    modified: Some(SystemTime::UNIX_EPOCH),
                     size: 7,
                     symlink: None,
                     uid: Some(1000),
@@ -987,10 +993,10 @@ mod test {
             .is_ok());
         let entry = client.stat(p).ok().unwrap();
         let stat = entry.metadata();
-        assert_eq!(stat.accessed, SystemTime::UNIX_EPOCH);
-        assert_eq!(stat.created, SystemTime::UNIX_EPOCH);
+        assert_eq!(stat.accessed, Some(SystemTime::UNIX_EPOCH));
+        assert_eq!(stat.created, None);
         assert_eq!(stat.gid.unwrap(), 1000);
-        assert_eq!(stat.modified, SystemTime::UNIX_EPOCH);
+        assert_eq!(stat.modified, Some(SystemTime::UNIX_EPOCH));
         assert_eq!(stat.mode.unwrap(), UnixPex::from(0o755));
         assert_eq!(stat.size, 7);
         assert_eq!(stat.uid.unwrap(), 1000);
@@ -1010,12 +1016,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: None,
+                    created: None,
                     file_type: FileType::File,
                     gid: Some(1),
                     mode: Some(UnixPex::from(0o755)),
-                    modified: SystemTime::UNIX_EPOCH,
+                    modified: None,
                     size: 7,
                     symlink: None,
                     uid: Some(1),

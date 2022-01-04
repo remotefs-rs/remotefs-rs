@@ -188,12 +188,12 @@ impl ScpFs {
                 };
                 // make metadata
                 let metadata = Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: None,
+                    created: None,
                     file_type,
                     gid,
                     mode: Some(mode),
-                    modified,
+                    modified: Some(modified),
                     size,
                     symlink,
                     uid,
@@ -426,16 +426,21 @@ impl RemoteFs for ScpFs {
             ))?;
         }
         // set times
-        self.assert_stat_command(format!(
-            "touch -a -t {} \"{}\"",
-            fmt_utils::fmt_time_utc(metadata.accessed, "%Y%m%d%H%M.%S"),
-            path.display()
-        ))?;
-        self.assert_stat_command(format!(
-            "touch -m -t {} \"{}\"",
-            fmt_utils::fmt_time_utc(metadata.modified, "%Y%m%d%H%M.%S"),
-            path.display()
-        ))
+        if let Some(accessed) = metadata.accessed {
+            self.assert_stat_command(format!(
+                "touch -a -t {} \"{}\"",
+                fmt_utils::fmt_time_utc(accessed, "%Y%m%d%H%M.%S"),
+                path.display()
+            ))?;
+        }
+        if let Some(modified) = metadata.modified {
+            self.assert_stat_command(format!(
+                "touch -m -t {} \"{}\"",
+                fmt_utils::fmt_time_utc(modified, "%Y%m%d%H%M.%S"),
+                path.display()
+            ))?;
+        }
+        Ok(())
     }
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
@@ -608,12 +613,14 @@ impl RemoteFs for ScpFs {
         let mode = metadata.mode.map(u32::from).unwrap_or(0o644) as i32;
         let accessed = metadata
             .accessed
+            .unwrap_or(SystemTime::UNIX_EPOCH)
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
             .unwrap_or(Duration::ZERO)
             .as_secs();
         let modified = metadata
             .modified
+            .unwrap_or(SystemTime::UNIX_EPOCH)
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
             .unwrap_or(Duration::ZERO)
@@ -1130,12 +1137,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
                     file_type: FileType::File,
                     gid: Some(1000),
                     mode: Some(UnixPex::from(0o755)),
-                    modified: SystemTime::UNIX_EPOCH,
+                    modified: Some(SystemTime::UNIX_EPOCH),
                     size: 7,
                     symlink: None,
                     uid: Some(1000),
@@ -1144,9 +1151,9 @@ mod test {
             .is_ok());
         let entry = client.stat(p).ok().unwrap();
         let stat = entry.metadata();
-        assert_eq!(stat.accessed, SystemTime::UNIX_EPOCH);
-        assert_eq!(stat.created, SystemTime::UNIX_EPOCH);
-        assert_eq!(stat.modified, SystemTime::UNIX_EPOCH);
+        assert_eq!(stat.accessed, None);
+        assert_eq!(stat.created, None);
+        assert_eq!(stat.modified, Some(SystemTime::UNIX_EPOCH));
         assert_eq!(stat.mode.unwrap(), UnixPex::from(0o755));
         assert_eq!(stat.size, 7);
 
@@ -1165,12 +1172,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: None,
+                    created: None,
                     file_type: FileType::File,
                     gid: Some(1),
                     mode: Some(UnixPex::from(0o755)),
-                    modified: SystemTime::UNIX_EPOCH,
+                    modified: None,
                     size: 7,
                     symlink: None,
                     uid: Some(1),

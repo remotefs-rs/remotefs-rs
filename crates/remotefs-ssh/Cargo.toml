@@ -19,7 +19,7 @@ lazy_static = "^1.4.0"
 log = "^0.4.14"
 regex = "^1.5.0"
 #remotefs = "^0.2.0"
-remotefs = { git = "https://github.com/veeso/remotefs-rs", branch = "seek" } 
+remotefs = { git = "https://github.com/veeso/remotefs-rs", branch = "0.2.0" }
 ssh2-config = "^0.1.1"
 ssh2 = "^0.9.0"
 
