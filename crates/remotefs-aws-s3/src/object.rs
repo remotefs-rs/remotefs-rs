@@ -82,8 +82,8 @@ impl From<S3Object> for File {
 impl From<S3Object> for Metadata {
     fn from(obj: S3Object) -> Self {
         Self {
-            accessed: SystemTime::UNIX_EPOCH,
-            created: SystemTime::UNIX_EPOCH,
+            accessed: None,
+            created: None,
             file_type: if obj.is_dir {
                 FileType::Directory
             } else {
@@ -91,7 +91,7 @@ impl From<S3Object> for Metadata {
             },
             gid: None,
             mode: None,
-            modified: obj.last_modified,
+            modified: Some(obj.last_modified),
             size: obj.size,
             symlink: None,
             uid: None,
@@ -196,9 +196,9 @@ mod test {
             entry.path.as_path(),
             Path::new("/pippo/sottocartella/chiedo.gif")
         );
-        assert_eq!(entry.metadata.created, UNIX_EPOCH);
-        assert_eq!(entry.metadata.modified, UNIX_EPOCH);
-        assert_eq!(entry.metadata.accessed, UNIX_EPOCH);
+        assert_eq!(entry.metadata.accessed, None);
+        assert_eq!(entry.metadata.created, None);
+        assert_eq!(entry.metadata.modified, Some(UNIX_EPOCH));
         assert_eq!(entry.metadata.size, 1516966);
         assert_eq!(entry.extension().unwrap().as_str(), "gif");
         assert_eq!(entry.metadata.uid, None);
@@ -219,9 +219,9 @@ mod test {
         assert!(entry.is_dir());
         assert_eq!(entry.name().as_str(), "temp");
         assert_eq!(entry.path.as_path(), Path::new("/temp"));
-        assert_eq!(entry.metadata.created, UNIX_EPOCH);
-        assert_eq!(entry.metadata.modified, UNIX_EPOCH);
-        assert_eq!(entry.metadata.accessed, UNIX_EPOCH);
+        assert_eq!(entry.metadata.accessed, None);
+        assert_eq!(entry.metadata.created, None);
+        assert_eq!(entry.metadata.modified, Some(UNIX_EPOCH));
         assert_eq!(entry.metadata.size, 0);
         assert_eq!(entry.metadata.uid, None);
         assert_eq!(entry.metadata.gid, None);

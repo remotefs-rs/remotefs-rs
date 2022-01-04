@@ -3,18 +3,7 @@
 
 //! # remotefs-aws-s3
 //!
-//! remotefs is a library that provides a file system structure to work with all the most used file transfer protocols.
-//! This is achieved through a trait called `RemoteFs` which exposes methods to operate on the remote file system.
-//! Currently the library exposes a client for **Sftp**, **Scp**, **Ftp** and **Aws-s3**.
-//!
-//! ## Why remotefs
-//!
-//! You might be wondering what's the reasons behind remotefs.
-//! The first reason is to provide an easy way to operate with multiple protocols at the same time.
-//! For example, in [termscp](https://github.com/veeso/termscp), this came very handily to me.
-//! The second reason is that often, users need to implement just a simple client to operate on a remote file system, and they have to waste a lot of time in understanding how the protocol works just to achieve a single task.
-//!
-//! With remotefs this is no more a problem: all you need is to configure the options to connect to the remote host and you're ready to deal with the remote file system, as it were mounted on your pc.
+//! remotefs-aws-s3 is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the Aws S3 protocol.
 //!
 //! ## Get started
 //!
