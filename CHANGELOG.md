@@ -9,7 +9,7 @@
 
 ## 0.2.0
 
-Released on ??
+Released on 04/01/2022
 
 - Moved protocols to **extern crates**:
   - [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
