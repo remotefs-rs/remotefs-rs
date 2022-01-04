@@ -591,17 +591,25 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .ok()
+                .unwrap(),
+            10
+        );
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert_eq!(
+            client
+                .append_file(p, &Metadata::default(), Box::new(reader))
+                .ok()
+                .unwrap(),
+            14
+        );
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
         finalize_client(client);
     }
@@ -717,9 +725,13 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert_eq!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .ok()
+                .unwrap(),
+            10
+        );
         // Verify size
         assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
         finalize_client(client);
