@@ -27,7 +27,7 @@ Released on 04/01/2022
 
 Released on 09/12/2021
 
-- Allow to build `RemoteFs` as trait object
+- Allow building `RemoteFs` as a trait object
 - ❗ Breaking changes:
   - Changed signature of `open_file` to accept a `Box<dyn Write + Send>` instead of `impl Write + Send`
 

@@ -70,7 +70,7 @@ pub trait RemoteFs {
     /// Stat file at specified `path` and return Entry
     fn stat(&mut self, path: &Path) -> RemoteResult<File>;
 
-    /// Set metadata for file at specifieed `path`
+    /// Set metadata for file at specified `path`
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
 
     /// Returns whether file at specified `path` exists.
@@ -175,7 +175,7 @@ pub trait RemoteFs {
     /// Finalize `open_file` method.
     /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
     /// The purpose of this method is to finalize the connection with the peer when reading data.
-    /// This mighe be necessary for some protocols.
+    /// This might be necessary for some protocols.
     /// You must call this method each time you want to finalize the read of the remote file.
     ///
     /// ### Default implementation

@@ -55,7 +55,7 @@ Maintainers will may add additional labels to your issue:
 
 ### Feature requests
 
-Whenever you have a good idea which chould improve the project, it is a good idea to submit it to the project owner.
+Whenever you have a good idea which could improve the project, it is a good idea to submit it to the project owner.
 The first thing you should do though, is not starting to write the code, but is to become concern about how remotefs works, what kind
 of contribution I appreciate and what kind of contribution I won't consider.
 Said so, follow these steps:
@@ -113,5 +113,5 @@ In addition to the process described for the PRs, I've also decided to introduce
 
 ---
 
-Thank you for any contribution!  
+Thank you for any contribution!
 Christian Visintin
