@@ -11,7 +11,7 @@
 <p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (04/01/2022)</p>
+<p align="center">Current version: 0.3.0 (04/01/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -106,7 +106,7 @@ Using remotefs, this is no longer a problem: all you need is to configure the op
 First, add `remotefs` to your list of dependencies:
 
 ```toml
-remotefs = "^0.2.0"
+remotefs = "^0.3.0"
 ```
 
 select over a variety of features:
