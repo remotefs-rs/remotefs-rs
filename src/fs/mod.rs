@@ -45,7 +45,7 @@ pub use stream::{ReadStream, WriteStream};
 pub use welcome::Welcome;
 
 /// Defines the methods which must be implemented in order to setup a Remote file system
-pub trait RemoteFs {
+pub trait RemoteFs: Send + Sync {
     /// Connect to the remote server and authenticate.
     /// Can return banner / welcome message on success.
     /// If client has already established connection, then `AlreadyConnected` error is returned.
