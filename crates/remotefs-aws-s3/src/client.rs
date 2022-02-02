@@ -47,33 +47,68 @@ pub struct AwsS3Fs {
     wrkdir: PathBuf,
     // -- options
     bucket_name: String,
-    region: String,
+    /// Region name, if unset `Custom`.
+    region: Option<String>,
+    /// Custom endpoint (useful for minio)
+    endpoint: Option<String>,
     profile: Option<String>,
     access_key: Option<String>,
     secret_key: Option<String>,
     security_token: Option<String>,
     session_token: Option<String>,
+    /// Anonymous connection (no credentials)
+    anonymous: bool,
+    /// New path style. Required for some backends, such as MinIO
+    new_path_style: bool,
 }
 
 impl AwsS3Fs {
     /// Initialize a new `AwsS3Fs`
-    pub fn new<S: AsRef<str>>(bucket: S, region: S) -> Self {
+    pub fn new<S: AsRef<str>>(bucket: S) -> Self {
         Self {
             bucket: None,
             wrkdir: PathBuf::from("/"),
             bucket_name: bucket.as_ref().to_string(),
-            region: region.as_ref().to_string(),
+            region: None,
+            endpoint: None,
             profile: None,
             access_key: None,
             secret_key: None,
             security_token: None,
             session_token: None,
+            anonymous: false,
+            new_path_style: false,
         }
+    }
+
+    /// Specify region to connect to
+    pub fn region<S: AsRef<str>>(mut self, region: S) -> Self {
+        self.region = Some(region.as_ref().to_string());
+        self
+    }
+
+    /// Specify custom endpoint
+    /// This should be used when trying to connect to `minio` or other API compatible endpoints.
+    pub fn endpoint<S: AsRef<str>>(mut self, endpoint: S) -> Self {
+        self.endpoint = Some(endpoint.as_ref().to_string());
+        self
     }
 
     /// Set aws profile. If unset, "default" will be used
     pub fn profile<S: AsRef<str>>(mut self, profile: S) -> Self {
         self.profile = Some(profile.as_ref().to_string());
+        self
+    }
+
+    /// Set whether to use anonymous credentials (Default: False)
+    pub fn anonymous(mut self, anonymous: bool) -> Self {
+        self.anonymous = anonymous;
+        self
+    }
+
+    /// Set whether to use new path style. Required for backends such as MinIO (Default: False)
+    pub fn new_path_style(mut self, new_path_style: bool) -> Self {
+        self.new_path_style = new_path_style;
         self
     }
 
@@ -234,45 +269,82 @@ impl AwsS3Fs {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
+
+    /// Load credentials for current session
+    fn load_credentials(&self) -> RemoteResult<Credentials> {
+        if self.anonymous {
+            Credentials::anonymous().map_err(|e| {
+                RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    format!("Could not load anonymous credentials: {}", e),
+                )
+            })
+        } else {
+            Credentials::new(
+                self.access_key.as_deref(),
+                self.secret_key.as_deref(),
+                self.security_token.as_deref(),
+                self.session_token.as_deref(),
+                self.profile.as_deref(),
+            )
+            .map_err(|e| {
+                RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    format!("Could not load s3 credentials: {}", e),
+                )
+            })
+        }
+    }
+
+    /// Initialize region to be used from connection parameters
+    fn init_region(&self) -> RemoteResult<Region> {
+        match self.endpoint.as_deref() {
+            Some(endpoint) => Ok(Region::Custom {
+                region: self.region.as_deref().unwrap_or("").to_string(),
+                endpoint: endpoint.to_string(),
+            }),
+            None => Region::from_str(self.region.as_deref().unwrap_or("")).map_err(|e| {
+                RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    format!("Could not parse s3 region: {}", e),
+                )
+            }),
+        }
+    }
+
+    /// Make bucket based on current options
+    fn make_bucket(&self, region: Region, credentials: Credentials) -> RemoteResult<Bucket> {
+        (if self.new_path_style {
+            Bucket::new_with_path_style(self.bucket_name.as_str(), region, credentials)
+        } else {
+            Bucket::new(self.bucket_name.as_str(), region, credentials)
+        })
+        .map_err(|e| {
+            RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                format!("Could not connect to bucket {}: {}", self.bucket_name, e),
+            )
+        })
+    }
 }
 
 impl RemoteFs for AwsS3Fs {
     fn connect(&mut self) -> RemoteResult<Welcome> {
         // Load credentials
         debug!("Loading credentials... (profile {:?})", self.profile);
-        let credentials: Credentials = Credentials::new(
-            self.access_key.as_deref(),
-            self.secret_key.as_deref(),
-            self.security_token.as_deref(),
-            self.session_token.as_deref(),
-            self.profile.as_deref(),
-        )
-        .map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::AuthenticationFailed,
-                format!("Could not load s3 credentials: {}", e),
-            )
-        })?;
+        let credentials = self.load_credentials()?;
         // Parse region
-        trace!("Parsing region {}", self.region);
-        let region: Region = Region::from_str(self.region.as_str()).map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::AuthenticationFailed,
-                format!("Could not parse s3 region: {}", e),
-            )
-        })?;
+        trace!(
+            "Parsing region: {}; endpoint: {}",
+            self.region.as_deref().unwrap_or("NULL"),
+            self.endpoint.as_deref().unwrap_or("NULL")
+        );
+        let region = self.init_region()?;
         debug!(
             "Credentials loaded! Connecting to bucket {}...",
             self.bucket_name
         );
-        self.bucket = Some(
-            Bucket::new(self.bucket_name.as_str(), region, credentials).map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::AuthenticationFailed,
-                    format!("Could not connect to bucket {}: {}", self.bucket_name, e),
-                )
-            })?,
-        );
+        self.bucket = Some(self.make_bucket(region, credentials)?);
         info!("Connection successfully established to s3 bucket");
         Ok(Welcome::default())
     }
@@ -511,21 +583,24 @@ mod test {
     use super::*;
 
     use pretty_assertions::assert_eq;
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use serial_test::serial;
     #[cfg(feature = "with-s3-ci")]
     use std::env;
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use std::io::Cursor;
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use std::time::SystemTime;
 
     #[test]
     fn should_init_s3() {
-        let s3 = AwsS3Fs::new("aws-s3-test", "eu-central-1");
+        let s3 = AwsS3Fs::new("aws-s3-test");
         assert_eq!(s3.wrkdir.as_path(), Path::new("/"));
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
-        assert_eq!(s3.region.as_str(), "eu-central-1");
+        assert!(s3.region.is_none());
+        assert!(s3.endpoint.is_none());
+        assert_eq!(s3.anonymous, false);
+        assert_eq!(s3.new_path_style, false);
         assert!(s3.bucket.is_none());
         assert!(s3.access_key.is_none());
         assert!(s3.profile.is_none());
@@ -538,18 +613,25 @@ mod test {
 
     #[test]
     fn should_init_s3_with_options() {
-        let s3 = AwsS3Fs::new("aws-s3-test", "eu-central-1")
+        let s3 = AwsS3Fs::new("aws-s3-test")
+            .region("eu-central-1")
             .access_key("AKIA0000")
             .profile("default")
             .secret_access_key("PASSWORD")
             .security_token("secret")
-            .session_token("token");
+            .session_token("token")
+            .anonymous(true)
+            .new_path_style(true)
+            .endpoint("omar");
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
-        assert_eq!(s3.region.as_str(), "eu-central-1");
+        assert_eq!(s3.region.as_deref().unwrap(), "eu-central-1");
         assert_eq!(s3.access_key.as_deref().unwrap(), "AKIA0000");
         assert_eq!(s3.secret_key.as_deref().unwrap(), "PASSWORD");
         assert_eq!(s3.security_token.as_deref().unwrap(), "secret");
         assert_eq!(s3.session_token.as_deref().unwrap(), "token");
+        assert_eq!(s3.endpoint.as_deref().unwrap(), "omar");
+        assert_eq!(s3.anonymous, true);
+        assert_eq!(s3.new_path_style, true);
     }
 
     #[test]
@@ -576,7 +658,7 @@ mod test {
 
     #[test]
     fn s3_resolve() {
-        let mut s3 = AwsS3Fs::new("aws-s3-test", "eu-central-1");
+        let mut s3 = AwsS3Fs::new("aws-s3-test");
         s3.wrkdir = PathBuf::from("/tmp");
         // Absolute
         assert_eq!(
@@ -614,7 +696,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_append_to_file() {
         crate::mock::logger();
@@ -631,7 +713,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_change_directory() {
         crate::mock::logger();
@@ -643,7 +725,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_change_directory() {
         crate::mock::logger();
@@ -655,7 +737,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_copy_file() {
         crate::mock::logger();
@@ -672,7 +754,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_create_directory() {
         crate::mock::logger();
@@ -685,7 +767,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_create_directory_cause_already_exists() {
         crate::mock::logger();
@@ -722,7 +804,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_create_file() {
         crate::mock::logger();
@@ -746,7 +828,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_exec_command() {
         crate::mock::logger();
@@ -756,7 +838,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_tell_whether_file_exists() {
         crate::mock::logger();
@@ -779,7 +861,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_list_dir() {
         crate::mock::logger();
@@ -811,7 +893,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_move_file() {
         crate::mock::logger();
@@ -829,7 +911,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_open_file() {
         crate::mock::logger();
@@ -848,7 +930,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_open_file() {
         crate::mock::logger();
@@ -862,7 +944,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_print_working_directory() {
         crate::mock::logger();
@@ -872,7 +954,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_remove_dir_all() {
         crate::mock::logger();
@@ -899,7 +981,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_remove_dir() {
         crate::mock::logger();
@@ -915,7 +997,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_remove_dir() {
         crate::mock::logger();
@@ -926,7 +1008,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_remove_file() {
         crate::mock::logger();
@@ -943,7 +1025,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_setstat_file() {
         crate::mock::logger();
@@ -959,12 +1041,12 @@ mod test {
             .setstat(
                 p,
                 Metadata {
-                    accessed: SystemTime::UNIX_EPOCH,
-                    created: SystemTime::UNIX_EPOCH,
+                    accessed: Some(SystemTime::UNIX_EPOCH),
+                    created: Some(SystemTime::UNIX_EPOCH),
                     gid: Some(1000),
                     file_type: remotefs::fs::FileType::File,
                     mode: Some(UnixPex::from(0o755)),
-                    modified: SystemTime::UNIX_EPOCH,
+                    modified: Some(SystemTime::UNIX_EPOCH),
                     size: 7,
                     symlink: None,
                     uid: Some(1000),
@@ -975,7 +1057,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_stat_file() {
         crate::mock::logger();
@@ -998,7 +1080,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_stat_file() {
         crate::mock::logger();
@@ -1010,7 +1092,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_make_symlink() {
         crate::mock::logger();
@@ -1028,7 +1110,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     #[serial]
     fn should_not_make_symlink() {
         crate::mock::logger();
@@ -1054,7 +1136,7 @@ mod test {
 
     #[test]
     fn should_return_errors_on_uninitialized_client() {
-        let mut client = AwsS3Fs::new("aws-s3-test", "eu-central-1");
+        let mut client = AwsS3Fs::new("aws-s3-test").region("eu-central-1");
         assert!(client.change_dir(Path::new("/tmp")).is_err());
         assert!(client
             .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
@@ -1086,13 +1168,13 @@ mod test {
 
     // -- test utils
 
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
     fn setup_client() -> AwsS3Fs {
         // Gather s3 environment args
         let bucket = env!("AWS_S3_BUCKET");
         let region = env!("AWS_S3_REGION");
         // Get transfer
-        let mut client = AwsS3Fs::new(bucket, region);
+        let mut client = AwsS3Fs::new(bucket).region(region);
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
@@ -1104,7 +1186,35 @@ mod test {
         client
     }
 
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(feature = "with-containers")]
+    fn setup_client() -> AwsS3Fs {
+        // Get transfer
+        let mut client = AwsS3Fs::new("github-ci")
+            .endpoint("http://localhost:9000")
+            .access_key("minioadmin")
+            .secret_access_key("minioadmin")
+            .new_path_style(true);
+        // Create bucket manually
+        assert!(Bucket::create_with_path_style(
+            "github-ci",
+            client.init_region().ok().unwrap(),
+            client.load_credentials().ok().unwrap(),
+            s3::bucket_ops::BucketConfiguration::private()
+        )
+        .is_ok());
+        // connect
+        assert!(client.connect().is_ok());
+        // Create wrkdir
+        let tempdir = PathBuf::from(generate_tempdir());
+        assert!(client
+            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
+            .is_ok());
+        // Change directory
+        assert!(client.change_dir(tempdir.as_path()).is_ok());
+        client
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     fn finalize_client(mut client: AwsS3Fs) {
         // Get working directory
         let wrkdir = client.pwd().ok().unwrap();
@@ -1113,7 +1223,7 @@ mod test {
         assert!(client.disconnect().is_ok());
     }
 
-    #[cfg(feature = "with-s3-ci")]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     fn generate_tempdir() -> String {
         use rand::{distributions::Alphanumeric, thread_rng, Rng};
         let mut rng = thread_rng();

@@ -28,7 +28,7 @@
 
 // -- logger
 
-#[cfg(feature = "with-s3-ci")]
+#[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
 pub fn logger() {
     let _ = env_logger::builder().is_test(true).try_init();
 }

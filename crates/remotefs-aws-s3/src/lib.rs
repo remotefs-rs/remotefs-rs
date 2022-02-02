@@ -27,10 +27,33 @@
 //! use remotefs_aws_s3::AwsS3Fs;
 //! use std::path::Path;
 //!
-//! let mut client = AwsS3Fs::new("test-bucket", "eu-west-1")
+//! let mut client = AwsS3Fs::new("test-bucket")
+//!     .region("eu-west-1")
 //!     .profile("default")
 //!     .access_key("AKIAxxxxxxxxxxxx")
 //!     .secret_access_key("****************");
+//! // connect
+//! assert!(client.connect().is_ok());
+//! // get working directory
+//! println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+//! // change working directory
+//! assert!(client.change_dir(Path::new("/tmp")).is_ok());
+//! // disconnect
+//! assert!(client.disconnect().is_ok());
+//! ```
+//!
+//! ### MinIO client
+//!
+//! ```rust,ignore
+//! use remotefs::RemoteFs;
+//! use remotefs_aws_s3::AwsS3Fs;
+//! use std::path::Path;
+//!
+//! let mut client = AwsS3Fs::new("test-bucket")
+//!     .endpoint("http://localhost:9000")
+//!     .new_path_style(true) // required for MinIO
+//!     .access_key("minioadmin")
+//!     .secret_access_key("minioadmin");
 //! // connect
 //! assert!(client.connect().is_ok());
 //! // get working directory
