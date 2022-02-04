@@ -56,8 +56,6 @@ pub struct AwsS3Fs {
     secret_key: Option<String>,
     security_token: Option<String>,
     session_token: Option<String>,
-    /// Anonymous connection (no credentials)
-    anonymous: bool,
     /// New path style. Required for some backends, such as MinIO
     new_path_style: bool,
 }
@@ -76,7 +74,6 @@ impl AwsS3Fs {
             secret_key: None,
             security_token: None,
             session_token: None,
-            anonymous: false,
             new_path_style: false,
         }
     }
@@ -97,12 +94,6 @@ impl AwsS3Fs {
     /// Set aws profile. If unset, "default" will be used
     pub fn profile<S: AsRef<str>>(mut self, profile: S) -> Self {
         self.profile = Some(profile.as_ref().to_string());
-        self
-    }
-
-    /// Set whether to use anonymous credentials (Default: False)
-    pub fn anonymous(mut self, anonymous: bool) -> Self {
-        self.anonymous = anonymous;
         self
     }
 
@@ -270,9 +261,17 @@ impl AwsS3Fs {
         }
     }
 
+    /// Return whether connection should use anonymous credentials
+    fn is_anonymous(&self) -> bool {
+        self.access_key.is_none()
+            && self.secret_key.is_none()
+            && self.security_token.is_none()
+            && self.session_token.is_none()
+    }
+
     /// Load credentials for current session
     fn load_credentials(&self) -> RemoteResult<Credentials> {
-        if self.anonymous {
+        if self.is_anonymous() {
             Credentials::anonymous().map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::AuthenticationFailed,
@@ -599,7 +598,7 @@ mod test {
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
         assert!(s3.region.is_none());
         assert!(s3.endpoint.is_none());
-        assert_eq!(s3.anonymous, false);
+        assert_eq!(s3.is_anonymous(), true);
         assert_eq!(s3.new_path_style, false);
         assert!(s3.bucket.is_none());
         assert!(s3.access_key.is_none());
@@ -620,7 +619,6 @@ mod test {
             .secret_access_key("PASSWORD")
             .security_token("secret")
             .session_token("token")
-            .anonymous(true)
             .new_path_style(true)
             .endpoint("omar");
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
@@ -630,7 +628,7 @@ mod test {
         assert_eq!(s3.security_token.as_deref().unwrap(), "secret");
         assert_eq!(s3.session_token.as_deref().unwrap(), "token");
         assert_eq!(s3.endpoint.as_deref().unwrap(), "omar");
-        assert_eq!(s3.anonymous, true);
+        assert_eq!(s3.is_anonymous(), false);
         assert_eq!(s3.new_path_style, true);
     }
 
