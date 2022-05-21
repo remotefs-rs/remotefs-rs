@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://veeso.github.io/remotefs-ssh/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
   ·
-  <a href="https://veeso.github.io/remotefs-ssh/#get-started" target="_blank">Get started</a>
+  <a href="#get-started">Get started</a>
   ·
   <a href="https://docs.rs/remotefs-ssh" target="_blank">Documentation</a>
 </p>
@@ -152,7 +152,8 @@ View remotefs' changelog [HERE](CHANGELOG.md)
 
 remotefs-ssh is powered by these aweseome projects:
 
-- [suppassh](https://github.com/veeso/suppassh)
+- [ssh2-config](https://githu.com/veeso/ssh2-config)
+- [ssh2-rs](https://github.com/alexcrichton/ssh2-rs)
 
 ---
 
