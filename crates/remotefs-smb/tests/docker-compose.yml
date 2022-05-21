@@ -1,0 +1,10 @@
+version: "3"
+services:
+  samba:
+    image: dperson/samba
+    ports:
+      - "3139:139"
+      - "3445:445"
+    volumes:
+      - /tmp:/mnt/tmp
+    command: samba.sh -u "test;test" -p -s "temp;/mnt/tmp;yes;no;yes;test;test" -w pavao
