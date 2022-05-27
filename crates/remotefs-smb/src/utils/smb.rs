@@ -2,6 +2,7 @@
 //!
 //! SMB protocol utilities
 
+use libc::mode_t;
 use pavao::SmbStat;
 use remotefs::{
     fs::{FileType, Metadata, UnixPex},
@@ -11,7 +12,7 @@ use std::path::PathBuf;
 
 /// Convert `SmbStat` to `File`
 pub fn smbstat_to_file<S: AsRef<str>>(uri: S, stat: SmbStat) -> File {
-    let mode = u16::from(stat.mode);
+    let mode = mode_t::from(stat.mode);
     File {
         path: PathBuf::from(uri.as_ref()),
         metadata: Metadata::default()

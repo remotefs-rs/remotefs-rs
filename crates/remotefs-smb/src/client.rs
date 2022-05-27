@@ -8,6 +8,7 @@ pub use pavao::{SmbClient, SmbCredentials, SmbEncryptionLevel, SmbOptions, SmbSh
 use crate::utils::path as path_utils;
 use crate::utils::smb as smb_utils;
 
+use libc::mode_t;
 use pavao::{SmbDirentType, SmbMode, SmbOpenOptions};
 use remotefs::fs::{File, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
@@ -177,7 +178,7 @@ impl RemoteFs for SmbFs {
         trace!("making directory at {}", path);
         // check if directory exists
         self.client
-            .mkdir(path, SmbMode::from(u32::from(mode) as u16))
+            .mkdir(path, SmbMode::from(u32::from(mode) as mode_t))
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
     }
 
@@ -221,7 +222,9 @@ impl RemoteFs for SmbFs {
                     .create(true)
                     .append(true)
                     .write(true)
-                    .mode(u32::from(metadata.mode.unwrap_or_else(|| UnixPex::from(0o644))) as u16),
+                    .mode(
+                        u32::from(metadata.mode.unwrap_or_else(|| UnixPex::from(0o644))) as mode_t,
+                    ),
             )
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
         io::copy(&mut reader, &mut file)
@@ -244,7 +247,9 @@ impl RemoteFs for SmbFs {
                 SmbOpenOptions::default()
                     .create(true)
                     .write(true)
-                    .mode(u32::from(metadata.mode.unwrap_or_else(|| UnixPex::from(0o644))) as u16),
+                    .mode(
+                        u32::from(metadata.mode.unwrap_or_else(|| UnixPex::from(0o644))) as mode_t,
+                    ),
             )
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
         io::copy(&mut reader, &mut file)

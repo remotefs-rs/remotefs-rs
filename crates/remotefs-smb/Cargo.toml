@@ -14,6 +14,7 @@ repository = "https://github.com/veeso/remotefs-rs-smb"
 version = "0.1.0"
 
 [dependencies]
+libc = "^0.2.121"
 log = "^0.4.14"
 pavao = "^0.1.2"
 remotefs = "^0.2.0"
