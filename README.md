@@ -90,10 +90,11 @@ Using remotefs, this is no longer a problem: all you need is to configure the op
 ## Features 🎁
 
 - 📁 Different communication protocols
+  - **Aws S3**
+  - **FTP** and **FTPS**
   - **SFTP**
   - **SCP**
-  - **FTP** and **FTPS**
-  - **Aws S3**
+  - **SMB**
 - ✔️ Configurable: use only the client that you need
 - 🤖 Extensible: adding new protocols is easy
 - 🚀 Simple: easy to setup
@@ -121,13 +122,19 @@ To use an existing client, you must add them to your `Cargo.toml`, along with re
 - [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
 
   ```toml
-  remotefs-aws-s3 = "^0.1.0"
+  remotefs-aws-s3 = "^0.2.0"
   ```
 
 - [ftp](https://github.com/veeso/remotefs-rs-ftp)
 
   ```toml
   remotefs-ftp = { version = "^0.1.0", features = [ "secure" ] }
+  ```
+
+- [smb](https://github.com/veeso/remotefs-rs-smb)
+
+  ```toml
+  remotefs-smb = "^0.1.0"
   ```
 
 - [ssh](https://github.com/veeso/remotefs-rs-ssh)
@@ -175,28 +182,28 @@ The following table states the compatibility for each client associated with the
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Aws-S3 | Ftp | Scp | Sftp |
-| -------------- | ------ | --- | --- | ---- |
-| append_file    | No     | Yes | No  | Yes  |
-| append         | No     | Yes | No  | Yes  |
-| change_dir     | Yes    | Yes | Yes | Yes  |
-| copy           | No     | No  | Yes | Yes  |
-| create_dir     | Yes    | Yes | Yes | Yes  |
-| create_file    | Yes    | Yes | Yes | Yes  |
-| create         | No     | Yes | Yes | Yes  |
-| exec           | No     | No  | Yes | Yes  |
-| exists         | Yes    | Yes | Yes | Yes  |
-| list_dir       | Yes    | Yes | Yes | Yes  |
-| mov            | No     | Yes | Yes | Yes  |
-| open_file      | Yes    | Yes | Yes | Yes  |
-| open           | No     | Yes | Yes | Yes  |
-| pwd            | Yes    | Yes | Yes | Yes  |
-| remove_dir_all | Yes    | Yes | Yes | Yes  |
-| remove_dir     | Yes    | Yes | Yes | Yes  |
-| remove_file    | Yes    | Yes | Yes | Yes  |
-| setstat        | No     | No  | Yes | Yes  |
-| stat           | Yes    | Yes | Yes | Yes  |
-| symlink        | No     | No  | Yes | Yes  |
+| Client/Method  | Aws-S3 | Ftp | Scp | Sftp | Smb |
+| -------------- | ------ | --- | --- | ---- |-----|
+| append_file    | No     | Yes | No  | Yes  | Yes |
+| append         | No     | Yes | No  | Yes  | No  |
+| change_dir     | Yes    | Yes | Yes | Yes  | Yes |
+| copy           | No     | No  | Yes | Yes  | No  |
+| create_dir     | Yes    | Yes | Yes | Yes  | Yes |
+| create_file    | Yes    | Yes | Yes | Yes  | Yes |
+| create         | No     | Yes | Yes | Yes  | No  |
+| exec           | No     | No  | Yes | Yes  | No  |
+| exists         | Yes    | Yes | Yes | Yes  | Yes |
+| list_dir       | Yes    | Yes | Yes | Yes  | Yes |
+| mov            | No     | Yes | Yes | Yes  | Yes |
+| open_file      | Yes    | Yes | Yes | Yes  | Yes |
+| open           | No     | Yes | Yes | Yes  | No  |
+| pwd            | Yes    | Yes | Yes | Yes  | Yes |
+| remove_dir_all | Yes    | Yes | Yes | Yes  | Yes |
+| remove_dir     | Yes    | Yes | Yes | Yes  | Yes |
+| remove_file    | Yes    | Yes | Yes | Yes  | Yes |
+| setstat        | No     | No  | Yes | Yes  | No  |
+| stat           | Yes    | Yes | Yes | Yes  | Yes |
+| symlink        | No     | No  | Yes | Yes  | Yes |
 
 ---
 
@@ -229,18 +236,6 @@ Please follow [our contributing guidelines](CONTRIBUTING.md)
 ## Changelog ⏳
 
 View remotefs` changelog [HERE](CHANGELOG.md)
-
----
-
-## Powered by 💪
-
-remotefs is powered by these awesome projects:
-
-- [rust-s3](https://github.com/durch/rust-s3)
-- [ssh2-rs](https://github.com/alexcrichton/ssh2-rs)
-- [suppaftp](https://github.com/veeso/suppaftp)
-- [whoami](https://github.com/libcala/whoami)
-- [wildmatch](https://github.com/becheran/wildmatch)
 
 ---
 
