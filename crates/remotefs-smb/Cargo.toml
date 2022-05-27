@@ -6,7 +6,7 @@ documentation = "https://docs.rs/remotefs-smb"
 edition = "2021"
 homepage = "https://veeso.github.io/remotefs-rs-smb/"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
-keywords = ["remotefs", "smb-client"]
+keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
 license = "MIT"
 name = "remotefs-smb"
 readme = "README.md"
@@ -14,10 +14,8 @@ repository = "https://github.com/veeso/remotefs-rs-smb"
 version = "0.1.0"
 
 [dependencies]
-chrono = "^0.4.19"
-lazy_static = "^1.4.0"
 log = "^0.4.14"
-pavao = "^0.1.0"
+pavao = "^0.1.2"
 remotefs = "^0.2.0"
 
 [dev-dependencies]
@@ -34,7 +32,3 @@ find = [ "remotefs/find" ]
 no-log = [ "log/max_level_off" ]
 # tests
 with-containers = [ ]
-
-[target."cfg(target_family = \"unix\")"]
-[target."cfg(target_family = \"unix\")".dependencies]
-users = "^0.11.0"

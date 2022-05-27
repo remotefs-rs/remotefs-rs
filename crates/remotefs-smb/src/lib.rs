@@ -27,23 +27,31 @@
 //! ```rust
 //!
 //! // import remotefs trait and client
-//! use remotefs::RemoteFs;
-//! use remotefs_smb::SmbFs;
+//! use remotefs::{RemoteFs, fs::UnixPex};
+//! use remotefs_smb::{SmbFs, SmbOptions, SmbCredentials};
 //! use std::path::Path;
 //!
-//! let mut client: SftpFs = SshOpts::new("127.0.0.1")
-//!     .port(22)
-//!     .username("test")
-//!     .password("password")
-//!     .config_file(Path::new("/home/cvisintin/.ssh/config"))
-//!     .into();
+//! let mut client = SmbFs::try_new(
+//!     SmbCredentials::default()
+//!         .server("smb://localhost:3445")
+//!         .share("/temp")
+//!         .username("test")
+//!         .password("test")
+//!         .workgroup("pavao"),
+//!     SmbOptions::default()
+//!         .case_sensitive(true)
+//!         .one_share_per_server(true),
+//! )
+//! .unwrap();
 //!
 //! // connect
 //! assert!(client.connect().is_ok());
 //! // get working directory
 //! println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+//! // make directory
+//! assert!(client.create_dir(Path::new("/cargo"), UnixPex::from(0o755)).is_ok());
 //! // change working directory
-//! assert!(client.change_dir(Path::new("/tmp")).is_ok());
+//! assert!(client.change_dir(Path::new("/cargo")).is_ok());
 //! // disconnect
 //! assert!(client.disconnect().is_ok());
 //! ```
@@ -53,12 +61,10 @@
 
 // -- crates
 #[macro_use]
-extern crate lazy_static;
-#[macro_use]
 extern crate log;
 
 mod client;
-pub use client::SmbFs;
+pub use client::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions, SmbShareMode};
 
 // -- utils
 pub(crate) mod utils;

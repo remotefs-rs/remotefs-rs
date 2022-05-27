@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (21/05/2022)</p>
+<p align="center">Current version: 0.1.0 (27/05/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -144,18 +144,18 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | Client/Method  | Support |
 |----------------|---------|
 | append_file    | Yes     |
-| append         | Yes     |
+| append         | No      |
 | change_dir     | Yes     |
 | copy           | No      |
 | create_dir     | Yes     |
 | create_file    | Yes     |
-| create         | Yes     |
+| create         | No      |
 | exec           | No      |
 | exists         | Yes     |
 | list_dir       | Yes     |
 | mov            | Yes     |
 | open_file      | Yes     |
-| open           | Yes     |
+| open           | No      |
 | pwd            | Yes     |
 | remove_dir_all | Yes     |
 | remove_dir     | Yes     |

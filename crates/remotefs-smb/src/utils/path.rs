@@ -2,7 +2,6 @@
 //!
 //! path utilities
 
-
 use std::path::{Path, PathBuf};
 
 /// Absolutize target path if relative.
