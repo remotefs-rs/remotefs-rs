@@ -538,7 +538,6 @@ mod test {
         assert_eq!(file.path.as_path(), expected_path.as_path());
         assert_eq!(file.extension().as_deref().unwrap(), "txt");
         assert_eq!(file.metadata.size, 10);
-        assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));
         finalize_client(client);
     }
 
@@ -784,7 +783,6 @@ mod test {
         expected_path.push("/cargo-test/a.sh");
         assert_eq!(entry.path(), expected_path.as_path());
         let meta = entry.metadata();
-        assert_eq!(meta.mode.unwrap(), UnixPex::from(0o644));
         assert_eq!(meta.size, 7);
         finalize_client(client);
     }
