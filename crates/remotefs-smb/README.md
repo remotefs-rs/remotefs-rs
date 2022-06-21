@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (27/05/2022)</p>
+<p align="center">Current version: 0.2.0 (27/05/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -76,7 +76,7 @@ remotefs-smb is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-smb` to your project dependencies:
 
 ```toml
-remotefs-smb = "^0.1.0"
+remotefs-smb = "^0.2.0"
 ```
 
 these features are supported:
@@ -84,7 +84,7 @@ these features are supported:
 - `find`: enable `find()` method on client (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
-### Install dependencies
+### Install dependencies (UNIX based only)
 
 remotefs-smb relies on `pavao`, which requires the `libsmbclient` library, which can be installed with the following instructions:
 

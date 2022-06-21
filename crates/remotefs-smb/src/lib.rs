@@ -11,7 +11,7 @@
 //!
 //! ```toml
 //! remotefs = "^0.2.0"
-//! remotefs-smb = "^0.1.0"
+//! remotefs-smb = "^0.2.0"
 //! ```
 //!
 //! these features are supported:

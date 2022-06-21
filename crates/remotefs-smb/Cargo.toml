@@ -11,13 +11,16 @@ license = "MIT"
 name = "remotefs-smb"
 readme = "README.md"
 repository = "https://github.com/veeso/remotefs-rs-smb"
-version = "0.1.0"
+version = "0.2.0"
 
 [dependencies]
-libc = "^0.2.121"
 log = "^0.4.14"
-pavao = "^0.1.2"
 remotefs = "^0.2.0"
+
+[target."cfg(target_family = \"unix\")"]
+[target."cfg(target_family = \"unix\")".dependencies]
+libc = "^0.2.121"
+pavao = "^0.1.2"
 
 [dev-dependencies]
 env_logger = "^0.9.0"

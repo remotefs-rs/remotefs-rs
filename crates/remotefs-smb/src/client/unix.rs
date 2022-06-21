@@ -1,6 +1,6 @@
-//! # client
+//! # UNIX client
 //!
-//! Smb fs client
+//! UNIX implementation of Smb fs client
 
 // -- exports
 pub use pavao::{SmbClient, SmbCredentials, SmbEncryptionLevel, SmbOptions, SmbShareMode};
