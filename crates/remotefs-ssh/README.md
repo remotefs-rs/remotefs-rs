@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SSH client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (04/01/2022)</p>
+<p align="center">Current version: 0.1.1 (20/07/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -88,6 +88,7 @@ these features are supported:
 
 - `find`: enable `find()` method on client (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
+- `ssh2-vendored`: build with static libssl
 
 ---
 
