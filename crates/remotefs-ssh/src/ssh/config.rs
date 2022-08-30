@@ -66,7 +66,7 @@ impl Config {
         let mut reader = BufReader::new(File::open(p).map_err(|e| {
             RemoteError::new_ex(
                 RemoteErrorType::IoError,
-                format!("Could not open configuration file: {}", e.to_string()),
+                format!("Could not open configuration file: {}", e),
             )
         })?);
         SshConfig::default()
@@ -74,7 +74,7 @@ impl Config {
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::IoError,
-                    format!("Could not parse configuration file: {}", e.to_string()),
+                    format!("Could not parse configuration file: {}", e),
                 )
             })
             .map(|x| x.query(host))

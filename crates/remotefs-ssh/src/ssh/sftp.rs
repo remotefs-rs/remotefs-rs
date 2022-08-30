@@ -145,13 +145,11 @@ impl SftpFs {
     fn metadata_to_filestat(metadata: Metadata) -> FileStat {
         let atime = metadata
             .accessed
-            .map(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .flatten()
+            .and_then(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|x| x.as_secs());
         let mtime = metadata
             .modified
-            .map(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .flatten()
+            .and_then(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
             .map(|x| x.as_secs());
         FileStat {
             size: Some(metadata.size),

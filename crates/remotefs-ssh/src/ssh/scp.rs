@@ -215,7 +215,7 @@ impl ScpFs {
     /// Returns from a `ls -l` command output file name token, the name of the file and the symbolic link (if there is any)
     fn get_name_and_link(&self, token: &str) -> (String, Option<PathBuf>) {
         let tokens: Vec<&str> = token.split(" -> ").collect();
-        let filename: String = String::from(*tokens.get(0).unwrap());
+        let filename: String = String::from(*tokens.first().unwrap());
         let symlink: Option<PathBuf> = tokens.get(1).map(PathBuf::from);
         (filename, symlink)
     }

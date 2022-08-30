@@ -105,8 +105,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     match opts
         .key_storage
         .as_ref()
-        .map(|x| x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str()))
-        .flatten()
+        .and_then(|x| x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str()))
     {
         Some(rsa_key) => {
             session_auth_with_rsakey(
