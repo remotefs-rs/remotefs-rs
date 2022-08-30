@@ -112,7 +112,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
             session_auth_with_rsakey(
                 &mut session,
                 &ssh_config.username,
-                rsa_key,
+                rsa_key.as_path(),
                 opts.password.as_deref(),
                 ssh_config.params.identity_file.as_deref(),
             )?;

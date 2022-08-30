@@ -46,7 +46,7 @@ use stream::{SftpReadStream, SftpWriteStream};
 /// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
 pub trait SshKeyStorage {
     /// Return RSA key path from host and username
-    fn resolve(&self, host: &str, username: &str) -> Option<&Path>;
+    fn resolve(&self, host: &str, username: &str) -> Option<PathBuf>;
 }
 
 // -- key method
