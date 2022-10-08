@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs FTP client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (04/01/2022)</p>
+<p align="center">Current version: 0.1.1 (08/10/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -87,8 +87,11 @@ remotefs-ftp = "^0.1.0"
 these features are supported:
 
 - `find`: enable `find()` method on client (*enabled by default*)
-- `secure`: enable **FTPS**
+- `native-tls`: enable FTPS support using native-tls as backend
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
+- `rustls`: enable FTPS support using rustls as backend
+- `secure`: backward compatible alias for `native-tls`
+- `vendored`: enable static link for native-tls
 
 ---
 

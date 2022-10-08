@@ -135,8 +135,7 @@ impl FtpFs {
         // Iter and collect
         lines
             .into_iter()
-            .map(FtpFile::try_from) // Try to convert to file
-            .flatten() // Remove errors
+            .flat_map(FtpFile::try_from)
             .map(|f| {
                 let mut abs_path: PathBuf = path.to_path_buf();
                 abs_path.push(f.name());
