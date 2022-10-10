@@ -17,7 +17,7 @@ version = "0.2.0"
 chrono = "^0.4.19"
 log = "^0.4.14"
 remotefs = "^0.2.0"
-rust-s3 = { version = "^0.28.0", default-features = false, features = [ "sync-native-tls", "sync" ] }
+rust-s3 = { version = "^0.28.0", default-features = false, features = [ "sync-rustls-tls", "sync" ] }
 thiserror = "^1.0.0"
 
 [dev-dependencies]
