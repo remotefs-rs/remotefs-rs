@@ -39,10 +39,10 @@ pub struct FtpFs {
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
     /// use FTPS; default: `false`
     secure: bool,
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(feature = "native-tls")]
     /// Accept invalid certificates when building TLS connector. (Applies only if `secure`). Default: `false`
     accept_invalid_certs: bool,
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(feature = "native-tls")]
     /// Accept invalid hostnames when building TLS connector. (Applies only if `secure`). Default: `false`
     accept_invalid_hostnames: bool,
 }
@@ -59,9 +59,9 @@ impl FtpFs {
             mode: Mode::Passive,
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
             secure: false,
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            #[cfg(feature = "native-tls")]
             accept_invalid_certs: false,
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            #[cfg(feature = "native-tls")]
             accept_invalid_hostnames: false,
         }
     }
@@ -92,12 +92,18 @@ impl FtpFs {
         self
     }
 
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(feature = "native-tls")]
     /// enable FTPS and configure options
     pub fn secure(mut self, accept_invalid_certs: bool, accept_invalid_hostnames: bool) -> Self {
         self.secure = true;
         self.accept_invalid_certs = accept_invalid_certs;
         self.accept_invalid_hostnames = accept_invalid_hostnames;
+        self
+    }
+
+    #[cfg(feature = "rustls")]
+    pub fn secure(mut self) -> Self {
+        self.secure = true;
         self
     }
 
@@ -232,7 +238,9 @@ impl RemoteFs for FtpFs {
         #[cfg(any(feature = "native-tls", feature = "rustls"))]
         if self.secure {
             debug!("Setting up TLS stream...");
+            #[cfg(feature = "native-tls")]
             trace!("Accept invalid certs: {}", self.accept_invalid_certs);
+            #[cfg(feature = "native-tls")]
             trace!(
                 "Accept invalid hostnames: {}",
                 self.accept_invalid_hostnames
@@ -556,10 +564,18 @@ mod test {
     #[test]
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
     fn should_build_secure_ftp_filesystem() {
+        #[cfg(feature = "native-tls")]
         let client = FtpFs::new("127.0.0.1", 21)
             .username("test")
             .password("omar")
             .secure(true, true)
+            .passive_mode()
+            .active_mode();
+        #[cfg(feature = "rustls")]
+        let client = FtpFs::new("127.0.0.1", 21)
+            .username("test")
+            .password("omar")
+            .secure()
             .passive_mode()
             .active_mode();
         assert!(client.stream.is_none());
@@ -569,7 +585,9 @@ mod test {
         assert_eq!(client.password.as_deref().unwrap(), "omar");
         assert_eq!(client.mode, Mode::Active);
         assert_eq!(client.secure, true);
+        #[cfg(feature = "native-tls")]
         assert_eq!(client.accept_invalid_certs, true);
+        #[cfg(feature = "native-tls")]
         assert_eq!(client.accept_invalid_hostnames, true);
     }
 
