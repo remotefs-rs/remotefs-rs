@@ -11,12 +11,13 @@ license = "MIT"
 name = "remotefs-ftp"
 readme = "README.md"
 repository = "https://github.com/veeso/remotefs-rs-ftp"
-version = "0.1.1"
+version = "0.1.2"
 
 [dependencies]
 log = "^0.4"
 remotefs = "^0.2.0"
 suppaftp = "^4.5.1"
+webpki-roots = { version = "^0.22", optional = true }
 
 [dev-dependencies]
 env_logger = "^0.9.0"
@@ -29,7 +30,7 @@ tempfile = "^3.2.0"
 default = [ "find" ]
 # TLS
 native-tls = [ "suppaftp/native-tls" ]
-rustls = [ "suppaftp/rustls" ]
+rustls = [ "suppaftp/rustls", "webpki-roots" ]
 secure = [ "native-tls" ]
 vendored = [ "suppaftp/native-tls-vendored" ]
 # misc
@@ -37,7 +38,7 @@ find = [ "remotefs/find" ]
 no-log = [ "log/max_level_off" ]
 # tests
 github-actions = []
-with-containers = [ "secure" ]
+with-containers = [ "native-tls" ]
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]

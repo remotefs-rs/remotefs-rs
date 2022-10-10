@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs FTP client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.1 (08/10/2022)</p>
+<p align="center">Current version: 0.1.2 (10/10/2022)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"

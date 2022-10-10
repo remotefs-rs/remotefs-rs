@@ -2,29 +2,6 @@
 //!
 //! ftp client for remotefs
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 use crate::utils::path as path_utils;
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
@@ -34,9 +11,13 @@ use remotefs::File;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "secure")]
-use suppaftp::native_tls::TlsConnector;
+#[cfg(feature = "native-tls")]
+use suppaftp::native_tls::TlsConnector as NativeTlsConnector;
+#[cfg(feature = "rustls")]
+use suppaftp::rustls::ClientConfig;
 pub use suppaftp::FtpStream;
+#[cfg(any(feature = "native-tls", feature = "rustls"))]
+use suppaftp::TlsConnector;
 use suppaftp::{
     list::{File as FtpFile, PosixPexQuery},
     types::{FileType as SuppaFtpFileType, Mode, Response},
@@ -55,13 +36,13 @@ pub struct FtpFs {
     password: Option<String>,
     /// Client mode; default: `Mode::Passive`
     mode: Mode,
-    #[cfg(feature = "secure")]
+    #[cfg(any(feature = "native-tls", feature = "rustls"))]
     /// use FTPS; default: `false`
     secure: bool,
-    #[cfg(feature = "secure")]
+    #[cfg(any(feature = "native-tls", feature = "rustls"))]
     /// Accept invalid certificates when building TLS connector. (Applies only if `secure`). Default: `false`
     accept_invalid_certs: bool,
-    #[cfg(feature = "secure")]
+    #[cfg(any(feature = "native-tls", feature = "rustls"))]
     /// Accept invalid hostnames when building TLS connector. (Applies only if `secure`). Default: `false`
     accept_invalid_hostnames: bool,
 }
@@ -76,11 +57,11 @@ impl FtpFs {
             username: String::from("anonymous"),
             password: None,
             mode: Mode::Passive,
-            #[cfg(feature = "secure")]
+            #[cfg(any(feature = "native-tls", feature = "rustls"))]
             secure: false,
-            #[cfg(feature = "secure")]
+            #[cfg(any(feature = "native-tls", feature = "rustls"))]
             accept_invalid_certs: false,
-            #[cfg(feature = "secure")]
+            #[cfg(any(feature = "native-tls", feature = "rustls"))]
             accept_invalid_hostnames: false,
         }
     }
@@ -111,7 +92,7 @@ impl FtpFs {
         self
     }
 
-    #[cfg(feature = "secure")]
+    #[cfg(any(feature = "native-tls", feature = "rustls"))]
     /// enable FTPS and configure options
     pub fn secure(mut self, accept_invalid_certs: bool, accept_invalid_hostnames: bool) -> Self {
         self.secure = true;
@@ -205,6 +186,38 @@ impl FtpFs {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
+
+    #[cfg(feature = "native-tls")]
+    fn setup_tls_connector(&self) -> RemoteResult<TlsConnector> {
+        NativeTlsConnector::builder()
+            .danger_accept_invalid_certs(self.accept_invalid_certs)
+            .danger_accept_invalid_hostnames(self.accept_invalid_hostnames)
+            .build()
+            .map_err(|e| {
+                error!("Failed to setup TLS stream: {}", e);
+                RemoteError::new_ex(RemoteErrorType::SslError, e)
+            })
+            .map(|x| x.into())
+    }
+
+    #[cfg(feature = "rustls")]
+    fn setup_tls_connector(&self) -> RemoteResult<TlsConnector> {
+        let mut root_store = suppaftp::rustls::RootCertStore::empty();
+        root_store.add_server_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
+            suppaftp::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject,
+                ta.spki,
+                ta.name_constraints,
+            )
+        }));
+        Ok(std::sync::Arc::new(
+            ClientConfig::builder()
+                .with_safe_defaults()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        )
+        .into())
+    }
 }
 
 impl RemoteFs for FtpFs {
@@ -216,7 +229,7 @@ impl RemoteFs for FtpFs {
                 RemoteError::new_ex(RemoteErrorType::ConnectionError, e)
             })?;
         // If secure, connect TLS
-        #[cfg(feature = "secure")]
+        #[cfg(any(feature = "native-tls", feature = "rustls"))]
         if self.secure {
             debug!("Setting up TLS stream...");
             trace!("Accept invalid certs: {}", self.accept_invalid_certs);
@@ -224,16 +237,8 @@ impl RemoteFs for FtpFs {
                 "Accept invalid hostnames: {}",
                 self.accept_invalid_hostnames
             );
-            let ctx = TlsConnector::builder()
-                .danger_accept_invalid_certs(self.accept_invalid_certs)
-                .danger_accept_invalid_hostnames(self.accept_invalid_hostnames)
-                .build()
-                .map_err(|e| {
-                    error!("Failed to setup TLS stream: {}", e);
-                    RemoteError::new_ex(RemoteErrorType::SslError, e)
-                })?;
             stream = stream
-                .into_secure(ctx, self.hostname.as_str())
+                .into_secure(self.setup_tls_connector()?, self.hostname.as_str())
                 .map_err(|e| {
                     error!("Failed to negotiate TLS with server: {}", e);
                     RemoteError::new_ex(RemoteErrorType::SslError, e)
@@ -525,11 +530,11 @@ mod test {
         assert_eq!(client.username.as_str(), "anonymous");
         assert!(client.password.is_none());
         assert_eq!(client.mode, Mode::Passive);
-        #[cfg(feature = "secure")]
+        #[cfg(any(feature = "native-tls", feature = "rustls"))]
         assert_eq!(client.secure, false);
-        #[cfg(feature = "secure")]
+        #[cfg(any(feature = "native-tls", feature = "rustls"))]
         assert_eq!(client.accept_invalid_certs, false);
-        #[cfg(feature = "secure")]
+        #[cfg(any(feature = "native-tls", feature = "rustls"))]
         assert_eq!(client.accept_invalid_hostnames, false);
     }
 
@@ -549,7 +554,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "secure")]
+    #[cfg(any(feature = "native-tls", feature = "rustls"))]
     fn should_build_secure_ftp_filesystem() {
         let client = FtpFs::new("127.0.0.1", 21)
             .username("test")
@@ -569,7 +574,7 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "secure")]
+    #[cfg(feature = "native-tls")]
     fn should_connect_with_ftps() {
         let mut client = FtpFs::new("test.rebex.net", 21)
             .username("demo")
