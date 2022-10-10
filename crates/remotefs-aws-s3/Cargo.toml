@@ -17,7 +17,7 @@ version = "0.2.0"
 chrono = "^0.4.19"
 log = "^0.4.14"
 remotefs = "^0.2.0"
-rust-s3 = { version = "^0.28.0", default-features = false, features = [ "sync-rustls-tls", "sync" ] }
+rust-s3 = { version = "^0.28.0", default-features = false, features = [ "sync" ] }
 thiserror = "^1.0.0"
 
 [dev-dependencies]
@@ -28,7 +28,10 @@ serial_test = "^0.5.1"
 tempfile = "^3.2.0"
 
 [features]
-default = [ "find" ]
+default = [ "find", "native-tls" ]
+# TLS
+native-tls = [ "rust-s3/sync-native-tls" ]
+rustls = [ "rust-s3/sync-rustls-tls" ]
 # misc
 find = [ "remotefs/find" ]
 no-log = [ "log/max_level_off" ]
