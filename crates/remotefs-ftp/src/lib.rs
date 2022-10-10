@@ -44,7 +44,6 @@
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 
-
 // -- crates
 #[macro_use]
 extern crate log;

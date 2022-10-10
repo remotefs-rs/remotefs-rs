@@ -16,7 +16,7 @@ version = "0.1.2"
 [dependencies]
 log = "^0.4"
 remotefs = "^0.2.0"
-suppaftp = "^4.5.1"
+suppaftp = "^4.5.2"
 webpki-roots = { version = "^0.22", optional = true }
 
 [dev-dependencies]

@@ -2,8 +2,6 @@
 //!
 //! Contains mock for test units
 
-
-
 // -- logger
 
 pub fn logger() {
