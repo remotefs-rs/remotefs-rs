@@ -1,7 +1,7 @@
 version: "3"
 services:
   openssh-server:
-    image: ghcr.io/linuxserver/openssh-server
+    image: ghcr.io/linuxserver/openssh-server:8.6_p1-r3-ls70
     environment:
       - PUID=1000
       - PGID=1000
@@ -14,7 +14,7 @@ services:
     ports:
       - "10022:2222"
   openssh-server-scp:
-    image: ghcr.io/linuxserver/openssh-server
+    image: ghcr.io/linuxserver/openssh-server:8.6_p1-r3-ls70
     environment:
       - PUID=1000
       - PGID=1000
