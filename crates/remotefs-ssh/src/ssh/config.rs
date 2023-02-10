@@ -38,6 +38,8 @@ use std::time::Duration;
 pub struct Config {
     pub params: HostParams,
     pub host: String,
+    /// Host resolved from configuration
+    pub resolved_host: String,
     /// Address is host:port
     pub address: String,
     pub username: String,
@@ -51,7 +53,8 @@ impl Config {
     /// Create `Config` from `HostParams` and `SshOpts`
     fn from_params(params: HostParams, opts: &SshOpts) -> Self {
         Config {
-            host: Self::resolve_host(&params, opts),
+            host: opts.host.to_string(),
+            resolved_host: Self::resolve_host(&params, opts),
             address: Self::resolve_address(&params, opts),
             username: Self::resolve_username(&params, opts),
             connection_timeout: Self::resolve_connection_timeout(&params, opts),
