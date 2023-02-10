@@ -421,7 +421,7 @@ impl RemoteFs for ScpFs {
             self.assert_stat_command(format!(
                 "chown {}{} \"{}\"",
                 user,
-                metadata.gid.map(|x| format!(":{}", x)).unwrap_or_default(),
+                metadata.gid.map(|x| format!(":{x}")).unwrap_or_default(),
                 path.display()
             ))?;
         }

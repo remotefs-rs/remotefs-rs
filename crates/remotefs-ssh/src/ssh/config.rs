@@ -69,7 +69,7 @@ impl Config {
         let mut reader = BufReader::new(File::open(p).map_err(|e| {
             RemoteError::new_ex(
                 RemoteErrorType::IoError,
-                format!("Could not open configuration file: {}", e),
+                format!("Could not open configuration file: {e}"),
             )
         })?);
         SshConfig::default()
@@ -77,7 +77,7 @@ impl Config {
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::IoError,
-                    format!("Could not parse configuration file: {}", e),
+                    format!("Could not parse configuration file: {e}"),
                 )
             })
             .map(|x| x.query(host))
@@ -100,7 +100,7 @@ impl Config {
             None => params.port.unwrap_or(22),
             Some(p) => p,
         };
-        format!("{}:{}", host, port)
+        format!("{host}:{port}")
     }
 
     /// Resolve username from opts and params.

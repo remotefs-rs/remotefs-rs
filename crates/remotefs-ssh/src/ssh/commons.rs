@@ -252,7 +252,7 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Remote
         Err(err) => {
             return Err(RemoteError::new_ex(
                 RemoteErrorType::ProtocolError,
-                format!("Could not open channel: {}", err),
+                format!("Could not open channel: {err}"),
             ))
         }
     };
@@ -274,7 +274,7 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Remote
         }
         Err(err) => Err(RemoteError::new_ex(
             RemoteErrorType::ProtocolError,
-            format!("Could not read output: {}", err),
+            format!("Could not read output: {err}"),
         )),
     }
 }

@@ -44,11 +44,11 @@ pub fn parse_lstime(tm: &str, fmt_year: &str, fmt_hours: &str) -> Result<SystemT
             // Might be case 1.
             // We need to add Current Year at the end of the string
             let this_year: i32 = Utc::now().year();
-            let date_time_str: String = format!("{} {}", tm, this_year);
+            let date_time_str: String = format!("{tm} {this_year}");
             // Now parse
             NaiveDateTime::parse_from_str(
                 date_time_str.as_ref(),
-                format!("{} %Y", fmt_hours).as_ref(),
+                format!("{fmt_hours} %Y").as_ref(),
             )?
         }
     };
