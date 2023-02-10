@@ -77,6 +77,7 @@ impl SshKeyStorage for MockSshKeyStorage {
     fn resolve(&self, host: &str, username: &str) -> Option<std::path::PathBuf> {
         match (host, username) {
             ("sftp", "sftp") => Some(self.key.path().to_path_buf()),
+            ("scp", "sftp") => Some(self.key.path().to_path_buf()),
             _ => None,
         }
     }
