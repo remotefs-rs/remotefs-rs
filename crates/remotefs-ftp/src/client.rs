@@ -3,21 +3,28 @@
 //! ftp client for remotefs
 
 use crate::utils::path as path_utils;
+
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     UnixPexClass, Welcome, WriteStream,
 };
 use remotefs::File;
-
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "native-tls")]
 use suppaftp::native_tls::TlsConnector as NativeTlsConnector;
 #[cfg(feature = "rustls")]
 use suppaftp::rustls::ClientConfig;
+#[cfg(not(any(feature = "native-tls", feature = "rustls")))]
 pub use suppaftp::FtpStream;
-#[cfg(any(feature = "native-tls", feature = "rustls"))]
-use suppaftp::TlsConnector;
+#[cfg(feature = "native-tls")]
+use suppaftp::NativeTlsConnector as TlsConnector;
+#[cfg(feature = "native-tls")]
+pub use suppaftp::NativeTlsFtpStream as FtpStream;
+#[cfg(feature = "rustls")]
+use suppaftp::RustlsConnector as TlsConnector;
+#[cfg(feature = "rustls")]
+pub use suppaftp::RustlsFtpStream as FtpStream;
 use suppaftp::{
     list::{File as FtpFile, PosixPexQuery},
     types::{FileType as SuppaFtpFileType, Mode, Response},
@@ -540,9 +547,9 @@ mod test {
         assert_eq!(client.mode, Mode::Passive);
         #[cfg(any(feature = "native-tls", feature = "rustls"))]
         assert_eq!(client.secure, false);
-        #[cfg(any(feature = "native-tls", feature = "rustls"))]
+        #[cfg(feature = "native-tls")]
         assert_eq!(client.accept_invalid_certs, false);
-        #[cfg(any(feature = "native-tls", feature = "rustls"))]
+        #[cfg(feature = "native-tls")]
         assert_eq!(client.accept_invalid_hostnames, false);
     }
 

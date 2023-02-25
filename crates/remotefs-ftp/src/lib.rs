@@ -11,7 +11,7 @@
 //!
 //! ```toml
 //! remotefs = "^0.2.0"
-//! remotefs-ftp = "^0.1.0"
+//! remotefs-ftp = "^0.1.3"
 //! ```
 //!
 //! these features are supported:

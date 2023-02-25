@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs FTP client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.2 (10/10/2022)</p>
+<p align="center">Current version: 0.1.3 (25/02/2023)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -81,7 +81,7 @@ remotefs-ftp is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-ftp` to your project dependencies:
 
 ```toml
-remotefs-ftp = "^0.1.0"
+remotefs-ftp = "^0.1.3"
 ```
 
 these features are supported:
