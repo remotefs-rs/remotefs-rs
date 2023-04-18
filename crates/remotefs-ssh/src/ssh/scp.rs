@@ -723,6 +723,24 @@ mod test {
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
+    fn should_change_directory_relative() {
+        crate::mock::logger();
+        let mut client = setup_client();
+        assert!(client
+            .create_dir(
+                Path::new("should_change_directory_relative"),
+                UnixPex::from(0o755)
+            )
+            .is_ok());
+        assert!(client
+            .change_dir(Path::new("should_change_directory_relative/"))
+            .is_ok());
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    #[serial]
     fn should_not_change_directory() {
         crate::mock::logger();
         let mut client = setup_client();

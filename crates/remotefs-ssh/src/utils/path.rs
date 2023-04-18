@@ -33,10 +33,23 @@ pub fn absolutize(wrkdir: &Path, target: &Path) -> PathBuf {
         true => target.to_path_buf(),
         false => {
             let mut p: PathBuf = wrkdir.to_path_buf();
-            p.push(target);
+            let fixed_path = resolve(target);
+            p.push(fixed_path);
             p
         }
     }
+}
+
+/// Fix provided path; on Windows fixes the backslashes, converting them to slashes
+/// While on POSIX does nothing
+#[cfg(target_os = "windows")]
+fn resolve(p: &Path) -> PathBuf {
+    PathBuf::from(path_slash::PathExt::to_slash_lossy(p).as_str())
+}
+
+#[cfg(target_family = "unix")]
+fn resolve(p: &Path) -> PathBuf {
+    p.to_path_buf()
 }
 
 #[cfg(test)]
