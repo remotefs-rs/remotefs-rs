@@ -1,12 +1,12 @@
 [package]
-authors = ["Christian Visintin <christian.visintin1997@gmail.com>"]
+authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 description = "remotefs SSH client library"
 documentation = "https://docs.rs/remotefs-ssh"
 edition = "2021"
 homepage = "https://veeso.github.io/remotefs-rs-ssh/"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
-keywords = ["remotefs", "s3-client"]
+keywords = ["remotefs", "ssh-client", "scp-client", "sftp-client"]
 license = "MIT"
 name = "remotefs-ssh"
 readme = "README.md"
@@ -14,10 +14,10 @@ repository = "https://github.com/veeso/remotefs-rs-ssh"
 version = "0.1.4"
 
 [dependencies]
-chrono = "^0.4.19"
-lazy_static = "^1.4.0"
-log = "^0.4.14"
-regex = "^1.5.0"
+chrono = "^0.4"
+lazy_static = "^1.4"
+log = "^0.4"
+regex = "^1.7"
 remotefs = "^0.2.0"
 ssh2-config = "^0.1.4"
 ssh2 = "^0.9.0"
@@ -26,8 +26,8 @@ ssh2 = "^0.9.0"
 env_logger = "^0.9.0"
 pretty_assertions = "^1.0.0"
 rand = "^0.8.4"
-serial_test = "^0.9.0"
-tempfile = "^3.2.0"
+serial_test = "^2.0"
+tempfile = "^3.5"
 
 [features]
 default = [ "find" ]
