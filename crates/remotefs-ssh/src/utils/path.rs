@@ -28,10 +28,6 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "windows")]
-use path_slash::CowExt as _;
-#[cfg(target_os = "windows")]
-use path_slash::PathBufExt as _;
-#[cfg(target_os = "windows")]
 use path_slash::PathExt as _;
 
 /// Absolutize target path if relative.
@@ -51,7 +47,7 @@ pub fn absolutize(wrkdir: &Path, target: &Path) -> PathBuf {
 /// While on POSIX does nothing
 #[cfg(target_os = "windows")]
 fn resolve(p: &Path) -> PathBuf {
-    p.to_slash_lossy().to_path_buf()
+    PathBuf::from(p.to_slash_lossy().to_string())
 }
 
 #[cfg(target_family = "unix")]
