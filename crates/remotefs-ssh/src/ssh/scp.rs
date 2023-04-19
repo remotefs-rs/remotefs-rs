@@ -796,6 +796,8 @@ mod test {
         assert!(client
             .create_dir(Path::new("mydir"), UnixPex::from(0o755))
             .is_ok());
+        let p = PathBuf::from(format!("{}/mydir", client.pwd().unwrap().display()));
+        assert!(client.exists(&p).unwrap());
         finalize_client(client);
     }
 

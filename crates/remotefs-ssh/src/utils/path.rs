@@ -36,9 +36,8 @@ pub fn absolutize(wrkdir: &Path, target: &Path) -> PathBuf {
         true => target.to_path_buf(),
         false => {
             let mut p: PathBuf = wrkdir.to_path_buf();
-            let fixed_path = resolve(target);
-            p.push(fixed_path);
-            p
+            p.push(target);
+            resolve(&p)
         }
     }
 }
