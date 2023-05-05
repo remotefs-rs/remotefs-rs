@@ -157,7 +157,7 @@ View remotefs' changelog [HERE](CHANGELOG.md)
 
 remotefs-ssh is powered by these aweseome projects:
 
-- [ssh2-config](https://githu.com/veeso/ssh2-config)
+- [ssh2-config](https://github.com/veeso/ssh2-config)
 - [ssh2-rs](https://github.com/alexcrichton/ssh2-rs)
 
 ---
