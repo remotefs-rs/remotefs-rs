@@ -2,6 +2,14 @@
 //!
 //! implements configuration resolver for ssh
 
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+use std::time::Duration;
+
+use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
+use ssh2_config::{HostParams, ParseRule, SshConfig};
+
 /**
  * MIT License
  *
@@ -26,13 +34,6 @@
  * SOFTWARE.
  */
 use super::SshOpts;
-use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
-
-use ssh2_config::{HostParams, SshConfig};
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
-use std::time::Duration;
 
 /// Ssh configuration params
 pub struct Config {
@@ -64,7 +65,7 @@ impl Config {
     }
 
     /// Parse config at `p` and get params for `host`
-    fn parse(p: &Path, host: &str) -> RemoteResult<HostParams> {
+    fn parse(p: &Path, host: &str, rules: ParseRule) -> RemoteResult<HostParams> {
         trace!("Parsing configuration at {}", p.display());
         let mut reader = BufReader::new(File::open(p).map_err(|e| {
             RemoteError::new_ex(
@@ -73,7 +74,7 @@ impl Config {
             )
         })?);
         SshConfig::default()
-            .parse(&mut reader)
+            .parse(&mut reader, rules)
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::IoError,
@@ -136,7 +137,7 @@ impl TryFrom<&SshOpts> for Config {
 
     fn try_from(opts: &SshOpts) -> Result<Self, Self::Error> {
         if let Some(p) = opts.config_file.as_deref() {
-            let params = Self::parse(p, opts.host.as_str())?;
+            let params = Self::parse(p, opts.host.as_str(), opts.parse_rules)?;
             Ok(Self::from_params(params, opts))
         } else {
             let params = HostParams::default();
@@ -148,10 +149,10 @@ impl TryFrom<&SshOpts> for Config {
 #[cfg(test)]
 mod test {
 
+    use pretty_assertions::{assert_eq, assert_ne};
+
     use super::*;
     use crate::mock::ssh as ssh_mock;
-
-    use pretty_assertions::{assert_eq, assert_ne};
 
     #[test]
     fn should_init_config_from_default_ssh_opts() {
@@ -183,7 +184,7 @@ mod test {
     #[test]
     fn should_init_config_from_file() {
         let config_file = ssh_mock::create_ssh_config();
-        let opts = SshOpts::new("sftp").config_file(config_file.path());
+        let opts = SshOpts::new("sftp").config_file(config_file.path(), ParseRule::STRICT);
         let config = Config::try_from(&opts).ok().unwrap();
         assert_eq!(config.connection_attempts, 3);
         assert_eq!(config.connection_timeout, Duration::from_secs(60));
@@ -198,7 +199,7 @@ mod test {
     fn should_init_config_from_file_with_override() {
         let config_file = ssh_mock::create_ssh_config();
         let opts = SshOpts::new("sftp")
-            .config_file(config_file.path())
+            .config_file(config_file.path(), ParseRule::STRICT)
             .connection_timeout(Duration::from_secs(10))
             .port(22)
             .username("omar");

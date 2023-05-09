@@ -2,6 +2,8 @@
 //!
 //! parser utils
 
+use std::time::{Duration, SystemTime};
+
 /**
  * MIT License
  *
@@ -27,7 +29,6 @@
  */
 use chrono::format::ParseError;
 use chrono::prelude::*;
-use std::time::{Duration, SystemTime};
 
 /// Convert ls syntax time to System Time
 /// ls time has two possible syntax:
@@ -62,10 +63,10 @@ pub fn parse_lstime(tm: &str, fmt_year: &str, fmt_hours: &str) -> Result<SystemT
 #[cfg(test)]
 mod test {
 
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::utils::fmt::fmt_time_utc;
-
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn should_parse_lstime() {

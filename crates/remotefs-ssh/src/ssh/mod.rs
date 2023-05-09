@@ -39,6 +39,7 @@ mod stream;
 pub use scp::ScpFs;
 pub use sftp::SftpFs;
 pub use ssh2::MethodType as SshMethodType;
+pub use ssh2_config::ParseRule;
 use stream::{SftpReadStream, SftpWriteStream};
 
 // -- Ssh key storage
@@ -105,6 +106,8 @@ pub struct SshOpts {
     key_storage: Option<Box<dyn SshKeyStorage>>,
     /// Preferred key exchange methods.
     methods: Vec<KeyMethod>,
+    /// Ssh config parser ruleset
+    parse_rules: ParseRule,
 }
 
 impl SshOpts {
@@ -123,6 +126,7 @@ impl SshOpts {
             config_file: None,
             key_storage: None,
             methods: Vec::default(),
+            parse_rules: ParseRule::STRICT,
         }
     }
 
@@ -167,8 +171,9 @@ impl SshOpts {
     /// - HostKeyAlgorithms
     /// - ConnectionAttempts
     /// - ConnectTimeout
-    pub fn config_file<P: AsRef<Path>>(mut self, p: P) -> Self {
+    pub fn config_file<P: AsRef<Path>>(mut self, p: P, rules: ParseRule) -> Self {
         self.config_file = Some(p.as_ref().to_path_buf());
+        self.parse_rules = rules;
         self
     }
 
@@ -224,10 +229,10 @@ impl From<MethodType> for SshMethodType {
 #[cfg(test)]
 mod test {
 
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::mock::ssh::MockSshKeyStorage;
-
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn should_create_key_method() {
@@ -267,7 +272,7 @@ mod test {
             .username("foobar")
             .password("qwerty123")
             .connection_timeout(Duration::from_secs(10))
-            .config_file(Path::new("/home/pippo/.ssh/config"))
+            .config_file(Path::new("/home/pippo/.ssh/config"), ParseRule::STRICT)
             .key_storage(Box::new(MockSshKeyStorage::default()))
             .method(KeyMethod::new(
                 MethodType::CryptClientServer,

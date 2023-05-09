@@ -2,6 +2,8 @@
 //!
 //! ssh file stream
 
+use std::io::{Read, Seek, Write};
+
 /**
  * MIT License
  *
@@ -27,7 +29,6 @@
  */
 use remotefs::fs::stream::{ReadAndSeek, ReadStream, WriteAndSeek, WriteStream};
 use ssh2::File as Ssh2File;
-use std::io::{Read, Seek, Write};
 
 // -- read stream
 

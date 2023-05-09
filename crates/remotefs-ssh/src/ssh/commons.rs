@@ -2,6 +2,14 @@
 //!
 //! SSH2 common methods
 
+use std::io::Read;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
+use ssh2::{MethodType as SshMethodType, Session};
+
 /**
  * MIT License
  *
@@ -26,13 +34,6 @@
  * SOFTWARE.
  */
 use super::{config::Config, SshOpts};
-use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
-
-use ssh2::{MethodType as SshMethodType, Session};
-use std::io::Read;
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 // -- connect
 

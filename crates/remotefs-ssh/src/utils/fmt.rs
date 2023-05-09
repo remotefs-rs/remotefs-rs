@@ -2,6 +2,8 @@
 //!
 //! format utilities
 
+use std::time::SystemTime;
+
 /**
  * MIT License
  *
@@ -26,7 +28,6 @@
  * SOFTWARE.
  */
 use chrono::{DateTime, Utc};
-use std::time::SystemTime;
 
 /// Format time using fmt string in utc time
 pub fn fmt_time_utc(time: SystemTime, fmt: &str) -> String {
@@ -37,9 +38,9 @@ pub fn fmt_time_utc(time: SystemTime, fmt: &str) -> String {
 #[cfg(test)]
 mod test {
 
-    use super::*;
-
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[test]
     fn should_fmt_time() {

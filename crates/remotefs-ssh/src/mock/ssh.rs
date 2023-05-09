@@ -2,6 +2,10 @@
 //!
 //! Contains mock for SSH protocol
 
+use std::io::Write;
+
+use tempfile::NamedTempFile;
+
 /**
  * MIT License
  *
@@ -26,9 +30,6 @@
  * SOFTWARE.
  */
 use crate::SshKeyStorage;
-
-use std::io::Write;
-use tempfile::NamedTempFile;
 
 /// Mock ssh key storage
 pub struct MockSshKeyStorage {

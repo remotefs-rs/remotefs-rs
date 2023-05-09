@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SSH client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.6 (19/04/2023)</p>
+<p align="center">Current version: 0.2.0 (09/05/2023)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -81,7 +81,7 @@ remotefs-ssh is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-ssh` to your project dependencies:
 
 ```toml
-remotefs-ssh = "^0.1.0"
+remotefs-ssh = "^0.2"
 ```
 
 these features are supported:
@@ -132,9 +132,6 @@ You can make a donation with one of these platforms:
 [![ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/veeso)
 [![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.me/chrisintin)
 [![bitcoin](https://img.shields.io/badge/Bitcoin-ff9416?style=for-the-badge&logo=bitcoin&logoColor=white)](https://btc.com/bc1qvlmykjn7htz0vuprmjrlkwtv9m9pan6kylsr8w)
-[![litecoin](https://img.shields.io/badge/Litecoin-345d9d?style=for-the-badge&logo=Litecoin&logoColor=white)](https://blockchair.com/litecoin/address/ltc1q89a7f859gt7nuekvnuuc25wapkq2f8ny78mp8l)
-[![ethereum](https://img.shields.io/badge/Ethereum-3C3C3D?style=for-the-badge&logo=Ethereum&logoColor=white)](https://etherscan.io/address/0xE57E761Aa806c9afe7e06Fb0601B17beC310f9c4)
-[![tether](https://img.shields.io/badge/tether-168363?style=for-the-badge&logo=tether&logoColor=white)](https://etherscan.io/address/0xE57E761Aa806c9afe7e06Fb0601B17beC310f9c4)
 
 ---
 

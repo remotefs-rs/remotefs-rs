@@ -2,6 +2,19 @@
 //!
 //! Sftp remote fs implementation
 
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
+
+use remotefs::fs::{
+    FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
+    Welcome, WriteStream,
+};
+use remotefs::File;
+use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
+// -- export
+pub use ssh2::{Session as SshSession, Sftp as SshSftp};
+
 /**
  * MIT License
  *
@@ -27,19 +40,6 @@
  */
 use super::{commons, SftpReadStream, SftpWriteStream, SshOpts};
 use crate::utils::path as path_utils;
-
-use remotefs::fs::{
-    FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
-    Welcome, WriteStream,
-};
-use remotefs::File;
-use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime};
-
-// -- export
-pub use ssh2::{Session as SshSession, Sftp as SshSftp};
 
 /// Sftp "filesystem" client
 pub struct SftpFs {
@@ -591,15 +591,16 @@ impl RemoteFs for SftpFs {
 #[cfg(test)]
 mod test {
 
-    use super::*;
     #[cfg(feature = "with-containers")]
-    use crate::mock::ssh as ssh_mock;
+    use std::io::Cursor;
 
     use pretty_assertions::assert_eq;
     #[cfg(feature = "with-containers")]
     use serial_test::serial;
+
+    use super::*;
     #[cfg(feature = "with-containers")]
-    use std::io::Cursor;
+    use crate::mock::ssh as ssh_mock;
 
     #[test]
     fn should_initialize_sftp_filesystem() {
@@ -1286,7 +1287,8 @@ mod test {
 
     #[cfg(feature = "with-containers")]
     fn generate_tempdir() -> String {
-        use rand::{distributions::Alphanumeric, thread_rng, Rng};
+        use rand::distributions::Alphanumeric;
+        use rand::{thread_rng, Rng};
         let mut rng = thread_rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
