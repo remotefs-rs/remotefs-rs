@@ -10,8 +10,8 @@
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.2.0"
-//! remotefs-ssh = "^0.1.0"
+//! remotefs = "^0.2"
+//! remotefs-ssh = "^0.2"
 //! ```
 //!
 //! these features are supported:
@@ -28,14 +28,14 @@
 //!
 //! // import remotefs trait and client
 //! use remotefs::RemoteFs;
-//! use remotefs::client::ssh::{SftpFs, SshOpts};
+//! use remotefs_ssh::{SshConfigParseRule, SftpFs, SshOpts};
 //! use std::path::Path;
 //!
 //! let mut client: SftpFs = SshOpts::new("127.0.0.1")
 //!     .port(22)
 //!     .username("test")
 //!     .password("password")
-//!     .config_file(Path::new("/home/cvisintin/.ssh/config"))
+//!     .config_file(Path::new("/home/cvisintin/.ssh/config"), ParseRule::STRICT)
 //!     .into();
 //!
 //! // connect
@@ -51,29 +51,6 @@
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 // -- crates
 #[macro_use]
 extern crate lazy_static;
@@ -81,7 +58,7 @@ extern crate lazy_static;
 extern crate log;
 
 mod ssh;
-pub use ssh::{ParseRule, ScpFs, SftpFs, SshKeyStorage, SshOpts};
+pub use ssh::{ParseRule as SshConfigParseRule, ScpFs, SftpFs, SshKeyStorage, SshOpts};
 
 // -- utils
 pub(crate) mod utils;
