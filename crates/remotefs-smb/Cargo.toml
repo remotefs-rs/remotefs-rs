@@ -19,14 +19,18 @@ remotefs = "^0.2.0"
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]
-libc = "^0.2.121"
-pavao = "^0.1.2"
+libc = "^0.2"
+pavao = "^0.2"
+
+[target."cfg(target_family = \"windows\")"]
+[target."cfg(target_family = \"windows\")".dependencies]
+filetime = "^0.2"
 
 [dev-dependencies]
-env_logger = "^0.9.0"
+env_logger = "^0.10"
 pretty_assertions = "^1.0.0"
 rand = "^0.8.4"
-serial_test = "^0.5.1"
+serial_test = "^2.0"
 tempfile = "^3.2.0"
 
 [features]

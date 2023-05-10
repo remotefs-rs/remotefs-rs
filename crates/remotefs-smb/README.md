@@ -51,6 +51,11 @@
       src="https://github.com/veeso/remotefs-rs-smb/workflows/MacOS/badge.svg"
       alt="MacOS CI"
   /></a>
+  <a href="https://github.com/veeso/remotefs-rs-smb/actions"
+    ><img
+      src="https://github.com/veeso/remotefs-rs-smb/workflows/Windows/badge.svg"
+      alt="Windows CI"
+  /></a>
   <a href="https://coveralls.io/github/veeso/remotefs-rs-smb"
     ><img
       src="https://coveralls.io/repos/github/veeso/remotefs-rs-smb/badge.svg"

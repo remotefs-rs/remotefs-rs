@@ -64,6 +64,10 @@
 extern crate log;
 
 mod client;
+
+#[cfg(target_family = "windows")]
+pub use client::SmbFs;
+#[cfg(target_family = "unix")]
 pub use client::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions, SmbShareMode};
 
 // -- utils
