@@ -3,17 +3,16 @@
 //! UNIX implementation of Smb fs client
 
 // -- exports
-pub use pavao::{SmbClient, SmbCredentials, SmbEncryptionLevel, SmbOptions, SmbShareMode};
-
-use crate::utils::path as path_utils;
-use crate::utils::smb as smb_utils;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
 
 use libc::mode_t;
+pub use pavao::{SmbClient, SmbCredentials, SmbEncryptionLevel, SmbOptions, SmbShareMode};
 use pavao::{SmbDirentType, SmbMode, SmbOpenOptions};
 use remotefs::fs::{File, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+
+use crate::utils::{path as path_utils, smb as smb_utils};
 
 /// SMB file system client
 pub struct SmbFs {
@@ -284,11 +283,12 @@ impl RemoteFs for SmbFs {
 #[cfg(feature = "with-containers")]
 mod test {
 
-    use super::*;
-
-    use serial_test::serial;
     use std::io::Cursor;
     use std::time::Duration;
+
+    use serial_test::serial;
+
+    use super::*;
 
     #[test]
     #[cfg(feature = "with-containers")]
