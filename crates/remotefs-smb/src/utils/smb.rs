@@ -19,7 +19,7 @@ pub fn smbstat_to_file<S: AsRef<str>>(uri: S, stat: SmbStat) -> File {
             .created(stat.created)
             .file_type(get_file_type_from_stat(&stat))
             .gid(stat.gid)
-            .mode(UnixPex::from(mode as u32))
+            .mode(UnixPex::from(mode))
             .modified(stat.modified)
             .size(stat.size)
             .uid(stat.uid),
