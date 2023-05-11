@@ -71,6 +71,7 @@ pub use client::SmbFs;
 pub use client::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions, SmbShareMode};
 
 // -- utils
+#[cfg(target_family = "unix")]
 pub(crate) mod utils;
 // -- mock
 #[cfg(test)]
