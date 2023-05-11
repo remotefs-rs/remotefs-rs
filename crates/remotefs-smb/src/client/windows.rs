@@ -196,7 +196,7 @@ impl RemoteFs for SmbFs {
             let dest = match dest.as_path().is_dir() {
                 true => {
                     let mut p: PathBuf = dest.clone();
-                    p.push(src.file_name().unwrap().to_owned());
+                    p.push(src.file_name().unwrap());
                     p
                 }
                 false => dest.clone(),
@@ -799,24 +799,27 @@ mod test {
         finalize_client(client);
     }
 
+    #[cfg(feature = "with-containers")]
     fn init_client() -> SmbFs {
         let _ = std::fs::remove_dir_all(Path::new("/tmp/cargo-test"));
         let client = SmbFs::new(
             SmbCredentials::default()
-                .server("localhost:3445")
-                .share("temp"),
+                .server(env!("SMB_SERVER"))
+                .share(env!("SMB_SHARE")),
         );
         // make test dir
         let _ = std::fs::create_dir(Path::new("/tmp/cargo-test"));
         client
     }
 
+    #[cfg(feature = "with-containers")]
     fn finalize_client(client: SmbFs) {
         remove_dir_all("/cargo-test");
         std::thread::sleep(Duration::from_secs(1));
         drop(client);
     }
 
+    #[cfg(feature = "with-containers")]
     fn remove_dir_all<S: AsRef<str>>(dir: S) {
         let _ = std::fs::remove_dir_all(Path::new(dir.as_ref()));
     }
