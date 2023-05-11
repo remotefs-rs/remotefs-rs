@@ -801,7 +801,11 @@ mod test {
 
     fn init_client() -> SmbFs {
         let _ = std::fs::remove_dir_all(Path::new("/tmp/cargo-test"));
-        let client = SmbFs::new("localhost:3445", "temp");
+        let client = SmbFs::new(
+            SmbCredentials::default()
+                .server("localhost:3445")
+                .share("temp"),
+        );
         // make test dir
         let _ = std::fs::create_dir(Path::new("/tmp/cargo-test"));
         client
