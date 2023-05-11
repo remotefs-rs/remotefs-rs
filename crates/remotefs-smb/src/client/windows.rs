@@ -109,7 +109,7 @@ impl RemoteFs for SmbFs {
                 return Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err));
             }
         };
-        let mut metadata = Metadata::from(attr);
+        let metadata = Metadata::from(attr);
         // Match dir / file
         Ok(File { path, metadata })
     }
@@ -121,7 +121,7 @@ impl RemoteFs for SmbFs {
         if let Some(mtime) = metadata.modified {
             let mtime = FileTime::from_system_time(mtime);
             debug!("setting mtime {:?}", mtime);
-            filetime::set_file_mtime(path, mtime)
+            filetime::set_file_mtime(&path, mtime)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
         }
         if let Some(atime) = metadata.accessed {
