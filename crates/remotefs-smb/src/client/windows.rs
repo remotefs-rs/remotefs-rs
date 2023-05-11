@@ -2,10 +2,12 @@
 //!
 //! Windows implementation of Smb fs client
 
+mod credentials;
 mod file_stream;
 
 use std::path::{Path, PathBuf};
 
+pub use credentials::SmbCredentials;
 use file_stream::FileStream;
 use filetime::{self, FileTime};
 use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
@@ -20,9 +22,12 @@ pub struct SmbFs {
 
 impl SmbFs {
     /// Instantiates a new SmbFs
-    pub fn new(server: &str, share: &str) -> Self {
+    pub fn new(credentials: SmbCredentials) -> Self {
         Self {
-            remote_path: PathBuf::from(format!("\\\\{server}\\{share}")),
+            remote_path: PathBuf::from(format!(
+                "\\\\{}\\{}",
+                credentials.server, credentials.share
+            )),
             wrkdir: PathBuf::from("\\"),
         }
     }
