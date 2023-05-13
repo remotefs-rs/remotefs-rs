@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (27/05/2022)</p>
+<p align="center">Current version: 0.2.0 (13/05/2023)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -81,7 +81,7 @@ remotefs-smb is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-smb` to your project dependencies:
 
 ```toml
-remotefs-smb = "^0.2.0"
+remotefs-smb = "^0.2"
 ```
 
 these features are supported:
@@ -138,6 +138,63 @@ cd ..
 rm -rf samba/
 ```
 
+### Client implementation
+
+#### UNIX client
+
+```rust
+// import remotefs trait and client
+use remotefs::{RemoteFs, fs::UnixPex};
+use remotefs_smb::{SmbFs, SmbOptions, SmbCredentials};
+use std::path::Path;
+let mut client = SmbFs::try_new(
+    SmbCredentials::default()
+        .server("smb://localhost:3445")
+        .share("/temp")
+        .username("test")
+        .password("test")
+        .workgroup("pavao"),
+    SmbOptions::default()
+        .case_sensitive(true)
+        .one_share_per_server(true),
+)
+.unwrap();
+// connect
+assert!(client.connect().is_ok());
+// get working directory
+println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+// make directory
+assert!(client.create_dir(Path::new("/cargo"), UnixPex::from(0o755)).is_ok());
+// change working directory
+assert!(client.change_dir(Path::new("/cargo")).is_ok());
+// disconnect
+assert!(client.disconnect().is_ok());
+```
+
+#### Windows client
+
+```rust
+// import remotefs trait and client
+use remotefs::{RemoteFs, fs::UnixPex};
+use remotefs_smb::{SmbFs, SmbCredentials};
+use std::path::Path;
+let mut client = SmbFs::new(
+    SmbCredentials::new("localhost:3445", "temp")
+        .username("test")
+        .password("test")
+);
+// connect
+assert!(client.connect().is_ok());
+// get working directory
+println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+// make directory
+assert!(client.create_dir(Path::new("\\cargo"), UnixPex::from(0o755)).is_ok());
+// change working directory
+assert!(client.change_dir(Path::new("\\cargo")).is_ok());
+// disconnect
+assert!(client.disconnect().is_ok());
+```
+
 ---
 
 ### Client compatibility table ✔️
@@ -146,28 +203,28 @@ The following table states the compatibility for the client client and the remot
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Support |
-|----------------|---------|
-| append_file    | Yes     |
-| append         | No      |
-| change_dir     | Yes     |
-| copy           | No      |
-| create_dir     | Yes     |
-| create_file    | Yes     |
-| create         | No      |
-| exec           | No      |
-| exists         | Yes     |
-| list_dir       | Yes     |
-| mov            | Yes     |
-| open_file      | Yes     |
-| open           | No      |
-| pwd            | Yes     |
-| remove_dir_all | Yes     |
-| remove_dir     | Yes     |
-| remove_file    | Yes     |
-| setstat        | No      |
-| stat           | Yes     |
-| symlink        | Yes     |
+| Client/Method  | Support (UNIX) | Support (Win ) |
+|----------------|----------------|----------------|
+| append_file    | Yes            | Yes            |
+| append         | No             | Yes            |
+| change_dir     | Yes            | Yes            |
+| copy           | No             | Yes            |
+| create_dir     | Yes            | Yes            |
+| create_file    | Yes            | Yes            |
+| create         | No             | Yes            |
+| exec           | No             | No             |
+| exists         | Yes            | Yes            |
+| list_dir       | Yes            | Yes            |
+| mov            | Yes            | Yes            |
+| open_file      | Yes            | Yes            |
+| open           | No             | Yes            |
+| pwd            | Yes            | Yes            |
+| remove_dir_all | Yes            | Yes            |
+| remove_dir     | Yes            | Yes            |
+| remove_file    | Yes            | Yes            |
+| setstat        | No             | Yes            |
+| stat           | Yes            | Yes            |
+| symlink        | Yes            | Yes            |
 
 ---
 

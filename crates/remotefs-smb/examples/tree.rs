@@ -16,9 +16,11 @@ where positional can be: [smb://address[:port]]
 Please, report issues to <https://github.com/veeso/remotefs-rs-smb>
 Please, consider supporting the author <https://ko-fi.com/veeso>")]
 struct Args {
-    #[cfg(target_family = "unix")]
     #[argh(option, short = 'P', description = "specify password")]
     password: Option<String>,
+    #[cfg(target_family = "windows")]
+    #[argh(option, short = 'u', description = "specify username")]
+    username: Option<String>,
     #[cfg(target_family = "unix")]
     #[argh(option, short = 'u', description = "specify username")]
     username: String,
@@ -78,11 +80,14 @@ fn init_client(args: Args) -> SmbFs {
         "initializing client with server {} and share {}",
         args.server, args.share
     );
-    SmbFs::new(
-        SmbCredentials::default()
-            .server(args.server)
-            .share(args.share),
-    )
+    let mut credentials = SmbCredentials::new(args.server, args.share);
+    if let Some(username) = args.username {
+        credentials = credentials.username(username);
+    }
+    if let Some(password) = args.password {
+        credentials = credentials.password(password);
+    }
+    SmbFs::new(credentials)
 }
 
 #[cfg(target_family = "unix")]

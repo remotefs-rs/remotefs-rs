@@ -20,7 +20,7 @@
 //! - `no-log`: disable logging. By default, this library will log via the `log` crate.
 //!
 //!
-//! ### Smb client
+//! ### Smb client (UNIX)
 //!
 //! Here is a basic usage example, with the `Smb` client.
 //!
