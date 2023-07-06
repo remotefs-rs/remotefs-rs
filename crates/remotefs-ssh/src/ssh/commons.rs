@@ -338,13 +338,16 @@ mod test {
     #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
 
+    #[cfg(feature = "with-containers")]
+    use ssh2_config::ParseRule;
+
     #[test]
     #[cfg(feature = "with-containers")]
     fn should_connect_to_ssh_server_auth_user_password() {
         crate::mock::logger();
         let config_file = ssh_mock::create_ssh_config();
         let opts = SshOpts::new("sftp")
-            .config_file(config_file.path())
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .password("password");
         let session = connect(&opts).ok().unwrap();
         assert!(session.authenticated());
@@ -356,7 +359,7 @@ mod test {
         crate::mock::logger();
         let config_file = ssh_mock::create_ssh_config();
         let opts = SshOpts::new("sftp")
-            .config_file(config_file.path())
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()));
         let session = connect(&opts).ok().unwrap();
         assert!(session.authenticated());

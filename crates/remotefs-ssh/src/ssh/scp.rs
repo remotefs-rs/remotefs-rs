@@ -677,6 +677,9 @@ mod test {
     #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
 
+    #[cfg(feature = "with-containers")]
+    use ssh2_config::ParseRule;
+
     #[test]
     fn should_init_scp_fs() {
         let mut client = ScpFs::new(SshOpts::new("localhost"));
@@ -1446,7 +1449,7 @@ mod test {
         let mut client = ScpFs::new(
             SshOpts::new("scp")
                 .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
-                .config_file(config_file.path()),
+                .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS),
         );
         assert!(client.connect().is_ok());
         // Create wrkdir
