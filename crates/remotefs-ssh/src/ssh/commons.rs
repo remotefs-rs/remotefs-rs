@@ -6,6 +6,7 @@ use std::io::Read;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Duration;
 
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use ssh2::{MethodType as SshMethodType, Session};
@@ -61,9 +62,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
                 socket_addr,
                 ssh_config.connection_timeout.as_secs()
             );
-            if let Ok(tcp_stream) =
-                TcpStream::connect_timeout(socket_addr, ssh_config.connection_timeout)
-            {
+            if let Ok(tcp_stream) = tcp_connect(socket_addr, ssh_config.connection_timeout) {
                 debug!("Connection established with address {}", socket_addr);
                 stream = Some(tcp_stream);
                 break;
@@ -127,6 +126,16 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     }
     // Return session
     Ok(session)
+}
+
+/// connect to socket address with provided timeout.
+/// If timeout is zero, don't set timeout
+fn tcp_connect(address: &SocketAddr, timeout: Duration) -> std::io::Result<TcpStream> {
+    if timeout.is_zero() {
+        TcpStream::connect(address)
+    } else {
+        TcpStream::connect_timeout(address, timeout)
+    }
 }
 
 /// Configure algorithm preferences into session

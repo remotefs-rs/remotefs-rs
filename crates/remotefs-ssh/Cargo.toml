@@ -11,7 +11,7 @@ license = "MIT"
 name = "remotefs-ssh"
 readme = "README.md"
 repository = "https://github.com/veeso/remotefs-rs-ssh"
-version = "0.2.0"
+version = "0.2.1"
 
 [dependencies]
 chrono = "^0.4"
@@ -30,14 +30,14 @@ serial_test = "^2.0"
 tempfile = "^3.5"
 
 [features]
-default = [ "find" ]
+default = ["find"]
 # misc
-find = [ "remotefs/find" ]
-no-log = [ "log/max_level_off" ]
-ssh2-vendored = [ "ssh2/vendored-openssl" ]
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+ssh2-vendored = ["ssh2/vendored-openssl"]
 # tests
 github-actions = []
-with-containers = [ ]
+with-containers = []
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
