@@ -134,13 +134,13 @@ To use an existing client, you must add them to your `Cargo.toml`, along with re
 - [smb](https://github.com/veeso/remotefs-rs-smb)
 
   ```toml
-  remotefs-smb = "^0.1.0"
+  remotefs-smb = "^0.2.0"
   ```
 
 - [ssh](https://github.com/veeso/remotefs-rs-ssh)
 
   ```toml
-  remotefs-ssh = "^0.1.0"
+  remotefs-ssh = "^0.2.0"
   ```
 
 ---
