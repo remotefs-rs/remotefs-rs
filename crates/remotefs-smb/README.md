@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (13/05/2023)</p>
+<p align="center">Current version: 0.2.1 (15/12/2023)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
