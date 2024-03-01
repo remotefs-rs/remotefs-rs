@@ -1172,8 +1172,13 @@ mod test {
         // Gather s3 environment args
         let bucket = env!("AWS_S3_BUCKET");
         let region = env!("AWS_S3_REGION");
+        let access_key = env!("AWS_S3_ACCESS_KEY");
+        let secret_key = env!("AWS_S3_SECRET_KEY");
         // Get transfer
-        let mut client = AwsS3Fs::new(bucket).region(region);
+        let mut client = AwsS3Fs::new(bucket)
+            .region(region)
+            .access_key(access_key)
+            .secret_access_key(secret_key);
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
