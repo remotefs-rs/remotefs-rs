@@ -314,7 +314,8 @@ impl AwsS3Fs {
     /// Make bucket based on current options
     fn make_bucket(&self, region: Region, credentials: Credentials) -> RemoteResult<Bucket> {
         (if self.new_path_style {
-            Bucket::new_with_path_style(self.bucket_name.as_str(), region, credentials)
+            Bucket::new(self.bucket_name.as_str(), region, credentials)
+                .map(|bucket| bucket.with_path_style())
         } else {
             Bucket::new(self.bucket_name.as_str(), region, credentials)
         })
@@ -565,7 +566,7 @@ impl RemoteFs for AwsS3Fs {
         self.bucket
             .as_ref()
             .unwrap()
-            .get_object_stream(key.as_str(), &mut dest)
+            .get_object_to_writer(key.as_str(), &mut dest)
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
@@ -1180,6 +1181,10 @@ mod test {
             .create_dir(tempdir.as_path(), UnixPex::from(0o775))
             .is_ok());
         // Change directory
+        let err = client.change_dir(tempdir.as_path());
+        if err.is_err() {
+            println!("Error: {:?}", err);
+        }
         assert!(client.change_dir(tempdir.as_path()).is_ok());
         client
     }

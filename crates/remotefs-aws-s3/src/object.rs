@@ -131,7 +131,7 @@ mod test {
     fn should_make_object_into_s3object_file() {
         let obj: Object = Object {
             key: String::from("pippo/sottocartella/chiedo.gif"),
-            e_tag: String::default(),
+            e_tag: Some(String::default()),
             size: 1516966,
             owner: None,
             storage_class: None,
@@ -159,7 +159,7 @@ mod test {
     fn should_make_object_intoto_s3object_dir() {
         let obj: Object = Object {
             key: String::from("temp/"),
-            e_tag: String::default(),
+            e_tag: Some(String::default()),
             size: 0,
             owner: None,
             storage_class: None,
