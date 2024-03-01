@@ -215,7 +215,7 @@ impl AwsS3Fs {
     fn resolve(&self, p: &Path) -> PathBuf {
         path_utils::diff_paths(
             path_utils::absolutize(self.wrkdir.as_path(), p),
-            &Path::new("/"),
+            Path::new("/"),
         )
         .unwrap_or_default()
     }
@@ -233,7 +233,7 @@ impl AwsS3Fs {
         #[cfg(target_family = "windows")]
         let is_absolute: bool = p.display().to_string().starts_with('/');
         let p: PathBuf = match is_absolute {
-            true => path_utils::diff_paths(p, &Path::new("/")).unwrap_or_default(),
+            true => path_utils::diff_paths(p, Path::new("/")).unwrap_or_default(),
             false => p.to_path_buf(),
         };
         // NOTE: windows only: resolve paths
@@ -661,12 +661,12 @@ mod test {
         s3.wrkdir = PathBuf::from("/tmp");
         // Absolute
         assert_eq!(
-            s3.resolve(&Path::new("/tmp/sottocartella/")).as_path(),
+            s3.resolve(Path::new("/tmp/sottocartella/")).as_path(),
             Path::new("tmp/sottocartella")
         );
         // Relative
         assert_eq!(
-            s3.resolve(&Path::new("subfolder/")).as_path(),
+            s3.resolve(Path::new("subfolder/")).as_path(),
             Path::new("tmp/subfolder")
         );
     }
@@ -674,24 +674,24 @@ mod test {
     #[test]
     fn s3_fmt_path() {
         assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("/tmp/omar.txt"), false).as_str(),
+            AwsS3Fs::fmt_path(Path::new("/tmp/omar.txt"), false).as_str(),
             "tmp/omar.txt"
         );
         assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("omar.txt"), false).as_str(),
+            AwsS3Fs::fmt_path(Path::new("omar.txt"), false).as_str(),
             "omar.txt"
         );
         assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("/tmp/subfolder"), true).as_str(),
+            AwsS3Fs::fmt_path(Path::new("/tmp/subfolder"), true).as_str(),
             "tmp/subfolder/"
         );
         assert_eq!(
-            AwsS3Fs::fmt_path(&Path::new("tmp/subfolder"), true).as_str(),
+            AwsS3Fs::fmt_path(Path::new("tmp/subfolder"), true).as_str(),
             "tmp/subfolder/"
         );
-        assert_eq!(AwsS3Fs::fmt_path(&Path::new("tmp"), true).as_str(), "tmp/");
-        assert_eq!(AwsS3Fs::fmt_path(&Path::new("tmp/"), true).as_str(), "tmp/");
-        assert_eq!(AwsS3Fs::fmt_path(&Path::new("/"), true).as_str(), "");
+        assert_eq!(AwsS3Fs::fmt_path(Path::new("tmp"), true).as_str(), "tmp/");
+        assert_eq!(AwsS3Fs::fmt_path(Path::new("tmp/"), true).as_str(), "tmp/");
+        assert_eq!(AwsS3Fs::fmt_path(Path::new("/"), true).as_str(), "");
     }
 
     #[test]

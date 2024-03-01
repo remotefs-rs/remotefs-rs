@@ -70,8 +70,8 @@ where
                 }
                 (None, _) => comps.push(Component::ParentDir),
                 (Some(a), Some(b)) if comps.is_empty() && a == b => (),
-                (Some(a), Some(b)) if b == Component::CurDir => comps.push(a),
-                (Some(_), Some(b)) if b == Component::ParentDir => return None,
+                (Some(a), Some(Component::CurDir)) => comps.push(a),
+                (Some(_), Some(Component::ParentDir)) => return None,
                 (Some(a), Some(_)) => {
                     comps.push(Component::ParentDir);
                     for _ in itb {
@@ -95,11 +95,11 @@ mod test {
     #[test]
     fn absolutize_path() {
         assert_eq!(
-            absolutize(&Path::new("/home/omar"), &Path::new("readme.txt")).as_path(),
+            absolutize(Path::new("/home/omar"), Path::new("readme.txt")).as_path(),
             Path::new("/home/omar/readme.txt")
         );
         assert_eq!(
-            absolutize(&Path::new("/home/omar"), &Path::new("/tmp/readme.txt")).as_path(),
+            absolutize(Path::new("/home/omar"), Path::new("/tmp/readme.txt")).as_path(),
             Path::new("/tmp/readme.txt")
         );
     }
@@ -107,19 +107,19 @@ mod test {
     #[test]
     fn calc_diff_paths() {
         assert_eq!(
-            diff_paths(&Path::new("/foo/bar"), &Path::new("/"))
+            diff_paths(Path::new("/foo/bar"), Path::new("/"))
                 .unwrap()
                 .as_path(),
             Path::new("foo/bar")
         );
         assert_eq!(
-            diff_paths(&Path::new("/foo/bar"), &Path::new("/foo"))
+            diff_paths(Path::new("/foo/bar"), Path::new("/foo"))
                 .unwrap()
                 .as_path(),
             Path::new("bar")
         );
         assert_eq!(
-            diff_paths(&Path::new("/foo/bar/chiedo.gif"), &Path::new("/"))
+            diff_paths(Path::new("/foo/bar/chiedo.gif"), Path::new("/"))
                 .unwrap()
                 .as_path(),
             Path::new("foo/bar/chiedo.gif")
