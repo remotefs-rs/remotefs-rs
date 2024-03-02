@@ -66,7 +66,8 @@ remotefs-webdav is a client implementation for [remotefs](https://github.com/vee
 First of all, add `remotefs-webdav` to your project dependencies:
 
 ```toml
-remotefs-webdav = "^0.2.0"
+remotefs = "^0.2.0"
+remotefs-webdav = "^0.1.0"
 ```
 
 these features are supported:
