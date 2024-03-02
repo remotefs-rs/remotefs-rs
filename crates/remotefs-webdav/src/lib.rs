@@ -28,6 +28,7 @@ extern crate log;
 #[cfg(test)]
 mod mock;
 mod parser;
+mod webdav_xml;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -58,10 +59,10 @@ impl WebDAVFs {
     }
 
     /// Resolve query url
-    fn url(&self, path: &Path) -> String {
+    fn url(&self, path: &Path, force_dir: bool) -> String {
         let mut p = self.url.clone();
         p.push_str(&self.path(path).to_string_lossy());
-        if !p.ends_with('/') && path.is_dir() {
+        if !p.ends_with('/') && (path.is_dir() || force_dir) {
             p.push('/');
         }
         p
@@ -103,12 +104,15 @@ impl RemoteFs for WebDAVFs {
         self.list_dir(&new_dir)?;
 
         self.wrkdir = new_dir.to_string_lossy().to_string();
+        if !self.wrkdir.ends_with('/') {
+            self.wrkdir.push('/');
+        }
         debug!("Changed directory to: {}", self.wrkdir);
         Ok(new_dir)
     }
 
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        let url = self.url(path);
+        let url = self.url(path, true);
         debug!("Listing directory: {}", url);
         let response = self
             .client
@@ -130,7 +134,7 @@ impl RemoteFs for WebDAVFs {
     }
 
     fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        let url = self.url(path);
+        let url = self.url(path, false);
         debug!("Listing directory: {}", url);
         let response = self
             .client
@@ -154,7 +158,7 @@ impl RemoteFs for WebDAVFs {
     }
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        let url = self.url(path);
+        let url = self.url(path, false);
         debug!("Removing file: {}", url);
         let response = self
             .client
@@ -165,7 +169,14 @@ impl RemoteFs for WebDAVFs {
     }
 
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        self.remove_file(path)
+        let url = self.url(path, true);
+        debug!("Removing directory: {}", url);
+        let response = self
+            .client
+            .delete(&url)
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
+
+        ResponseParser::from(response).status()
     }
 
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
@@ -176,7 +187,7 @@ impl RemoteFs for WebDAVFs {
         if self.stat(path).is_ok() {
             return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
         }
-        let url = self.url(path);
+        let url = self.url(path, true);
         // check if dir exists
         debug!("Creating directory: {}", url);
         let response = self
@@ -196,8 +207,8 @@ impl RemoteFs for WebDAVFs {
     }
 
     fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        let src_url = self.url(src);
-        let dest_url = self.url(dest);
+        let src_url = self.url(src, false);
+        let dest_url = self.url(dest, false);
         debug!("Moving file: {} to {}", src_url, dest_url);
 
         let response = self
@@ -230,7 +241,7 @@ impl RemoteFs for WebDAVFs {
         _metadata: &Metadata,
         mut reader: Box<dyn std::io::prelude::Read>,
     ) -> RemoteResult<u64> {
-        let url = self.url(path);
+        let url = self.url(path, false);
         debug!("Creating file: {}", url);
         let mut content = Vec::new();
         reader
@@ -252,7 +263,7 @@ impl RemoteFs for WebDAVFs {
         src: &Path,
         mut dest: Box<dyn std::io::prelude::Write + Send>,
     ) -> RemoteResult<u64> {
-        let url = self.url(src);
+        let url = self.url(src, false);
         debug!("Opening file: {}", url);
         let mut response = self
             .client
@@ -283,6 +294,7 @@ mod test {
     use std::io::Cursor;
 
     use pretty_assertions::assert_eq;
+    #[cfg(feature = "with-containers")]
     use serial_test::serial;
 
     use super::*;
@@ -299,20 +311,23 @@ mod test {
     fn test_should_get_url() {
         let mut client = WebDAVFs::new("user", "password", "http://localhost:3080");
         let path = Path::new("a.txt");
-        assert_eq!(client.url(path), "http://localhost:3080/a.txt");
+        assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
 
         let path = Path::new("/a.txt");
-        assert_eq!(client.url(path), "http://localhost:3080/a.txt");
+        assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
 
         let path = Path::new("/");
-        assert_eq!(client.url(path), "http://localhost:3080/");
+        assert_eq!(client.url(path, false), "http://localhost:3080/");
 
         client.wrkdir = "/test/".to_string();
         let path = Path::new("a.txt");
-        assert_eq!(client.url(path), "http://localhost:3080/test/a.txt");
+        assert_eq!(client.url(path, false), "http://localhost:3080/test/a.txt");
 
         let path = Path::new("/a.txt");
-        assert_eq!(client.url(path), "http://localhost:3080/a.txt");
+        assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
+
+        let path = Path::new("/gabibbo");
+        assert_eq!(client.url(path, true), "http://localhost:3080/gabibbo/");
     }
 
     #[test]
