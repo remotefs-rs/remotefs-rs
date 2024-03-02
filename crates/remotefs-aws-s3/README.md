@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs Aws S3 client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.3 (01/03/2024)</p>
+<p align="center">Current version: 0.2.4 (02/03/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -21,7 +21,7 @@
   /></a>
   <a href="https://github.com/veeso/remotefs-rs-aws-s3/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-aws-s3.svg"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs-aws-s3.svg?style=plain"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-aws-s3"
