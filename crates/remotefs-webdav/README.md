@@ -21,7 +21,7 @@
   /></a>
   <a href="https://github.com/veeso/remotefs-rs-webdav/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-webdav.svg"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs-webdav.svg?style=plain"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-webdav"
