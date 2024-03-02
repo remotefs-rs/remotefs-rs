@@ -57,7 +57,7 @@
 
 ## About remotefs-webdav ☁️
 
-remotefs-webdav is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the Aws S3 protocol.
+remotefs-webdav is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the WebDAV protocol as specified in [RFC4918](https://www.rfc-editor.org/rfc/rfc4918).
 
 ---
 
