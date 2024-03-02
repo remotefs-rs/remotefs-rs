@@ -1,82 +1,140 @@
-# Rust-template
+# remotefs WebDAV
 
-[![license-mit](https://img.shields.io/badge/License-MIT-teal.svg)](https://opensource.org/license/mit/)
-[![build-test](https://github.com/veeso-dev/rust-template/actions/workflows/build-test.yml/badge.svg)](https://github.com/veeso-dev/rust-template/actions/workflows/build-test.yml)
-[![downloads](https://img.shields.io/crates/d/rust-template.svg)](https://crates.io/crates/rust-template)
-[![latest version](https://img.shields.io/crates/v/rust-template.svg)](https://crates.io/crates/rust-template)
-[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://conventionalcommits.org)
+<p align="center">
+  <a href="https://veeso.github.io/remotefs-webdav/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+  ·
+  <a href="https://veeso.github.io/remotefs-webdav/#get-started" target="_blank">Get started</a>
+  ·
+  <a href="https://docs.rs/remotefs-webdav" target="_blank">Documentation</a>
+</p>
 
----
+<p align="center">~ Remotefs WebDAV client ~</p>
 
-- [Rust-template](#rust-template)
-  - [About rust-template](#about-rust-template)
-  - [Get started](#get-started)
-    - [Setup env](#setup-env)
-    - [Run with Cargo make](#run-with-cargo-make)
-  - [rust-template API](#rust-template-api)
-    - [Check](#check)
-  - [Contributing and issues](#contributing-and-issues)
-  - [Changelog](#changelog)
-  - [License](#license)
+<p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
+<p align="center">Current version: 0.1.0 (02/03/2024)</p>
 
----
-
-## About rust-template
-
-rust-template is a Rust web service which comes integrated with ClamAV. The service provides an API endpoint to scan files with ClamAV.
-
----
-
-## Get started
-
-### Setup env
-
-```sh
-cp .env.test .env
-vim .env
-```
-
-```env
-WEB_PORT=3001
-```
-
-### Run with Cargo make
-
-```sh
-cargo make -p production run
-```
-
-## rust-template API
-
-### Check
-
-Check web service status:
-
-```txt
-GET /check
-```
-
-Response: Empty (200)
+<p align="center">
+  <a href="https://opensource.org/licenses/MIT"
+    ><img
+      src="https://img.shields.io/badge/License-MIT-teal.svg"
+      alt="License-MIT"
+  /></a>
+  <a href="https://github.com/veeso/remotefs-rs-webdav/stargazers"
+    ><img
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs-webdav.svg"
+      alt="Repo stars"
+  /></a>
+  <a href="https://crates.io/crates/remotefs-webdav"
+    ><img
+      src="https://img.shields.io/crates/d/remotefs-webdav.svg"
+      alt="Downloads counter"
+  /></a>
+  <a href="https://crates.io/crates/remotefs-webdav"
+    ><img
+      src="https://img.shields.io/crates/v/remotefs-webdav.svg"
+      alt="Latest version"
+  /></a>
+  <a href="https://ko-fi.com/veeso">
+    <img
+      src="https://img.shields.io/badge/donate-ko--fi-red"
+      alt="Ko-fi"
+  /></a>
+</p>
+<p align="center">
+  <a href="https://github.com/veeso/remotefs-rs-webdav/actions"
+    ><img
+      src="https://github.com/veeso/remotefs-rs-webdav/workflows/build-test/badge.svg"
+      alt="Linux CI"
+  /></a>
+  <a href="https://docs.rs/remotefs-webdav"
+    ><img
+      src="https://docs.rs/remotefs-webdav/badge.svg"
+      alt="Docs"
+  /></a>
+</p>
 
 ---
 
-## Contributing and issues
+## About remotefs-webdav ☁️
 
-Contributions, bug reports, new features and questions are welcome! 😉
-If you have any question or concern, or you want to suggest a new feature, or you want just want to improve pavao, feel free to open an issue or a PR.
+remotefs-webdav is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the Aws S3 protocol.
+
+---
+
+## Get started 🚀
+
+First of all, add `remotefs-webdav` to your project dependencies:
+
+```toml
+remotefs-webdav = "^0.2.0"
+```
+
+these features are supported:
+
+- `find`: enable `find()` method on client (*enabled by default*)
+- `no-log`: disable logging. By default, this library will log via the `log` crate.
+
+---
+
+### Client compatibility table ✔️
+
+The following table states the compatibility for the client client and the remote file system trait method.
+
+Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
+
+| Client/Method  | webdav |
+|----------------|--------|
+| append_file    | No     |
+| append         | No     |
+| change_dir     | Yes    |
+| copy           | No     |
+| create_dir     | Yes    |
+| create_file    | Yes    |
+| create         | No     |
+| exec           | No     |
+| exists         | Yes    |
+| list_dir       | Yes    |
+| mov            | Yes    |
+| open_file      | Yes    |
+| open           | No     |
+| pwd            | Yes    |
+| remove_dir_all | Yes    |
+| remove_dir     | Yes    |
+| remove_file    | Yes    |
+| setstat        | No     |
+| stat           | Yes    |
+| symlink        | No     |
+
+---
+
+## Support the developer ☕
+
+If you like remotefs-webdav and you're grateful for the work I've done, please consider a little donation 🥳
+
+You can make a donation with one of these platforms:
+
+[![ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/veeso)
+[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.me/chrisintin)
+
+---
+
+## Contributing and issues 🤝🏻
+
+Contributions, bug reports, new features, and questions are welcome! 😉
+If you have any questions or concerns, or you want to suggest a new feature, or you want just want to improve remotefs, feel free to open an issue or a PR.
 
 Please follow [our contributing guidelines](CONTRIBUTING.md)
 
 ---
 
-## Changelog
+## Changelog ⏳
 
-View rust-template's changelog [HERE](CHANGELOG.md)
+View remotefs' changelog [HERE](CHANGELOG.md)
 
 ---
 
-## License
+## License 📃
 
-rust-template is licensed under the MIT license.
+remotefs-webdav is licensed under the MIT license.
 
 You can read the entire license [HERE](LICENSE)

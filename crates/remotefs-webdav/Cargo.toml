@@ -1,42 +1,37 @@
 [package]
-name = "rust-template"
+name = "remotefs-webdav"
 version = "0.1.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 edition = "2021"
 categories = ["network-programming"]
-description = ""
-homepage = "https://github.com/veeso-dev/rust-template"
+description = "a remotefs client implementation for WebDAV"
+homepage = "https://github.com/veeso/remotefs-rs-webdav"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = []
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/veeso-dev/rust-template"
+repository = "https://github.com/veeso/remotefs-rs-webdav"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[[bin]]
-name = "rust-template"
-path = "src/main.rs"
-
 [dependencies]
-anyhow = "^1"
-envy = "^0.4"
-lazy_static = "^1.4"
-serde = { version = "^1.0.0", features = ["derive"] }
+log = "0.4"
+remotefs = "0.2"
+rustydav = "0.1.3"
 thiserror = "^1.0"
-
-#actix
-actix-multipart = "^0.6"
-actix-web = "^4"
-
-#async stuff
-reqwest = { version = "^0.11", features = ["rustls-tls"] }
-serde_json = "^1.0.0"
-serde_with = "^3"
-tokio = { version = "^1", features = ["io-std", "net", "fs"] }
-tracing = "^0.1"
-tracing-subscriber = "^0.3"
+webdav-xml = "^0.1"
 
 [dev-dependencies]
-actix-rt = "^2"
-env_logger = "^0.10"
-pretty_assertions = "^1"
+env_logger = "^0.11.0"
+pretty_assertions = "^1.0.0"
+serial_test = "^3"
+tempfile = "^3.2.0"
+uuid = { version = "^1", features = ["v4"] }
+
+[features]
+default = ["find"]
+# misc
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+# tests
+github-actions = []
+with-containers = []
