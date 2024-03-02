@@ -25,9 +25,10 @@ pretty_assertions = "^1"
 tempfile = "^3"
 
 [features]
-default = [ "find" ]
+default = ["find"]
 # misc
-find = [ "wildmatch" ]
-no-log = [ "log/max_level_off" ]
+find = ["wildmatch"]
+no-log = ["log/max_level_off"]
 # tests
 github-actions = []
+with-containers = []

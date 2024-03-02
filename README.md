@@ -143,6 +143,12 @@ To use an existing client, you must add them to your `Cargo.toml`, along with re
   remotefs-ssh = "^0.2.0"
   ```
 
+- [webdav](https://github.com/veeso/remotefs-rs-webdav)
+
+  ```toml
+  remotefs-webdav = "^0.1.0"
+  ```
+
 ---
 
 ## Remote file system 💾
@@ -182,28 +188,28 @@ The following table states the compatibility for each client associated with the
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Aws-S3 | Ftp | Scp | Sftp | Smb |
-| -------------- | ------ | --- | --- | ---- |-----|
-| append_file    | No     | Yes | No  | Yes  | Yes |
-| append         | No     | Yes | No  | Yes  | No  |
-| change_dir     | Yes    | Yes | Yes | Yes  | Yes |
-| copy           | No     | No  | Yes | Yes  | No  |
-| create_dir     | Yes    | Yes | Yes | Yes  | Yes |
-| create_file    | Yes    | Yes | Yes | Yes  | Yes |
-| create         | No     | Yes | Yes | Yes  | No  |
-| exec           | No     | No  | Yes | Yes  | No  |
-| exists         | Yes    | Yes | Yes | Yes  | Yes |
-| list_dir       | Yes    | Yes | Yes | Yes  | Yes |
-| mov            | No     | Yes | Yes | Yes  | Yes |
-| open_file      | Yes    | Yes | Yes | Yes  | Yes |
-| open           | No     | Yes | Yes | Yes  | No  |
-| pwd            | Yes    | Yes | Yes | Yes  | Yes |
-| remove_dir_all | Yes    | Yes | Yes | Yes  | Yes |
-| remove_dir     | Yes    | Yes | Yes | Yes  | Yes |
-| remove_file    | Yes    | Yes | Yes | Yes  | Yes |
-| setstat        | No     | No  | Yes | Yes  | No  |
-| stat           | Yes    | Yes | Yes | Yes  | Yes |
-| symlink        | No     | No  | Yes | Yes  | Yes |
+| Client/Method  | Aws-S3 | Ftp | Scp | Sftp | Smb | WebDAV |
+| -------------- | ------ | --- | --- | ---- |-----| ------ |
+| append_file    | No     | Yes | No  | Yes  | Yes | No     |
+| append         | No     | Yes | No  | Yes  | No  | No     |
+| change_dir     | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| copy           | No     | No  | Yes | Yes  | No  | No     |
+| create_dir     | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| create_file    | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| create         | No     | Yes | Yes | Yes  | No  | No     |
+| exec           | No     | No  | Yes | Yes  | No  | No     |
+| exists         | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| list_dir       | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| mov            | No     | Yes | Yes | Yes  | Yes | Yes    |
+| open_file      | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| open           | No     | Yes | Yes | Yes  | No  | No     |
+| pwd            | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| remove_dir_all | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| remove_dir     | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| remove_file    | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| setstat        | No     | No  | Yes | Yes  | No  | No     |
+| stat           | Yes    | Yes | Yes | Yes  | Yes | Yes    |
+| symlink        | No     | No  | Yes | Yes  | Yes | No     |
 
 ---
 
