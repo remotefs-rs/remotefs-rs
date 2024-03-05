@@ -58,7 +58,9 @@ extern crate lazy_static;
 extern crate log;
 
 mod ssh;
-pub use ssh::{ParseRule as SshConfigParseRule, ScpFs, SftpFs, SshKeyStorage, SshOpts, KeyMethod, MethodType};
+pub use ssh::{
+    KeyMethod, MethodType, ParseRule as SshConfigParseRule, ScpFs, SftpFs, SshKeyStorage, SshOpts,
+};
 
 // -- utils
 pub(crate) mod utils;
