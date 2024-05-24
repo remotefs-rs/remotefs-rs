@@ -17,7 +17,7 @@ version = "0.1.4"
 log = "^0.4"
 remotefs = "^0.2.0"
 suppaftp = "^6.0"
-webpki-roots = { version = "^0.26", optional = true }
+webpki-roots = { version = "^0.22", optional = true }
 
 [dev-dependencies]
 env_logger = "^0.11"
