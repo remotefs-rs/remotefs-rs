@@ -11,34 +11,34 @@ license = "MIT"
 name = "remotefs-ftp"
 readme = "README.md"
 repository = "https://github.com/veeso/remotefs-rs-ftp"
-version = "0.1.3"
+version = "0.1.4"
 
 [dependencies]
 log = "^0.4"
 remotefs = "^0.2.0"
-suppaftp = "^5.0"
-webpki-roots = { version = "^0.22", optional = true }
+suppaftp = "^6.0"
+webpki-roots = { version = "^0.26", optional = true }
 
 [dev-dependencies]
-env_logger = "^0.9.0"
+env_logger = "^0.11"
 pretty_assertions = "^1.0.0"
 rand = "^0.8.4"
-serial_test = "^0.5.1"
+serial_test = "^3"
 tempfile = "^3.2.0"
 
 [features]
-default = [ "find" ]
+default = ["find"]
 # TLS
-native-tls = [ "suppaftp/native-tls" ]
-rustls = [ "suppaftp/rustls", "webpki-roots" ]
-secure = [ "native-tls" ]
-vendored = [ "suppaftp/native-tls-vendored" ]
+native-tls = ["suppaftp/native-tls"]
+rustls = ["suppaftp/rustls", "webpki-roots"]
+secure = ["native-tls"]
+vendored = ["suppaftp/native-tls-vendored"]
 # misc
-find = [ "remotefs/find" ]
-no-log = [ "log/max_level_off" ]
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
 # tests
 github-actions = []
-with-containers = [ "native-tls" ]
+with-containers = ["native-tls"]
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
