@@ -80,11 +80,13 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
     // Authenticate with password or key
-    match opts
-        .key_storage
-        .as_ref()
-        .and_then(|x| x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str()))
-    {
+    match opts.key_storage.as_ref().and_then(|x| {
+        x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
+            .or(x.resolve(
+                ssh_config.resolved_host.as_str(),
+                ssh_config.username.as_str(),
+            ))
+    }) {
         Some(rsa_key) => {
             session_auth_with_rsakey(
                 &mut session,
