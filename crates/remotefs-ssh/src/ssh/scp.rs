@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use regex::Regex;
+use lazy_regex::{Lazy, Regex};
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     UnixPexClass, Welcome, WriteStream,
@@ -18,6 +18,11 @@ pub use ssh2::Session as SshSession;
 
 use super::{commons, SshOpts};
 use crate::utils::{fmt as fmt_utils, parser as parser_utils, path as path_utils};
+
+/// NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
+static LS_RE: Lazy<Regex> = lazy_regex!(
+    r#"^([\-ld])([\-rwxsStT]{9})\s+(\d+)\s+(.+)\s+(.+)\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(.+)$"#
+);
 
 /// SCP "filesystem" client
 pub struct ScpFs {
@@ -52,15 +57,9 @@ impl ScpFs {
         }
     }
 
-    /// ### parse_ls_output
-    ///
     /// Parse a line of `ls -l` output and tokenize the output into a `FsFile`
     fn parse_ls_output(&self, path: &Path, line: &str) -> Result<File, ()> {
         // Prepare list regex
-        // NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
-        lazy_static! {
-            static ref LS_RE: Regex = Regex::new(r#"^([\-ld])([\-rwxs]{9})\s+(\d+)\s+(.+)\s+(.+)\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(.+)$"#).unwrap();
-        }
         trace!("Parsing LS line: '{}'", line);
         // Apply regex to result
         match LS_RE.captures(line) {
@@ -1383,6 +1382,37 @@ mod test {
             entry.metadata.symlink.as_deref().unwrap(),
             Path::new("Cargo.prod.toml")
         );
+    }
+
+    #[test]
+    fn test_should_parse_special_permissions_ls_output() {
+        let client = ScpFs::new(SshOpts::new("localhost"));
+        assert!(client
+            .parse_ls_output(
+                Path::new("/tmp"),
+                "-rw-rwSrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+            )
+            .is_ok());
+        assert!(client
+            .parse_ls_output(
+                Path::new("/tmp"),
+                "-rw-rwsrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+            )
+            .is_ok());
+
+        assert!(client
+            .parse_ls_output(
+                Path::new("/tmp"),
+                "-rw-rwtrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+            )
+            .is_ok());
+
+        assert!(client
+            .parse_ls_output(
+                Path::new("/tmp"),
+                "-rw-rwTrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+            )
+            .is_ok());
     }
 
     #[test]

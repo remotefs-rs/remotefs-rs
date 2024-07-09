@@ -53,7 +53,7 @@
 
 // -- crates
 #[macro_use]
-extern crate lazy_static;
+extern crate lazy_regex;
 #[macro_use]
 extern crate log;
 
