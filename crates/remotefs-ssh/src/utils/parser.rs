@@ -33,7 +33,7 @@ pub fn parse_lstime(tm: &str, fmt_year: &str, fmt_hours: &str) -> Result<SystemT
     // Convert datetime to system time
     let sys_time: SystemTime = SystemTime::UNIX_EPOCH;
     Ok(sys_time
-        .checked_add(Duration::from_secs(datetime.timestamp() as u64))
+        .checked_add(Duration::from_secs(datetime.and_utc().timestamp() as u64))
         .unwrap_or(SystemTime::UNIX_EPOCH))
 }
 
