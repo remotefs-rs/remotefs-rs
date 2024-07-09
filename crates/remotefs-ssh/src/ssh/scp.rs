@@ -16,29 +16,6 @@ use remotefs::File;
 // -- export
 pub use ssh2::Session as SshSession;
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 use super::{commons, SshOpts};
 use crate::utils::{fmt as fmt_utils, parser as parser_utils, path as path_utils};
 
@@ -672,13 +649,12 @@ mod test {
     use pretty_assertions::assert_eq;
     #[cfg(feature = "with-containers")]
     use serial_test::serial;
+    #[cfg(feature = "with-containers")]
+    use ssh2_config::ParseRule;
 
     use super::*;
     #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
-
-    #[cfg(feature = "with-containers")]
-    use ssh2_config::ParseRule;
 
     #[test]
     fn should_init_scp_fs() {
