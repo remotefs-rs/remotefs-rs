@@ -24,7 +24,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     // Resolve host
     debug!("Connecting to '{}'", ssh_config.address);
     // setup tcp stream
-    let socket_addresses: Vec<SocketAddr> = match ssh_config.resolved_host.to_socket_addrs() {
+    let socket_addresses: Vec<SocketAddr> = match ssh_config.address.to_socket_addrs() {
         Ok(s) => s.collect(),
         Err(err) => {
             return Err(RemoteError::new_ex(
@@ -398,7 +398,11 @@ mod test {
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .password("password");
-        let session = connect(&opts).ok().unwrap();
+
+        if let Err(err) = connect(&opts) {
+            panic!("Could not connect to server: {}", err);
+        }
+        let session = connect(&opts).unwrap();
         assert!(session.authenticated());
     }
 
@@ -410,7 +414,7 @@ mod test {
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()));
-        let session = connect(&opts).ok().unwrap();
+        let session = connect(&opts).unwrap();
         assert!(session.authenticated());
     }
 
@@ -422,7 +426,7 @@ mod test {
             .port(10022)
             .username("sftp")
             .password("password");
-        let mut session = connect(&opts).ok().unwrap();
+        let mut session = connect(&opts).unwrap();
         assert!(session.authenticated());
         // run commands
         assert!(perform_shell_cmd(&mut session, "pwd").is_ok());
@@ -436,7 +440,7 @@ mod test {
             .port(10022)
             .username("sftp")
             .password("password");
-        let mut session = connect(&opts).ok().unwrap();
+        let mut session = connect(&opts).unwrap();
         assert!(session.authenticated());
         // run commands
         assert_eq!(
