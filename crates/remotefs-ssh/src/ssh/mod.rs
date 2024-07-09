@@ -53,6 +53,39 @@ impl KeyMethod {
 
 // -- ssh options
 
+/// Ssh agent identity
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshAgentIdentity {
+    /// Try all identities
+    All,
+    /// Use a specific identity
+    Pubkey(Vec<u8>),
+}
+
+impl From<Vec<u8>> for SshAgentIdentity {
+    fn from(v: Vec<u8>) -> Self {
+        SshAgentIdentity::Pubkey(v)
+    }
+}
+
+impl From<&[u8]> for SshAgentIdentity {
+    fn from(v: &[u8]) -> Self {
+        SshAgentIdentity::Pubkey(v.to_vec())
+    }
+}
+
+impl SshAgentIdentity {
+    /// Check if the provided public key matches the identity
+    ///
+    /// If `All` is provided, this method will always return `true`
+    pub(crate) fn pubkey_matches(&self, blob: &[u8]) -> bool {
+        match self {
+            SshAgentIdentity::All => true,
+            SshAgentIdentity::Pubkey(v) => v == blob,
+        }
+    }
+}
+
 /// Ssh options;
 /// used to build and configure SCP/SFTP client.
 ///
@@ -85,6 +118,8 @@ pub struct SshOpts {
     methods: Vec<KeyMethod>,
     /// Ssh config parser ruleset
     parse_rules: ParseRule,
+    /// Ssh agent configuration for authentication
+    ssh_agent_identity: Option<SshAgentIdentity>,
 }
 
 impl SshOpts {
@@ -104,6 +139,7 @@ impl SshOpts {
             key_storage: None,
             methods: Vec::default(),
             parse_rules: ParseRule::STRICT,
+            ssh_agent_identity: None,
         }
     }
 
@@ -131,6 +167,17 @@ impl SshOpts {
     /// This option will override an eventual connection timeout specified for the current host in the ssh configuration
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.connection_timeout = Some(timeout);
+        self
+    }
+
+    /// Set configuration for ssh agent
+    ///
+    /// If `None` the ssh agent will be disabled
+    ///
+    /// If `Some(SshAgentIdentity::All)` all identities will be tried
+    /// Otherwise the provided public key will be used
+    pub fn ssh_agent_identity(mut self, ssh_agent_identity: Option<SshAgentIdentity>) -> Self {
+        self.ssh_agent_identity = ssh_agent_identity;
         self
     }
 
@@ -227,6 +274,16 @@ mod test {
             key_method.prefs().as_str(),
             "aes128-ctr,aes192-ctr,aes256-ctr,aes128-cbc,3des-cbc"
         );
+    }
+
+    #[test]
+    fn test_should_tell_whether_pubkey_matches() {
+        let identity = SshAgentIdentity::Pubkey(b"hello".to_vec());
+        assert!(identity.pubkey_matches(b"hello"));
+        assert!(!identity.pubkey_matches(b"world"));
+
+        let identity = SshAgentIdentity::All;
+        assert!(identity.pubkey_matches(b"hello"));
     }
 
     #[test]

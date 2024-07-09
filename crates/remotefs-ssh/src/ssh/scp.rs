@@ -1421,11 +1421,14 @@ mod test {
 
     #[cfg(feature = "with-containers")]
     fn setup_client() -> ScpFs {
+        use crate::SshAgentIdentity;
+
         let config_file = ssh_mock::create_ssh_config();
         let mut client = ScpFs::new(
             SshOpts::new("scp")
                 .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
-                .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS),
+                .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+                .ssh_agent_identity(Some(SshAgentIdentity::All)),
         );
         assert!(client.connect().is_ok());
         // Create wrkdir

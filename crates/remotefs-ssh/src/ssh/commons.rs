@@ -13,6 +13,7 @@ use ssh2::{MethodType as SshMethodType, Session};
 
 use super::config::Config;
 use super::SshOpts;
+use crate::SshAgentIdentity;
 
 // -- connect
 
@@ -79,29 +80,45 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
         error!("SSH handshake failed: {}", err);
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
-    // Authenticate with password or key
-    match opts.key_storage.as_ref().and_then(|x| {
-        x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
-            .or(x.resolve(
-                ssh_config.resolved_host.as_str(),
-                ssh_config.username.as_str(),
-            ))
-    }) {
-        Some(rsa_key) => {
-            session_auth_with_rsakey(
-                &mut session,
-                &ssh_config.username,
-                rsa_key.as_path(),
-                opts.password.as_deref(),
-                ssh_config.params.identity_file.as_deref(),
-            )?;
+
+    // if use_ssh_agent is enabled, try to authenticate with ssh agent
+    if let Some(ssh_agent_config) = &opts.ssh_agent_identity {
+        match session_auth_with_agent(&mut session, &ssh_config.username, ssh_agent_config) {
+            Ok(_) => {
+                info!("Authenticated with ssh agent");
+                return Ok(session);
+            }
+            Err(err) => {
+                error!("Could not authenticate with ssh agent: {}", err);
+            }
         }
-        None => {
-            session_auth_with_password(
-                &mut session,
-                &ssh_config.username,
-                opts.password.as_deref(),
-            )?;
+    }
+
+    // Authenticate with password or key
+    if !session.authenticated() {
+        match opts.key_storage.as_ref().and_then(|x| {
+            x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
+                .or(x.resolve(
+                    ssh_config.resolved_host.as_str(),
+                    ssh_config.username.as_str(),
+                ))
+        }) {
+            Some(rsa_key) => {
+                session_auth_with_rsakey(
+                    &mut session,
+                    &ssh_config.username,
+                    rsa_key.as_path(),
+                    opts.password.as_deref(),
+                    ssh_config.params.identity_file.as_deref(),
+                )?;
+            }
+            None => {
+                session_auth_with_password(
+                    &mut session,
+                    &ssh_config.username,
+                    opts.password.as_deref(),
+                )?;
+            }
         }
     }
     // Return session
@@ -177,6 +194,58 @@ fn set_algo_prefs(session: &mut Session, opts: &SshOpts, config: &Config) -> Rem
         }
     }
     Ok(())
+}
+
+/// Authenticate on session with ssh agent
+fn session_auth_with_agent(
+    session: &mut Session,
+    username: &str,
+    ssh_agent_config: &SshAgentIdentity,
+) -> RemoteResult<()> {
+    let mut agent = session
+        .agent()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+
+    agent
+        .connect()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+
+    agent
+        .list_identities()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+
+    let mut connection_result = Err(RemoteError::new(RemoteErrorType::AuthenticationFailed));
+
+    for identity in agent
+        .identities()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?
+    {
+        if ssh_agent_config.pubkey_matches(identity.blob()) {
+            debug!("Trying to authenticate with ssh agent with key: {identity:?}");
+        } else {
+            continue;
+        }
+        match agent.userauth(username, &identity) {
+            Ok(()) => {
+                connection_result = Ok(());
+                debug!("Authenticated with ssh agent with key: {identity:?}");
+                break;
+            }
+            Err(err) => {
+                debug!("SSH agent auth failed: {err}");
+                connection_result = Err(RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    err,
+                ));
+            }
+        }
+    }
+
+    if let Err(err) = agent.disconnect() {
+        warn!("Could not disconnect from ssh agent: {err}");
+    }
+
+    connection_result
 }
 
 /// Authenticate on session with private key
