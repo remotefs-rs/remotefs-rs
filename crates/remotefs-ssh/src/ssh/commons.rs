@@ -11,30 +11,9 @@ use std::time::Duration;
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use ssh2::{MethodType as SshMethodType, Session};
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-use super::{config::Config, SshOpts};
+use super::config::Config;
+use super::SshOpts;
+use crate::SshAgentIdentity;
 
 // -- connect
 
@@ -101,27 +80,45 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
         error!("SSH handshake failed: {}", err);
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
-    // Authenticate with password or key
-    match opts
-        .key_storage
-        .as_ref()
-        .and_then(|x| x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str()))
-    {
-        Some(rsa_key) => {
-            session_auth_with_rsakey(
-                &mut session,
-                &ssh_config.username,
-                rsa_key.as_path(),
-                opts.password.as_deref(),
-                ssh_config.params.identity_file.as_deref(),
-            )?;
+
+    // if use_ssh_agent is enabled, try to authenticate with ssh agent
+    if let Some(ssh_agent_config) = &opts.ssh_agent_identity {
+        match session_auth_with_agent(&mut session, &ssh_config.username, ssh_agent_config) {
+            Ok(_) => {
+                info!("Authenticated with ssh agent");
+                return Ok(session);
+            }
+            Err(err) => {
+                error!("Could not authenticate with ssh agent: {}", err);
+            }
         }
-        None => {
-            session_auth_with_password(
-                &mut session,
-                &ssh_config.username,
-                opts.password.as_deref(),
-            )?;
+    }
+
+    // Authenticate with password or key
+    if !session.authenticated() {
+        match opts.key_storage.as_ref().and_then(|x| {
+            x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
+                .or(x.resolve(
+                    ssh_config.resolved_host.as_str(),
+                    ssh_config.username.as_str(),
+                ))
+        }) {
+            Some(rsa_key) => {
+                session_auth_with_rsakey(
+                    &mut session,
+                    &ssh_config.username,
+                    rsa_key.as_path(),
+                    opts.password.as_deref(),
+                    ssh_config.params.identity_file.as_deref(),
+                )?;
+            }
+            None => {
+                session_auth_with_password(
+                    &mut session,
+                    &ssh_config.username,
+                    opts.password.as_deref(),
+                )?;
+            }
         }
     }
     // Return session
@@ -197,6 +194,58 @@ fn set_algo_prefs(session: &mut Session, opts: &SshOpts, config: &Config) -> Rem
         }
     }
     Ok(())
+}
+
+/// Authenticate on session with ssh agent
+fn session_auth_with_agent(
+    session: &mut Session,
+    username: &str,
+    ssh_agent_config: &SshAgentIdentity,
+) -> RemoteResult<()> {
+    let mut agent = session
+        .agent()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+
+    agent
+        .connect()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+
+    agent
+        .list_identities()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+
+    let mut connection_result = Err(RemoteError::new(RemoteErrorType::AuthenticationFailed));
+
+    for identity in agent
+        .identities()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?
+    {
+        if ssh_agent_config.pubkey_matches(identity.blob()) {
+            debug!("Trying to authenticate with ssh agent with key: {identity:?}");
+        } else {
+            continue;
+        }
+        match agent.userauth(username, &identity) {
+            Ok(()) => {
+                connection_result = Ok(());
+                debug!("Authenticated with ssh agent with key: {identity:?}");
+                break;
+            }
+            Err(err) => {
+                debug!("SSH agent auth failed: {err}");
+                connection_result = Err(RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    err,
+                ));
+            }
+        }
+    }
+
+    if let Err(err) = agent.disconnect() {
+        warn!("Could not disconnect from ssh agent: {err}");
+    }
+
+    connection_result
 }
 
 /// Authenticate on session with private key
@@ -334,12 +383,12 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
 #[cfg(test)]
 mod test {
 
+    #[cfg(feature = "with-containers")]
+    use ssh2_config::ParseRule;
+
     use super::*;
     #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
-
-    #[cfg(feature = "with-containers")]
-    use ssh2_config::ParseRule;
 
     #[test]
     #[cfg(feature = "with-containers")]
@@ -349,7 +398,11 @@ mod test {
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .password("password");
-        let session = connect(&opts).ok().unwrap();
+
+        if let Err(err) = connect(&opts) {
+            panic!("Could not connect to server: {}", err);
+        }
+        let session = connect(&opts).unwrap();
         assert!(session.authenticated());
     }
 
@@ -361,7 +414,7 @@ mod test {
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()));
-        let session = connect(&opts).ok().unwrap();
+        let session = connect(&opts).unwrap();
         assert!(session.authenticated());
     }
 
@@ -373,7 +426,7 @@ mod test {
             .port(10022)
             .username("sftp")
             .password("password");
-        let mut session = connect(&opts).ok().unwrap();
+        let mut session = connect(&opts).unwrap();
         assert!(session.authenticated());
         // run commands
         assert!(perform_shell_cmd(&mut session, "pwd").is_ok());
@@ -387,7 +440,7 @@ mod test {
             .port(10022)
             .username("sftp")
             .password("password");
-        let mut session = connect(&opts).ok().unwrap();
+        let mut session = connect(&opts).unwrap();
         assert!(session.authenticated());
         // run commands
         assert_eq!(

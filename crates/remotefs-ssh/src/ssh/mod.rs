@@ -2,29 +2,6 @@
 //!
 //! implements the file transfer for SSH based protocols: SFTP and SCP
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 // -- ext
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -76,6 +53,39 @@ impl KeyMethod {
 
 // -- ssh options
 
+/// Ssh agent identity
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SshAgentIdentity {
+    /// Try all identities
+    All,
+    /// Use a specific identity
+    Pubkey(Vec<u8>),
+}
+
+impl From<Vec<u8>> for SshAgentIdentity {
+    fn from(v: Vec<u8>) -> Self {
+        SshAgentIdentity::Pubkey(v)
+    }
+}
+
+impl From<&[u8]> for SshAgentIdentity {
+    fn from(v: &[u8]) -> Self {
+        SshAgentIdentity::Pubkey(v.to_vec())
+    }
+}
+
+impl SshAgentIdentity {
+    /// Check if the provided public key matches the identity
+    ///
+    /// If `All` is provided, this method will always return `true`
+    pub(crate) fn pubkey_matches(&self, blob: &[u8]) -> bool {
+        match self {
+            SshAgentIdentity::All => true,
+            SshAgentIdentity::Pubkey(v) => v == blob,
+        }
+    }
+}
+
 /// Ssh options;
 /// used to build and configure SCP/SFTP client.
 ///
@@ -108,6 +118,8 @@ pub struct SshOpts {
     methods: Vec<KeyMethod>,
     /// Ssh config parser ruleset
     parse_rules: ParseRule,
+    /// Ssh agent configuration for authentication
+    ssh_agent_identity: Option<SshAgentIdentity>,
 }
 
 impl SshOpts {
@@ -127,6 +139,7 @@ impl SshOpts {
             key_storage: None,
             methods: Vec::default(),
             parse_rules: ParseRule::STRICT,
+            ssh_agent_identity: None,
         }
     }
 
@@ -154,6 +167,17 @@ impl SshOpts {
     /// This option will override an eventual connection timeout specified for the current host in the ssh configuration
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.connection_timeout = Some(timeout);
+        self
+    }
+
+    /// Set configuration for ssh agent
+    ///
+    /// If `None` the ssh agent will be disabled
+    ///
+    /// If `Some(SshAgentIdentity::All)` all identities will be tried
+    /// Otherwise the provided public key will be used
+    pub fn ssh_agent_identity(mut self, ssh_agent_identity: Option<SshAgentIdentity>) -> Self {
+        self.ssh_agent_identity = ssh_agent_identity;
         self
     }
 
@@ -250,6 +274,16 @@ mod test {
             key_method.prefs().as_str(),
             "aes128-ctr,aes192-ctr,aes256-ctr,aes128-cbc,3des-cbc"
         );
+    }
+
+    #[test]
+    fn test_should_tell_whether_pubkey_matches() {
+        let identity = SshAgentIdentity::Pubkey(b"hello".to_vec());
+        assert!(identity.pubkey_matches(b"hello"));
+        assert!(!identity.pubkey_matches(b"world"));
+
+        let identity = SshAgentIdentity::All;
+        assert!(identity.pubkey_matches(b"hello"));
     }
 
     #[test]

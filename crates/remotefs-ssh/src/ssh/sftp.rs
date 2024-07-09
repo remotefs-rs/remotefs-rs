@@ -15,29 +15,6 @@ use ssh2::{FileStat, OpenFlags, OpenType, RenameFlags};
 // -- export
 pub use ssh2::{Session as SshSession, Sftp as SshSftp};
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
 use super::{commons, SftpReadStream, SftpWriteStream, SshOpts};
 use crate::utils::path as path_utils;
 
@@ -597,13 +574,12 @@ mod test {
     use pretty_assertions::assert_eq;
     #[cfg(feature = "with-containers")]
     use serial_test::serial;
+    #[cfg(feature = "with-containers")]
+    use ssh2_config::ParseRule;
 
     use super::*;
     #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
-
-    #[cfg(feature = "with-containers")]
-    use ssh2_config::ParseRule;
 
     #[test]
     fn should_initialize_sftp_filesystem() {
@@ -1262,11 +1238,14 @@ mod test {
 
     #[cfg(feature = "with-containers")]
     fn setup_client() -> SftpFs {
+        use crate::SshAgentIdentity;
+
         let config_file = ssh_mock::create_ssh_config();
         let mut client = SftpFs::new(
             SshOpts::new("sftp")
                 .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
-                .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS),
+                .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+                .ssh_agent_identity(Some(SshAgentIdentity::All)),
         );
         assert!(client.connect().is_ok());
         // Create wrkdir

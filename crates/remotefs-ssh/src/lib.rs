@@ -11,7 +11,7 @@
 //!
 //! ```toml
 //! remotefs = "^0.2"
-//! remotefs-ssh = "^0.2"
+//! remotefs-ssh = "^0.3"
 //! ```
 //!
 //! these features are supported:
@@ -58,7 +58,10 @@ extern crate lazy_static;
 extern crate log;
 
 mod ssh;
-pub use ssh::{ParseRule as SshConfigParseRule, ScpFs, SftpFs, SshKeyStorage, SshOpts};
+pub use ssh::{
+    KeyMethod, MethodType, ParseRule as SshConfigParseRule, ScpFs, SftpFs, SshAgentIdentity,
+    SshKeyStorage, SshOpts,
+};
 
 // -- utils
 pub(crate) mod utils;
