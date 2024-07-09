@@ -11,30 +11,8 @@ use std::time::Duration;
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use ssh2::{MethodType as SshMethodType, Session};
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-use super::{config::Config, SshOpts};
+use super::config::Config;
+use super::SshOpts;
 
 // -- connect
 
@@ -45,7 +23,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     // Resolve host
     debug!("Connecting to '{}'", ssh_config.address);
     // setup tcp stream
-    let socket_addresses: Vec<SocketAddr> = match ssh_config.address.to_socket_addrs() {
+    let socket_addresses: Vec<SocketAddr> = match ssh_config.resolved_host.to_socket_addrs() {
         Ok(s) => s.collect(),
         Err(err) => {
             return Err(RemoteError::new_ex(
@@ -334,12 +312,12 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
 #[cfg(test)]
 mod test {
 
+    #[cfg(feature = "with-containers")]
+    use ssh2_config::ParseRule;
+
     use super::*;
     #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
-
-    #[cfg(feature = "with-containers")]
-    use ssh2_config::ParseRule;
 
     #[test]
     #[cfg(feature = "with-containers")]
