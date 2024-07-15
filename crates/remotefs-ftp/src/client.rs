@@ -599,6 +599,7 @@ mod test {
     }
 
     #[test]
+    #[ignore]
     #[cfg(feature = "native-tls")]
     fn should_connect_with_ftps() {
         let mut client = FtpFs::new("test.rebex.net", 21)
