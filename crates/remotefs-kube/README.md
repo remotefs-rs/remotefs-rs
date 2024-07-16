@@ -17,7 +17,7 @@
   /></a>
   <a href="https://github.com/veeso/remotefs-rs-kube/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-kube.svg"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs-kube.svg?style=badge"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-kube"
