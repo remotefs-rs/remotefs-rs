@@ -1,0 +1,44 @@
+[package]
+authors = ["Christian Visintin <christian.visintin1997@gmail.com>"]
+categories = ["network-programming"]
+description = "remotefs implementation for kube"
+documentation = "https://docs.rs/remotefs-kube"
+edition = "2021"
+include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+keywords = ["kube-client", "kube"]
+license = "MIT"
+name = "remotefs-kube"
+readme = "README.md"
+repository = "https://github.com/veeso/remotefs-rs-kube"
+version = "0.1.0"
+
+[dependencies]
+chrono = "^0.4"
+k8s-openapi = { version = "0.22", features = ["v1_30"] }
+kube = { version = "0.92", features = ["client", "config", "ws"] }
+lazy-regex = "3"
+log = "^0.4"
+remotefs = "^0.2"
+tar = "0.4"
+tempfile = "3"
+thiserror = "^1"
+tokio = { version = "1", features = ["fs", "rt"] }
+
+[dev-dependencies]
+env_logger = "^0.11"
+pretty_assertions = "1"
+rand = "^0.8.4"
+serde_json = "1"
+serial_test = "^3"
+
+[target."cfg(target_os = \"windows\")"]
+[target."cfg(target_os = \"windows\")".dependencies]
+path-slash = "^0.2.1"
+
+[features]
+default = ["find"]
+# misc
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+# tests
+integration-tests = []
