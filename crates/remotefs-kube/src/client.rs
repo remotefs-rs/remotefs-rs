@@ -30,6 +30,7 @@ static LS_RE: Lazy<Regex> = lazy_regex!(
 /// Kube "filesystem" client
 pub struct KubeFs {
     config: Option<Config>,
+    container: String,
     pod_name: String,
     pods: Option<Api<Pod>>,
     runtime: Arc<Runtime>,
@@ -40,9 +41,10 @@ impl KubeFs {
     /// Creates a new `KubeFs`
     ///
     /// If `config()` is not called then, it will try to use the configuration from the default kubeconfig file
-    pub fn new(pod_name: impl ToString, runtime: &Arc<Runtime>) -> Self {
+    pub fn new(pod_name: impl ToString, container: impl ToString, runtime: &Arc<Runtime>) -> Self {
         Self {
             config: None,
+            container: container.to_string(),
             pod_name: pod_name.to_string(),
             pods: None,
             runtime: runtime.clone(),
@@ -210,6 +212,7 @@ impl KubeFs {
                 .stdout(true)
                 .stdin(false)
                 .stderr(true)
+                .container(self.container.clone())
                 .max_stdout_buf_size(STDOUT_SIZE);
 
             let mut process = self
@@ -709,7 +712,10 @@ impl RemoteFs for KubeFs {
         debug!("uploading archive to kube in dir: {}", dir_path.display());
 
         let size = self.runtime.block_on(async {
-            let attach_params = AttachParams::default().stdin(true).stderr(false);
+            let attach_params = AttachParams::default()
+                .container(self.container.clone())
+                .stdin(true)
+                .stderr(false);
             let mut cmd = self
                 .pods
                 .as_ref()
@@ -766,6 +772,7 @@ impl RemoteFs for KubeFs {
                 .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
 
             let attach_params = AttachParams::default()
+                .container(self.container.clone())
                 .stdout(true)
                 .stderr(true)
                 .stdin(false);
@@ -856,7 +863,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let mut client = KubeFs::new("test", &rt);
+        let mut client = KubeFs::new("test", "test", &rt);
         assert!(client.config.is_none());
         assert_eq!(client.is_connected(), false);
     }
@@ -869,7 +876,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let mut client = KubeFs::new("aaaaaa", &rt);
+        let mut client = KubeFs::new("aaaaaa", "test", &rt);
         assert!(client.connect().is_err());
     }
 
@@ -1483,7 +1490,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", &rt);
+        let client = KubeFs::new("test", "test", &rt);
         assert_eq!(
             client.get_name_and_link("Cargo.toml"),
             (String::from("Cargo.toml"), None)
@@ -1502,7 +1509,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", &rt);
+        let client = KubeFs::new("test", "test", &rt);
         // File
         let entry = client
             .parse_ls_output(
@@ -1543,7 +1550,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", &rt);
+        let client = KubeFs::new("test", "test", &rt);
         // Directory
         let entry = client
             .parse_ls_output(
@@ -1588,7 +1595,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", &rt);
+        let client = KubeFs::new("test", "test", &rt);
         // File
         let entry = client
             .parse_ls_output(
@@ -1616,7 +1623,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", &rt);
+        let client = KubeFs::new("test", "test", &rt);
         assert!(client
             .parse_ls_output(
                 Path::new("/tmp"),
@@ -1653,7 +1660,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let mut client = KubeFs::new("test", &rt);
+        let mut client = KubeFs::new("test", "test", &rt);
         assert!(client.change_dir(Path::new("/tmp")).is_err());
         assert!(client
             .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
@@ -1777,7 +1784,7 @@ mod test {
             pods
         });
 
-        let mut client = KubeFs::new(&pod_name, &runtime).config(config.clone());
+        let mut client = KubeFs::new(&pod_name, "alpine", &runtime).config(config.clone());
         client.connect().expect("connection failed");
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());

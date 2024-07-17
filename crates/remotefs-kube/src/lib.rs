@@ -12,7 +12,7 @@
 //!
 //! ```toml
 //! remotefs = "^0.2"
-//! remotefs-kube = "^0.1"
+//! remotefs-kube = "^0.2"
 //! ```
 //!
 //! these features are supported:

@@ -7,7 +7,7 @@
 <p align="center">~ Remotefs kube client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0 (16/07/2024)</p>
+<p align="center">Current version: 0.2.0 (17/07/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -49,7 +49,7 @@ First of all you need to add **remotefs** and the client to your project depende
 
 ```toml
 remotefs = "^0.2"
-remotefs-kube = "^0.1"
+remotefs-kube = "^0.2"
 ```
 
 these features are supported:
