@@ -7,7 +7,7 @@
 <p align="center">~ Remotefs kube client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (17/07/2024)</p>
+<p align="center">Current version: 0.3.0 (29/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -49,7 +49,7 @@ First of all you need to add **remotefs** and the client to your project depende
 
 ```toml
 remotefs = "^0.2"
-remotefs-kube = "^0.2"
+remotefs-kube = "^0.3"
 ```
 
 these features are supported:
@@ -57,15 +57,39 @@ these features are supported:
 - `find`: enable `find()` method for RemoteFs. (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
-### Kube client
+The library provides two different clients:
 
-Here is a basic usage example, with the `Kube` client, which is very similiar to the `Scp` client.
+- **KubeMultiPodFs** client
+- **KubeContainerFs** client
 
-```rust,ignore
+### Kube multi pod client
+
+The MultiPod client gives access to all the pods with their own containers in a namespace.
+
+This client creates an abstract file system with the following structure
+
+- / (root)
+  - pod-a
+    - container-a
+      - / (container-a root)
+        - /bin
+        - /home
+        - ...
+    - container-b
+      - / (container-b root)
+        - ...
+  - pod-b
+    - container-c
+      - / (container-c root)
+        - ...
+
+So paths have the following structure: `/pod-name/container-name/path/to/file`.
+
+```rust
 
 // import remotefs trait and client
 use remotefs::RemoteFs;
-use remotefs_ssh::{SshConfigParseRule, SftpFs, SshOpts};
+use remotefs_kube::KubeMultiPodFs;
 use std::path::Path;
 
 let rt = Arc::new(
@@ -74,7 +98,36 @@ let rt = Arc::new(
     .build()
     .unwrap(),
 );
-let mut client: KubeFs = KubeFs::new("my-pod", &rt);
+let mut client: KubeMultiPodFs = KubeMultiPodFs::new(&rt);
+
+// connect
+assert!(client.connect().is_ok());
+// get working directory
+println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+// change working directory
+assert!(client.change_dir(Path::new("/my-pod/alpine/tmp")).is_ok());
+// disconnect
+assert!(client.disconnect().is_ok());
+```
+
+### Kube container client
+
+Here is a basic usage example, with the `KubeContainerFs` client, which is used to connect and interact with a single container on a certain pod. This client gives the entire access to the container file system.
+
+```rust
+
+// import remotefs trait and client
+use remotefs::RemoteFs;
+use remotefs_kube::KubeContainerFs;
+use std::path::Path;
+
+let rt = Arc::new(
+    tokio::runtime::Builder::new_current_thread()
+    .enable_all()
+    .build()
+    .unwrap(),
+);
+let mut client: KubeContainerFs = KubeContainerFs::new("my-pod", "container-name", &rt);
 
 // connect
 assert!(client.connect().is_ok());

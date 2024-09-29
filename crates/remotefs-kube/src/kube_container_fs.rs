@@ -1,6 +1,6 @@
-//! ## SCP
+//! ## Kube Container FS
 //!
-//! Scp remote fs implementation
+//! The `KubeContainerFs` client is a client that allows you to interact with a container in a pod.
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -27,17 +27,17 @@ static LS_RE: Lazy<Regex> = lazy_regex!(
     r#"^([\-ld])([\-rwxsStT]{9})\s+(\d+)\s+(.+)\s+(.+)\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(.+)$"#
 );
 
-/// Kube "filesystem" client
-pub struct KubeFs {
-    config: Option<Config>,
-    container: String,
-    pod_name: String,
-    pods: Option<Api<Pod>>,
+/// Kube "filesystem" client to interact with a container in a pod
+pub struct KubeContainerFs {
+    pub(crate) config: Option<Config>,
+    pub(crate) container: String,
+    pub(crate) pod_name: String,
+    pub(crate) pods: Option<Api<Pod>>,
     runtime: Arc<Runtime>,
-    wrkdir: PathBuf,
+    pub(crate) wrkdir: PathBuf,
 }
 
-impl KubeFs {
+impl KubeContainerFs {
     /// Creates a new `KubeFs`
     ///
     /// If `config()` is not called then, it will try to use the configuration from the default kubeconfig file
@@ -321,7 +321,7 @@ impl KubeFs {
     }
 }
 
-impl RemoteFs for KubeFs {
+impl RemoteFs for KubeContainerFs {
     fn connect(&mut self) -> RemoteResult<Welcome> {
         debug!("Initializing Kube connection...");
         let api = self.runtime.block_on(async {
@@ -863,7 +863,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let mut client = KubeFs::new("test", "test", &rt);
+        let mut client = KubeContainerFs::new("test", "test", &rt);
         assert!(client.config.is_none());
         assert_eq!(client.is_connected(), false);
     }
@@ -876,7 +876,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let mut client = KubeFs::new("aaaaaa", "test", &rt);
+        let mut client = KubeContainerFs::new("aaaaaa", "test", &rt);
         assert!(client.connect().is_err());
     }
 
@@ -1490,7 +1490,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", "test", &rt);
+        let client = KubeContainerFs::new("test", "test", &rt);
         assert_eq!(
             client.get_name_and_link("Cargo.toml"),
             (String::from("Cargo.toml"), None)
@@ -1509,7 +1509,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", "test", &rt);
+        let client = KubeContainerFs::new("test", "test", &rt);
         // File
         let entry = client
             .parse_ls_output(
@@ -1550,7 +1550,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", "test", &rt);
+        let client = KubeContainerFs::new("test", "test", &rt);
         // Directory
         let entry = client
             .parse_ls_output(
@@ -1595,7 +1595,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", "test", &rt);
+        let client = KubeContainerFs::new("test", "test", &rt);
         // File
         let entry = client
             .parse_ls_output(
@@ -1623,7 +1623,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let client = KubeFs::new("test", "test", &rt);
+        let client = KubeContainerFs::new("test", "test", &rt);
         assert!(client
             .parse_ls_output(
                 Path::new("/tmp"),
@@ -1660,7 +1660,7 @@ mod test {
                 .build()
                 .unwrap(),
         );
-        let mut client = KubeFs::new("test", "test", &rt);
+        let mut client = KubeContainerFs::new("test", "test", &rt);
         assert!(client.change_dir(Path::new("/tmp")).is_err());
         assert!(client
             .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
@@ -1693,7 +1693,7 @@ mod test {
     // -- test utils
 
     #[cfg(feature = "integration-tests")]
-    fn setup_client() -> (Api<Pod>, KubeFs) {
+    fn setup_client() -> (Api<Pod>, KubeContainerFs) {
         // setup pod with random name
 
         use kube::api::PostParams;
@@ -1784,7 +1784,7 @@ mod test {
             pods
         });
 
-        let mut client = KubeFs::new(&pod_name, "alpine", &runtime).config(config.clone());
+        let mut client = KubeContainerFs::new(&pod_name, "alpine", &runtime).config(config.clone());
         client.connect().expect("connection failed");
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
@@ -1799,37 +1799,22 @@ mod test {
     }
 
     #[cfg(feature = "integration-tests")]
-    fn finalize_client(pods: Api<Pod>, mut client: KubeFs) {
-        // Get working directory
-
-        use kube::api::DeleteParams;
-        use kube::ResourceExt as _;
-        let wrkdir = client.pwd().ok().unwrap();
-        // Remove directory
-        assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
+    fn finalize_client(_pods: Api<Pod>, mut client: KubeContainerFs) {
         assert!(client.disconnect().is_ok());
-
-        // cleanup pods
-        let pod_name = client.pod_name;
-        client.runtime.block_on(async {
-            let dp = DeleteParams::default();
-            pods.delete(&pod_name, &dp).await.unwrap().map_left(|pdel| {
-                info!("Deleting {pod_name} pod started: {:?}", pdel);
-                assert_eq!(pdel.name_any(), pod_name);
-            });
-        })
     }
 
     #[cfg(feature = "integration-tests")]
     fn generate_pod_name() -> String {
-        use rand::distributions::{Alphanumeric, DistString};
-        use rand::thread_rng;
-        let random_string: String = Alphanumeric
-            .sample_string(&mut thread_rng(), 8)
-            .chars()
+        use rand::distributions::Alphanumeric;
+        use rand::{thread_rng, Rng as _};
+
+        let mut rng = thread_rng();
+        let random_string: String = std::iter::repeat(())
+            .map(|()| rng.sample(Alphanumeric))
+            .map(char::from)
             .filter(|c| c.is_alphabetic())
             .map(|c| c.to_ascii_lowercase())
-            .take(8)
+            .take(12)
             .collect();
 
         format!("test-{}", random_string)
