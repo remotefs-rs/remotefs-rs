@@ -37,7 +37,7 @@ pub fn parse_datetime(tm: &str, fmt: &str) -> Result<SystemTime, ParseError> {
         Ok(dt) => {
             let sys_time: SystemTime = SystemTime::UNIX_EPOCH;
             Ok(sys_time
-                .checked_add(Duration::from_secs(dt.timestamp() as u64))
+                .checked_add(Duration::from_secs(dt.and_utc().timestamp() as u64))
                 .unwrap_or(SystemTime::UNIX_EPOCH))
         }
         Err(err) => Err(err),

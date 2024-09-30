@@ -532,7 +532,7 @@ impl RemoteFs for AwsS3Fs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read>,
+        mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         self.check_connection()?;
         let src = self.resolve(path);
