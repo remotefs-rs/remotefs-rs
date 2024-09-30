@@ -2,7 +2,6 @@
 extern crate log;
 
 use argh::FromArgs;
-
 use remotefs::RemoteFs;
 #[cfg(target_family = "windows")]
 use remotefs_smb::{SmbCredentials, SmbFs};
@@ -13,7 +12,7 @@ use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
 #[argh(description = "
 where positional can be: [smb://address[:port]]
 
-Please, report issues to <https://github.com/veeso/remotefs-rs-smb>
+Please, report issues to <https://github.com/remotefs-rs/remotefs-rs-smb>
 Please, consider supporting the author <https://ko-fi.com/veeso>")]
 struct Args {
     #[argh(option, short = 'P', description = "specify password")]

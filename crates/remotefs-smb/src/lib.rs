@@ -3,15 +3,15 @@
 
 //! # remotefs-smb
 //!
-//! remotefs-smb is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the SMB protocol.
+//! remotefs-smb is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SMB protocol.
 //!
 //! ## Get started
 //!
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.2.0"
-//! remotefs-smb = "^0.2.0"
+//! remotefs = "^0.3"
+//! remotefs-smb = "^0.3"
 //! ```
 //!
 //! these features are supported:
@@ -58,6 +58,12 @@
 //!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo-128.png"
+)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png"
+)]
 
 // -- crates
 #[macro_use]

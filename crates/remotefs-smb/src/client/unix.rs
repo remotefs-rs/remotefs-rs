@@ -208,7 +208,7 @@ impl RemoteFs for SmbFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read>,
+        mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         self.check_connection()?;
         let path = self.get_uri(path);
@@ -234,7 +234,7 @@ impl RemoteFs for SmbFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read>,
+        mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         self.check_connection()?;
         let path = self.get_uri(path);

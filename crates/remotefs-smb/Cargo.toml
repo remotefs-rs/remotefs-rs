@@ -10,12 +10,12 @@ keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
 license = "MIT"
 name = "remotefs-smb"
 readme = "README.md"
-repository = "https://github.com/veeso/remotefs-rs-smb"
-version = "0.2.1"
+repository = "https://github.com/remotefs-rs/remotefs-rs-smb"
+version = "0.3.0"
 
 [dependencies]
 log = "^0.4.14"
-remotefs = "^0.2.0"
+remotefs = "^0.3.0"
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]
@@ -25,25 +25,28 @@ pavao = "^0.2"
 [target."cfg(target_family = \"windows\")"]
 [target."cfg(target_family = \"windows\")".dependencies]
 filetime = "^0.2"
-windows-sys = { version ="^0.48", features = [ "Win32_NetworkManagement_WNet", "Win32_Foundation" ] }
+windows-sys = { version = "^0.59", features = [
+  "Win32_NetworkManagement_WNet",
+  "Win32_Foundation",
+] }
 
 [dev-dependencies]
 anyhow = "^1"
 argh = "^0.1.7"
-env_logger = "^0.10"
+env_logger = "^0.11"
 pretty_assertions = "^1.0.0"
 rand = "^0.8.4"
 rpassword = "7.2"
-serial_test = "^2.0"
+serial_test = "^3"
 tempfile = "^3.2.0"
 
 [features]
-default = [ "find" ]
+default = ["find"]
 # misc
-find = [ "remotefs/find" ]
-no-log = [ "log/max_level_off" ]
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
 # tests
-with-containers = [ ]
+with-containers = []
 
 [[example]]
 name = "tree"

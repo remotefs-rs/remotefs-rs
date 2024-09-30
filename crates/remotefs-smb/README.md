@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.1 (15/12/2023)</p>
+<p align="center">Current version: 0.3.0 (30/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -19,9 +19,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-smb/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-smb.svg"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-smb.svg"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-smb"
@@ -41,24 +41,24 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veeso/remotefs-rs-smb/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-smb/workflows/Linux/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-smb/workflows/Linux/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-smb/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-smb/workflows/MacOS/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-smb/workflows/MacOS/badge.svg"
       alt="MacOS CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-smb/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-smb/workflows/Windows/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-smb/workflows/Windows/badge.svg"
       alt="Windows CI"
   /></a>
-  <a href="https://coveralls.io/github/veeso/remotefs-rs-smb"
+  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-smb"
     ><img
-      src="https://coveralls.io/repos/github/veeso/remotefs-rs-smb/badge.svg"
+      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-smb/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs-smb"
@@ -72,7 +72,7 @@
 
 ## About remotefs-smb ☁️
 
-remotefs-smb is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the SMB protocol.
+remotefs-smb is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SMB protocol.
 
 ---
 
@@ -81,7 +81,8 @@ remotefs-smb is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-smb` to your project dependencies:
 
 ```toml
-remotefs-smb = "^0.2"
+remotefs = "0.3"
+remotefs-smb = "^0.3"
 ```
 
 these features are supported:
