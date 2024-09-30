@@ -12,8 +12,8 @@
 //!
 //! ```toml
 //! [dependencies]
-//! remotefs = "^0.2.0"
-//! remotefs-webdav = "^0.1.0"
+//! remotefs = "^0.3"
+//! remotefs-webdav = "^0.2"
 //! ```
 //!
 //! these features are supported:
@@ -21,6 +21,12 @@
 //! - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo-128.png"
+)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png"
+)]
 
 #[macro_use]
 extern crate log;
@@ -239,7 +245,7 @@ impl RemoteFs for WebDAVFs {
         &mut self,
         path: &Path,
         _metadata: &Metadata,
-        mut reader: Box<dyn std::io::prelude::Read>,
+        mut reader: Box<dyn std::io::Read + Send>,
     ) -> RemoteResult<u64> {
         let url = self.url(path, false);
         debug!("Creating file: {}", url);
@@ -261,7 +267,7 @@ impl RemoteFs for WebDAVFs {
     fn open_file(
         &mut self,
         src: &Path,
-        mut dest: Box<dyn std::io::prelude::Write + Send>,
+        mut dest: Box<dyn std::io::Write + Send>,
     ) -> RemoteResult<u64> {
         let url = self.url(src, false);
         debug!("Opening file: {}", url);

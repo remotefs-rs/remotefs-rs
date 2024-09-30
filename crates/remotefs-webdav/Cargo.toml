@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-webdav"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 edition = "2021"
 categories = ["network-programming"]
@@ -16,11 +16,9 @@ repository = "https://github.com/veeso/remotefs-rs-webdav"
 [dependencies]
 bytes = "1.5"
 log = "0.4"
-remotefs = "0.2"
+remotefs = "0.3"
 rustydav = "0.1.3"
 thiserror = "^1.0"
-#webdav-xml = "^0.1"
-#webdav-xml = { git = "https://github.com/veeso/webdav-rs.git", package = "webdav-xml" }
 
 # webdav-xml deps
 bytestring = "1.3.1"

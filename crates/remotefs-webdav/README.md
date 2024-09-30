@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs WebDAV client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.1 (02/03/2024)</p>
+<p align="center">Current version: 0.2.0 (30/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -66,8 +66,8 @@ remotefs-webdav is a client implementation for [remotefs](https://github.com/vee
 First of all, add `remotefs-webdav` to your project dependencies:
 
 ```toml
-remotefs = "^0.2.0"
-remotefs-webdav = "^0.1.0"
+remotefs = "^0.3"
+remotefs-webdav = "^0.2"
 ```
 
 these features are supported:

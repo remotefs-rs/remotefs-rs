@@ -68,6 +68,7 @@ where
 /// As such, `IntoXml` shouldn't be implemented directly: [`Element`] and
 /// [`Into<Value>`] should be implemented instead, and you get the `IntoXml`
 /// implementation for free.
+#[allow(dead_code)]
 pub trait IntoXml: Sized {
     fn write_xml(self, writer: impl std::io::Write) -> Result<()>;
     fn into_xml(self) -> Result<Bytes> {
