@@ -19,7 +19,6 @@ repository = "https://github.com/remotefs-rs/remotefs-rs"
 version = "0.2.1"
 
 [dependencies]
-chrono = "^0.4"
 log = "^0.4"
 thiserror = "^1"
 wildmatch = { version = "^2", optional = true }
