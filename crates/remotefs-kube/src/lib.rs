@@ -4,15 +4,15 @@
 
 //! # remotefs-kube
 //!
-//! remotefs-kube is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the Kube API protocol.
+//! remotefs-kube is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the Kube API protocol.
 //!
 //! ## Get started
 //!
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.2"
-//! remotefs-kube = "^0.3"
+//! remotefs = "^0.3"
+//! remotefs-kube = "^0.4"
 //! ```
 //!
 //! these features are supported:
