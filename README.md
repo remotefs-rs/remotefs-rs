@@ -15,7 +15,7 @@
 <p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.1 (30/09/2024)</p>
+<p align="center">Current version: 0.3.0 (30/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -111,7 +111,7 @@ Using remotefs, this is no longer a problem: all you need is to configure the op
 First, add `remotefs` to your list of dependencies:
 
 ```toml
-remotefs = "^0.2.0"
+remotefs = "^0.3.0"
 ```
 
 select over a variety of features:
@@ -126,37 +126,37 @@ To use an existing client, you must add them to your `Cargo.toml`, along with re
 - [aws-s3](https://github.com/remotefs-rs/remotefs-rs-aws-s3)
 
   ```toml
-  remotefs-aws-s3 = "^0.2.0"
+  remotefs-aws-s3 = "^0.3.0"
   ```
 
 - [ftp](https://github.com/remotefs-rs/remotefs-rs-ftp)
 
   ```toml
-  remotefs-ftp = { version = "^0.1.0", features = [ "secure" ] }
+  remotefs-ftp = { version = "^0.3.0", features = [ "secure" ] }
   ```
 
 - [kube](https://github.com/remotefs-rs/remotefs-rs-kube)
 
   ```toml
-  remotefs-kube = "^0.2.0"
+  remotefs-kube = "^0.3.0"
   ```
 
 - [smb](https://github.com/remotefs-rs/remotefs-rs-smb)
 
   ```toml
-  remotefs-smb = "^0.2.0"
+  remotefs-smb = "^0.3.0"
   ```
 
 - [ssh](https://github.com/remotefs-rs/remotefs-rs-ssh)
 
   ```toml
-  remotefs-ssh = "^0.3.0"
+  remotefs-ssh = "^0.4.0"
   ```
 
 - [webdav](https://github.com/remotefs-rs/remotefs-rs-webdav)
 
   ```toml
-  remotefs-webdav = "^0.1.0"
+  remotefs-webdav = "^0.2.0"
   ```
 
 ---
@@ -198,40 +198,28 @@ The following table states the compatibility for each client associated with the
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Aws-S3 | Ftp | Scp | Sftp | Smb | WebDAV |
-| -------------- | ------ | --- | --- | ---- |-----| ------ |
-| append_file    | No     | Yes | No  | Yes  | Yes | No     |
-| append         | No     | Yes | No  | Yes  | No  | No     |
-| change_dir     | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| copy           | No     | No  | Yes | Yes  | No  | No     |
-| create_dir     | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| create_file    | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| create         | No     | Yes | Yes | Yes  | No  | No     |
-| exec           | No     | No  | Yes | Yes  | No  | No     |
-| exists         | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| list_dir       | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| mov            | No     | Yes | Yes | Yes  | Yes | Yes    |
-| open_file      | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| open           | No     | Yes | Yes | Yes  | No  | No     |
-| pwd            | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| remove_dir_all | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| remove_dir     | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| remove_file    | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| setstat        | No     | No  | Yes | Yes  | No  | No     |
-| stat           | Yes    | Yes | Yes | Yes  | Yes | Yes    |
-| symlink        | No     | No  | Yes | Yes  | Yes | No     |
-
----
-
-## Why there isn't an async trait
-
-The reason is that async traits are still meh. Even if I implemented the async trait which would require a huge effort to update all the client libraries, that woulnd't be enough to guarantee the same functionalities as the sync client.
-
-First of all the async trait requires many more bounds such as `Send` to all the IO types, which may not be supported in the clients, and even worse currently the async trait won't let you to create a trait object from RemoteFs, which is basically the whole point of the library.
-
-Anyway, exception made for FTP, all the libraries actually use async underneath if supported, so in most cases the clients are already async.
-
-If you know how to make the async trait work with all the client libraries, feel free to create PRs for it.
+| Client/Method  | Aws-S3 | Ftp | Kube | Scp | Sftp | Smb | WebDAV |
+| -------------- | ------ | --- |------| --- | ---- |-----| ------ |
+| append_file    | No     | Yes | No   | No  | Yes  | Yes | No     |
+| append         | No     | Yes | No   | No  | Yes  | No  | No     |
+| change_dir     | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| copy           | No     | No  | Yes  | Yes | Yes  | No  | No     |
+| create_dir     | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| create_file    | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| create         | No     | Yes | No   | Yes | Yes  | No  | No     |
+| exec           | No     | No  | Yes  | Yes | Yes  | No  | No     |
+| exists         | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| list_dir       | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| mov            | No     | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| open_file      | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| open           | No     | Yes | No   | Yes | Yes  | No  | No     |
+| pwd            | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| remove_dir_all | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| remove_dir     | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| remove_file    | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| setstat        | No     | No  | Yes  | Yes | Yes  | No  | No     |
+| stat           | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
+| symlink        | No     | No  | Yes  | Yes | Yes  | Yes | No     |
 
 ---
 
