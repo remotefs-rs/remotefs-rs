@@ -2,38 +2,13 @@
 //!
 //! file metadata
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-use super::{FileType, UnixPex};
-
+use std::fs::Metadata as StdMetadata;
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::MetadataExt;
-use std::{
-    fs::Metadata as StdMetadata,
-    path::{Path, PathBuf},
-    time::SystemTime,
-};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use super::{FileType, UnixPex};
 
 /// File metadata
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -191,11 +166,12 @@ impl From<StdMetadata> for Metadata {
 #[cfg(test)]
 mod test {
 
-    use super::super::UnixPexClass;
-    use super::*;
+    use std::time::{Duration, UNIX_EPOCH};
 
     use pretty_assertions::assert_eq;
-    use std::time::{Duration, UNIX_EPOCH};
+
+    use super::super::UnixPexClass;
+    use super::*;
 
     #[test]
     fn should_initialize_metadata() {

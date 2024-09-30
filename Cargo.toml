@@ -4,14 +4,19 @@ categories = ["network-programming"]
 description = "a client library to work with all file transfer protocols"
 documentation = "https://docs.rs/remotefs"
 edition = "2021"
-homepage = "https://veeso.github.io/remotefs/"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
-keywords = ["scp-client", "sftp-client", "ftp-client", "s3-client"]
+keywords = [
+  "scp-client",
+  "sftp-client",
+  "ftp-client",
+  "s3-client",
+  "kube-client",
+]
 license = "MIT"
 name = "remotefs"
 readme = "README.md"
-repository = "https://github.com/veeso/remotefs-rs"
-version = "0.2.0"
+repository = "https://github.com/remotefs-rs/remotefs-rs"
+version = "0.2.1"
 
 [dependencies]
 chrono = "^0.4"

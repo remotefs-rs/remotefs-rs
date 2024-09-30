@@ -1,6 +1,10 @@
 # remotefs
 
 <p align="center">
+  <img src="/assets/logo.png" alt="logo" width="256" height="256" />
+</p>
+
+<p align="center">
   <a href="https://veeso.github.io/remotefs/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
   ·
   <a href="https://veeso.github.io/remotefs/#get-started" target="_blank">Get started</a>
@@ -11,7 +15,7 @@
 <p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (04/01/2022)</p>
+<p align="center">Current version: 0.2.1 (30/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -21,7 +25,7 @@
   /></a>
   <a href="https://github.com/veeso/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=badge"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs"
@@ -74,7 +78,7 @@
 
 remotefs is a library that provides a file system structure to work with all the most popular file transfer protocols.
 This is achieved through a trait called `RemoteFs` which exposes methods to operate on the remote file system.
-Currently the library exposes a client for **Sftp**, **Scp**, **Ftp** and **Aws-s3** as external libraries.
+Currently the library exposes a client for **Sftp**, **Scp**, **Kube**, **Ftp**, **WebDAV** and **Aws-s3** as external libraries.
 
 ### Why remotefs ❓
 
@@ -119,31 +123,37 @@ select over a variety of features:
 
 To use an existing client, you must add them to your `Cargo.toml`, along with remotefs:
 
-- [aws-s3](https://github.com/veeso/remotefs-rs-aws-s3)
+- [aws-s3](https://github.com/remotefs-rs/remotefs-rs-aws-s3)
 
   ```toml
   remotefs-aws-s3 = "^0.2.0"
   ```
 
-- [ftp](https://github.com/veeso/remotefs-rs-ftp)
+- [ftp](https://github.com/remotefs-rs/remotefs-rs-ftp)
 
   ```toml
   remotefs-ftp = { version = "^0.1.0", features = [ "secure" ] }
   ```
 
-- [smb](https://github.com/veeso/remotefs-rs-smb)
+- [kube](https://github.com/remotefs-rs/remotefs-rs-kube)
+
+  ```toml
+  remotefs-kube = "^0.2.0"
+  ```
+
+- [smb](https://github.com/remotefs-rs/remotefs-rs-smb)
 
   ```toml
   remotefs-smb = "^0.2.0"
   ```
 
-- [ssh](https://github.com/veeso/remotefs-rs-ssh)
+- [ssh](https://github.com/remotefs-rs/remotefs-rs-ssh)
 
   ```toml
-  remotefs-ssh = "^0.2.0"
+  remotefs-ssh = "^0.3.0"
   ```
 
-- [webdav](https://github.com/veeso/remotefs-rs-webdav)
+- [webdav](https://github.com/remotefs-rs/remotefs-rs-webdav)
 
   ```toml
   remotefs-webdav = "^0.1.0"
@@ -210,6 +220,18 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | setstat        | No     | No  | Yes | Yes  | No  | No     |
 | stat           | Yes    | Yes | Yes | Yes  | Yes | Yes    |
 | symlink        | No     | No  | Yes | Yes  | Yes | No     |
+
+---
+
+## Why there isn't an async trait
+
+The reason is that async traits are still meh. Even if I implemented the async trait which would require a huge effort to update all the client libraries, that woulnd't be enough to guarantee the same functionalities as the sync client.
+
+First of all the async trait requires many more bounds such as `Send` to all the IO types, which may not be supported in the clients, and even worse currently the async trait won't let you to create a trait object from RemoteFs, which is basically the whole point of the library.
+
+Anyway, exception made for FTP, all the libraries actually use async underneath if supported, so in most cases the clients are already async.
+
+If you know how to make the async trait work with all the client libraries, feel free to create PRs for it.
 
 ---
 
