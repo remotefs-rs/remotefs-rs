@@ -9,7 +9,7 @@ keywords = ["kube-client", "kube"]
 license = "MIT"
 name = "remotefs-kube"
 readme = "README.md"
-repository = "https://github.com/veeso/remotefs-rs-kube"
+repository = "https://github.com/remotefs-rs/remotefs-rs-kube"
 version = "0.3.0"
 
 [dependencies]
@@ -19,7 +19,7 @@ k8s-openapi = { version = "0.22", features = ["v1_30"] }
 kube = { version = "0.92", features = ["client", "config", "ws"] }
 lazy-regex = "3"
 log = "^0.4"
-remotefs = "^0.2"
+remotefs = "^0.3"
 tar = "0.4"
 tempfile = "3"
 thiserror = "^1"

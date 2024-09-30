@@ -681,7 +681,7 @@ impl RemoteFs for KubeContainerFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        reader: Box<dyn std::io::Read>,
+        reader: Box<dyn std::io::Read + Send>,
     ) -> RemoteResult<u64> {
         self.check_connection()?;
         let path = path_utils::absolutize(self.wrkdir.as_path(), path);

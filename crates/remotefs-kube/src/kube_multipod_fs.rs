@@ -625,7 +625,7 @@ impl RemoteFs for KubeMultiPodFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        reader: Box<dyn std::io::Read>,
+        reader: Box<dyn std::io::Read + Send>,
     ) -> RemoteResult<u64> {
         let path = self.kube_path(path);
 
@@ -657,7 +657,7 @@ impl RemoteFs for KubeMultiPodFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        reader: Box<dyn std::io::Read>,
+        reader: Box<dyn std::io::Read + Send>,
     ) -> RemoteResult<u64> {
         let path = self.kube_path(path);
 
