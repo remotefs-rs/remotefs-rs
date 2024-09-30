@@ -327,7 +327,6 @@ impl RemoteFs for SmbFs {
         debug!("creating {} for reading...", path_abs.display());
 
         let writer = std::fs::OpenOptions::new()
-            .write(true)
             .append(true)
             .open(&path_abs)
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
