@@ -390,7 +390,7 @@ impl RemoteFs for FtpFs {
         self.check_connection()?;
         let path = Self::resolve(path);
         let stream = self.stream.as_mut().unwrap();
-        stream.rm(&path.as_path().to_string_lossy()).map_err(|e| {
+        stream.rm(path.as_path().to_string_lossy()).map_err(|e| {
             error!("Failed to remove file {}", e);
             RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
         })
@@ -401,12 +401,10 @@ impl RemoteFs for FtpFs {
         self.check_connection()?;
         let path = Self::resolve(path);
         let stream = self.stream.as_mut().unwrap();
-        stream
-            .rmdir(&path.as_path().to_string_lossy())
-            .map_err(|e| {
-                error!("Failed to remove directory {}", e);
-                RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
-            })
+        stream.rmdir(path.as_path().to_string_lossy()).map_err(|e| {
+            error!("Failed to remove directory {}", e);
+            RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+        })
     }
 
     fn create_dir(&mut self, path: &Path, _mode: UnixPex) -> RemoteResult<()> {
@@ -414,7 +412,7 @@ impl RemoteFs for FtpFs {
         self.check_connection()?;
         let path = Self::resolve(path);
         let stream = self.stream.as_mut().unwrap();
-        match stream.mkdir(&path.as_path().to_string_lossy()) {
+        match stream.mkdir(path.as_path().to_string_lossy()) {
             Ok(_) => Ok(()),
             Err(FtpError::UnexpectedResponse(Response {
                 status: Status::FileUnavailable,
@@ -465,11 +463,11 @@ impl RemoteFs for FtpFs {
         let path = Self::resolve(path);
         let stream = self.stream.as_mut().unwrap();
         stream
-            .append_with_stream(&path.as_path().to_string_lossy())
-            .map(|x| Box::new(x) as Box<dyn Write>)
+            .append_with_stream(path.as_path().to_string_lossy())
+            .map(|x| Box::new(x) as Box<dyn Write + Send>)
             .map(WriteStream::from)
             .map_err(|e| {
-                format!("Failed to open file: {}", e);
+                error!("Failed to open file: {}", e);
                 RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
             })
     }
@@ -480,11 +478,11 @@ impl RemoteFs for FtpFs {
         let path = Self::resolve(path);
         let stream = self.stream.as_mut().unwrap();
         stream
-            .put_with_stream(&path.as_path().to_string_lossy())
-            .map(|x| Box::new(x) as Box<dyn Write>)
+            .put_with_stream(path.as_path().to_string_lossy())
+            .map(|x| Box::new(x) as Box<dyn Write + Send>)
             .map(WriteStream::from)
             .map_err(|e| {
-                format!("Failed to open file: {}", e);
+                error!("Failed to open file: {}", e);
                 RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
             })
     }
@@ -495,11 +493,11 @@ impl RemoteFs for FtpFs {
         let path = Self::resolve(path);
         let stream = self.stream.as_mut().unwrap();
         stream
-            .retr_as_stream(&path.as_path().to_string_lossy())
-            .map(|x| Box::new(x) as Box<dyn Read>)
+            .retr_as_stream(path.as_path().to_string_lossy())
+            .map(|x| Box::new(x) as Box<dyn Read + Send>)
             .map(ReadStream::from)
             .map_err(|e| {
-                format!("Failed to open file: {}", e);
+                error!("Failed to open file: {}", e);
                 RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
             })
     }

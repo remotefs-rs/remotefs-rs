@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs FTP client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.3 (25/02/2023)</p>
+<p align="center">Current version: 0.2.0 (30/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -19,9 +19,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-ftp/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-ftp.svg"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ftp.svg"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-ftp"
@@ -41,24 +41,24 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veeso/remotefs-rs-ftp/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-ftp/workflows/Linux/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-ftp/workflows/Linux/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-ftp/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-ftp/workflows/MacOS/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-ftp/workflows/MacOS/badge.svg"
       alt="MacOS CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-ftp/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-ftp/workflows/Windows/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-ftp/workflows/Windows/badge.svg"
       alt="Windows CI"
   /></a>
-  <a href="https://coveralls.io/github/veeso/remotefs-rs-ftp"
+  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-ftp"
     ><img
-      src="https://coveralls.io/repos/github/veeso/remotefs-rs-ftp/badge.svg"
+      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ftp/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs-ftp"
@@ -72,7 +72,7 @@
 
 ## About remotefs-ftp ☁️
 
-remotefs-ftp is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the FTP/FTPS protocols.
+remotefs-ftp is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the FTP/FTPS protocols.
 
 ---
 
@@ -81,7 +81,8 @@ remotefs-ftp is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-ftp` to your project dependencies:
 
 ```toml
-remotefs-ftp = "^0.1.3"
+remotefs = "0.3"
+remotefs-ftp = "^0.2"
 ```
 
 these features are supported:

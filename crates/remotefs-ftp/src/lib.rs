@@ -10,8 +10,8 @@
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.2.0"
-//! remotefs-ftp = "^0.1.3"
+//! remotefs = "^0.3"
+//! remotefs-ftp = "^0.2"
 //! ```
 //!
 //! these features are supported:
@@ -43,6 +43,12 @@
 //!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo-128.png"
+)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png"
+)]
 
 // -- crates
 #[macro_use]
