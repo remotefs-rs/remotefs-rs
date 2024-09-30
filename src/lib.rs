@@ -21,7 +21,7 @@
 //! First of all you need to add **remotefs** to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.2.0"
+//! remotefs = "^0.3.0"
 //! ```
 //!
 //! these features are supported:
