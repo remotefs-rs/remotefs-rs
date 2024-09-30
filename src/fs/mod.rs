@@ -2,14 +2,12 @@
 //!
 //! `fs` is the module which provides remote file system entities
 
-mod async_t;
 mod errors;
 mod file;
 pub mod stream;
 mod sync;
 mod welcome;
 
-pub use self::async_t::AsyncRemoteFs;
 pub use self::errors::{RemoteError, RemoteErrorType, RemoteResult};
 pub use self::file::{File, FileType, Metadata, UnixPex, UnixPexClass};
 pub use self::stream::{ReadStream, WriteStream};

@@ -14,7 +14,6 @@ Released on 30/09/2024
 
 - Moved project to remotefs-rs org
 - StreamReader and StreamWriter implement Send
-- `AsyncRemoteFs` trait
 
 ## 0.2.0
 
