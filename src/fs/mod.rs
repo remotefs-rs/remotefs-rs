@@ -176,7 +176,7 @@ pub trait RemoteFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read>,
+        mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         if self.is_connected() {
             trace!("Opened remote file");
@@ -204,7 +204,7 @@ pub trait RemoteFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read>,
+        mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.create(path, metadata)?;

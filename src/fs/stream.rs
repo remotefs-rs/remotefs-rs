@@ -7,7 +7,7 @@ use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read, Seek, Write};
 // -- read stream
 
 /// A trait which combines `io::Read` and `io::Seek` together
-pub trait ReadAndSeek: Read + Seek {}
+pub trait ReadAndSeek: Read + Seek + Send {}
 
 /// The stream returned by RemoteFs to read a file from the remote server
 pub struct ReadStream {
@@ -16,7 +16,7 @@ pub struct ReadStream {
 
 /// The kind of stream contained in the stream. Can be Read only or Read + Seek
 enum StreamReader {
-    Read(Box<dyn Read>),
+    Read(Box<dyn Read + Send>),
     ReadAndSeek(Box<dyn ReadAndSeek>),
 }
 
@@ -27,8 +27,8 @@ impl ReadStream {
     }
 }
 
-impl From<Box<dyn Read>> for ReadStream {
-    fn from(reader: Box<dyn Read>) -> Self {
+impl From<Box<dyn Read + Send>> for ReadStream {
+    fn from(reader: Box<dyn Read + Send>) -> Self {
         Self {
             stream: StreamReader::Read(reader),
         }
@@ -79,7 +79,7 @@ impl Seek for StreamReader {
 // -- write stream
 
 /// A trait which combines `io::Write` and `io::Seek` together
-pub trait WriteAndSeek: Write + Seek {}
+pub trait WriteAndSeek: Write + Seek + Send {}
 
 /// The stream returned by RemoteFs to write a file from the remote server
 pub struct WriteStream {
@@ -88,7 +88,7 @@ pub struct WriteStream {
 
 /// The kind of stream contained in the stream. Can be Write only or Write + Seek
 enum StreamWriter {
-    Write(Box<dyn Write>),
+    Write(Box<dyn Write + Send>),
     WriteAndSeek(Box<dyn WriteAndSeek>),
 }
 
@@ -99,8 +99,8 @@ impl WriteStream {
     }
 }
 
-impl From<Box<dyn Write>> for WriteStream {
-    fn from(writer: Box<dyn Write>) -> Self {
+impl From<Box<dyn Write + Send>> for WriteStream {
+    fn from(writer: Box<dyn Write + Send>) -> Self {
         Self {
             stream: StreamWriter::Write(writer),
         }
@@ -174,7 +174,7 @@ mod test {
     #[test]
     fn should_create_new_read_stream_from_read() {
         let temp = NamedTempFile::new().expect("Could not make tempfile");
-        let file: Box<dyn Read> =
+        let file: Box<dyn Read + Send> =
             Box::new(File::open(temp.path()).expect("Could not open tempfile"));
         let s = ReadStream::from(file);
         assert_eq!(s.seekable(), false);
@@ -192,7 +192,7 @@ mod test {
     #[test]
     fn should_create_new_write_stream_from_write() {
         let temp = NamedTempFile::new().expect("Could not make tempfile");
-        let file: Box<dyn Write> =
+        let file: Box<dyn Write + Send> =
             Box::new(File::create(temp.path()).expect("Could not open tempfile"));
         let s = WriteStream::from(file);
         assert_eq!(s.seekable(), false);
