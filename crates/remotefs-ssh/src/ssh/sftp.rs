@@ -465,13 +465,13 @@ impl RemoteFs for SftpFs {
             })
     }
 
-    // -- override (std::io::copy is VERY slow on SFTP <https://github.com/veeso/remotefs-rs/issues/6>)
+    // -- override (std::io::copy is VERY slow on SFTP <https://github.com/remotefs-rs/remotefs-rs/issues/6>)
 
     fn append_file(
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read>,
+        mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.append(path, metadata)?;
@@ -505,7 +505,7 @@ impl RemoteFs for SftpFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn std::io::Read>,
+        mut reader: Box<dyn std::io::Read + Send>,
     ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.create(path, metadata)?;

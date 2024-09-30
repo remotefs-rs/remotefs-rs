@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SSH client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.3.1 (09/07/2024)</p>
+<p align="center">Current version: 0.4.0 (30/09/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -19,9 +19,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-ssh/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-ssh.svg"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ssh.svg"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-ssh"
@@ -41,24 +41,24 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veeso/remotefs-rs-ssh/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-ssh/workflows/Linux/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-ssh/workflows/Linux/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-ssh/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-ssh/workflows/MacOS/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-ssh/workflows/MacOS/badge.svg"
       alt="MacOS CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-ssh/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-ssh/workflows/Windows/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs-ssh/workflows/Windows/badge.svg"
       alt="Windows CI"
   /></a>
-  <a href="https://coveralls.io/github/veeso/remotefs-rs-ssh"
+  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-ssh"
     ><img
-      src="https://coveralls.io/repos/github/veeso/remotefs-rs-ssh/badge.svg"
+      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ssh/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs-ssh"
@@ -72,7 +72,7 @@
 
 ## About remotefs-ssh ☁️
 
-remotefs-ssh is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the SFTP/SCP protocol.
+remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SFTP/SCP protocol.
 
 ---
 
@@ -81,7 +81,8 @@ remotefs-ssh is a client implementation for [remotefs](https://github.com/veeso/
 First of all, add `remotefs-ssh` to your project dependencies:
 
 ```toml
-remotefs-ssh = "^0.3"
+remotefs = "0.3"
+remotefs-ssh = "^0.4"
 ```
 
 these features are supported:

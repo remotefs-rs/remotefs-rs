@@ -3,7 +3,7 @@
 
 //! # remotefs-ssh
 //!
-//! remotefs-ssh is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the SCP/SFTP protocols.
+//! remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SCP/SFTP protocols.
 //!
 //! ## Get started
 //!
@@ -50,6 +50,12 @@
 //!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
+#![doc(
+    html_favicon_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo-128.png"
+)]
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png"
+)]
 
 // -- crates
 #[macro_use]

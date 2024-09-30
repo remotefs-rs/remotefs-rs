@@ -611,7 +611,7 @@ impl RemoteFs for ScpFs {
             metadata.size,
             Some((modified, accessed)),
         ) {
-            Ok(channel) => Ok(WriteStream::from(Box::new(channel) as Box<dyn Write>)),
+            Ok(channel) => Ok(WriteStream::from(Box::new(channel) as Box<dyn Write + Send>)),
             Err(err) => {
                 error!("Failed to create file: {}", err);
                 Err(RemoteError::new_ex(RemoteErrorType::FileCreateDenied, err))
@@ -630,7 +630,7 @@ impl RemoteFs for ScpFs {
         self.session.as_mut().unwrap().set_blocking(true);
         trace!("blocked channel");
         match self.session.as_mut().unwrap().scp_recv(path.as_path()) {
-            Ok((channel, _)) => Ok(ReadStream::from(Box::new(channel) as Box<dyn Read>)),
+            Ok((channel, _)) => Ok(ReadStream::from(Box::new(channel) as Box<dyn Read + Send>)),
             Err(err) => {
                 error!("Failed to open file: {}", err);
                 Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err))
