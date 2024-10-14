@@ -1,4 +1,4 @@
-# remotefs
+# remotefs-fuse
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
