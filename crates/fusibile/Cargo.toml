@@ -1,0 +1,24 @@
+[package]
+name = "remotefs-fuse-cli"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+repository = { workspace = true }
+documentation = "https://docs.rs/remotefs-fuse"
+description = "A FUSE Driver for remote-fs"
+include = ["src/**/*", "../LICENSE", "../README.md", "../CHANGELOG.md"]
+readme = "../README.md"
+
+[[bin]]
+name = "remotefs-fuse-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+log = "^0.4"
+remotefs = "0.3"
+remotefs-fuse = { path = "../remotefs-fuse", version = "0.1" }
+thiserror = "^1"

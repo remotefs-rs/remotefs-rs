@@ -1,0 +1,32 @@
+[package]
+name = "remotefs-fuse"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+repository = { workspace = true }
+documentation = "https://docs.rs/remotefs-fuse"
+description = "A FUSE Driver for remote-fs"
+include = ["src/**/*", "../LICENSE", "../README.md", "../CHANGELOG.md"]
+readme = "../README.md"
+
+[lib]
+name = "remotefs_fuse"
+path = "src/lib.rs"
+
+[dependencies]
+log = "^0.4"
+remotefs = "0.3"
+thiserror = "^1"
+
+[dev-dependencies]
+env_logger = "^0.11"
+pretty_assertions = "^1"
+tempfile = "^3"
+
+[features]
+default = []
+no-log = ["log/max_level_off"]
+with-containers = []
