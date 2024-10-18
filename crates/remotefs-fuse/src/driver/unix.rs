@@ -1,18 +1,18 @@
-use std::ffi::OsStr;
+use std::{ffi::OsStr, time::SystemTime};
 
-use fuse::{
-    Filesystem, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
+use fuser::{
+    Filesystem, KernelConfig, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData, ReplyDirectory,
+    ReplyEmpty, ReplyEntry, ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
+    TimeOrNow,
 };
 use libc::c_int;
-use time::Timespec;
 
 use super::Driver;
 
 impl Filesystem for Driver {
     /// Initialize filesystem.
     /// Called before any other filesystem method.
-    fn init(&mut self, _req: &Request) -> Result<(), c_int> {
+    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         info!("Initializing filesystem");
         if let Err(err) = self.remote.connect() {
             error!("Failed to connect to remote filesystem: {err}");
@@ -25,7 +25,7 @@ impl Filesystem for Driver {
 
     /// Clean up filesystem.
     /// Called on filesystem exit.
-    fn destroy(&mut self, _req: &Request) {
+    fn destroy(&mut self) {
         info!("Destroying filesystem");
         if let Err(err) = self.remote.disconnect() {
             error!("Failed to disconnect from remote filesystem: {err}");
@@ -58,18 +58,19 @@ impl Filesystem for Driver {
     /// Set file attributes.
     fn setattr(
         &mut self,
-        req: &Request,
+        _req: &Request,
         ino: u64,
         mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        atime: Option<Timespec>,
-        mtime: Option<Timespec>,
+        _atime: Option<TimeOrNow>,
+        _mtime: Option<TimeOrNow>,
+        _ctime: Option<SystemTime>,
         fh: Option<u64>,
-        crtime: Option<Timespec>,
-        chgtime: Option<Timespec>,
-        bkuptime: Option<Timespec>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
         flags: Option<u32>,
         reply: ReplyAttr,
     ) {
@@ -89,6 +90,7 @@ impl Filesystem for Driver {
         parent: u64,
         name: &OsStr,
         mode: u32,
+        umask: u32,
         rdev: u32,
         reply: ReplyEntry,
     ) {
@@ -96,7 +98,15 @@ impl Filesystem for Driver {
     }
 
     /// Create a directory.
-    fn mkdir(&mut self, req: &Request, parent: u64, name: &OsStr, mode: u32, reply: ReplyEntry) {
+    fn mkdir(
+        &mut self,
+        req: &Request,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: ReplyEntry,
+    ) {
         todo!()
     }
 
@@ -130,6 +140,7 @@ impl Filesystem for Driver {
         name: &OsStr,
         newparent: u64,
         newname: &OsStr,
+        flags: u32,
         reply: ReplyEmpty,
     ) {
         todo!()
@@ -155,7 +166,7 @@ impl Filesystem for Driver {
     /// anything in fh. There are also some flags (direct_io, keep_cache) which the
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
-    fn open(&mut self, req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
+    fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
         todo!()
     }
 
@@ -166,7 +177,17 @@ impl Filesystem for Driver {
     /// return value of the read system call will reflect the return value of this
     /// operation. fh will contain the value set by the open method, or will be undefined
     /// if the open method didn't set any value.
-    fn read(&mut self, req: &Request, ino: u64, fh: u64, offset: i64, size: u32, reply: ReplyData) {
+    fn read(
+        &mut self,
+        req: &Request,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+        reply: ReplyData,
+    ) {
         todo!()
     }
 
@@ -183,7 +204,9 @@ impl Filesystem for Driver {
         fh: u64,
         offset: i64,
         data: &[u8],
-        flags: u32,
+        write_flags: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
         todo!()
@@ -214,11 +237,11 @@ impl Filesystem for Driver {
     fn release(
         &mut self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        flags: u32,
-        lock_owner: u64,
-        flush: bool,
+        _ino: u64,
+        _fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
         reply: ReplyEmpty,
     ) {
         todo!()
@@ -238,7 +261,7 @@ impl Filesystem for Driver {
     /// anything in fh, though that makes it impossible to implement standard conforming
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
-    fn opendir(&mut self, req: &Request, ino: u64, flags: u32, reply: ReplyOpen) {
+    fn opendir(&mut self, req: &Request, _ino: u64, _flags: i32, reply: ReplyOpen) {
         reply.opened(0, 0);
     }
 
@@ -255,7 +278,7 @@ impl Filesystem for Driver {
     /// For every opendir call there will be exactly one releasedir call. fh will
     /// contain the value set by the opendir method, or will be undefined if the
     /// opendir method didn't set any value.
-    fn releasedir(&mut self, req: &Request, ino: u64, fh: u64, flags: u32, reply: ReplyEmpty) {
+    fn releasedir(&mut self, req: &Request, ino: u64, fh: u64, flags: i32, reply: ReplyEmpty) {
         todo!()
     }
 
@@ -279,7 +302,7 @@ impl Filesystem for Driver {
         ino: u64,
         name: &OsStr,
         value: &[u8],
-        flags: u32,
+        flags: i32,
         position: u32,
         reply: ReplyEmpty,
     ) {
@@ -311,7 +334,7 @@ impl Filesystem for Driver {
     /// This will be called for the access() system call. If the 'default_permissions'
     /// mount option is given, this method is not called. This method is not called
     /// under Linux kernel versions 2.4.x
-    fn access(&mut self, req: &Request, ino: u64, mask: u32, reply: ReplyEmpty) {
+    fn access(&mut self, req: &Request, ino: u64, mask: i32, reply: ReplyEmpty) {
         todo!()
     }
 
@@ -331,7 +354,8 @@ impl Filesystem for Driver {
         parent: u64,
         name: &OsStr,
         mode: u32,
-        flags: u32,
+        umask: u32,
+        flags: i32,
         reply: ReplyCreate,
     ) {
         todo!()
@@ -346,7 +370,7 @@ impl Filesystem for Driver {
         lock_owner: u64,
         start: u64,
         end: u64,
-        typ: u32,
+        typ: i32,
         pid: u32,
         reply: ReplyLock,
     ) {
@@ -367,7 +391,7 @@ impl Filesystem for Driver {
         lock_owner: u64,
         start: u64,
         end: u64,
-        typ: u32,
+        typ: i32,
         pid: u32,
         sleep: bool,
         reply: ReplyEmpty,
@@ -375,39 +399,121 @@ impl Filesystem for Driver {
         todo!();
     }
 
+    fn readdirplus(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        reply: fuser::ReplyDirectoryPlus,
+    ) {
+        log::debug!(
+            "[Not Implemented] readdirplus(ino: {:#x?}, fh: {}, offset: {})",
+            ino,
+            fh,
+            offset
+        );
+        reply.error(libc::ENOSYS);
+    }
+
+    fn ioctl(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        flags: u32,
+        cmd: u32,
+        in_data: &[u8],
+        out_size: u32,
+        reply: fuser::ReplyIoctl,
+    ) {
+        log::debug!(
+            "[Not Implemented] ioctl(ino: {:#x?}, fh: {}, flags: {}, cmd: {}, \
+            in_data.len(): {}, out_size: {})",
+            ino,
+            fh,
+            flags,
+            cmd,
+            in_data.len(),
+            out_size,
+        );
+        reply.error(libc::ENOSYS);
+    }
+
+    fn fallocate(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        length: i64,
+        mode: i32,
+        reply: ReplyEmpty,
+    ) {
+        log::debug!(
+            "[Not Implemented] fallocate(ino: {:#x?}, fh: {}, offset: {}, \
+            length: {}, mode: {})",
+            ino,
+            fh,
+            offset,
+            length,
+            mode
+        );
+        reply.error(libc::ENOSYS);
+    }
+
+    fn lseek(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        whence: i32,
+        reply: fuser::ReplyLseek,
+    ) {
+        log::debug!(
+            "[Not Implemented] lseek(ino: {:#x?}, fh: {}, offset: {}, whence: {})",
+            ino,
+            fh,
+            offset,
+            whence
+        );
+        reply.error(libc::ENOSYS);
+    }
+
+    fn copy_file_range(
+        &mut self,
+        _req: &Request<'_>,
+        ino_in: u64,
+        fh_in: u64,
+        offset_in: i64,
+        ino_out: u64,
+        fh_out: u64,
+        offset_out: i64,
+        len: u64,
+        flags: u32,
+        reply: ReplyWrite,
+    ) {
+        log::debug!(
+            "[Not Implemented] copy_file_range(ino_in: {:#x?}, fh_in: {}, \
+            offset_in: {}, ino_out: {:#x?}, fh_out: {}, offset_out: {}, \
+            len: {}, flags: {})",
+            ino_in,
+            fh_in,
+            offset_in,
+            ino_out,
+            fh_out,
+            offset_out,
+            len,
+            flags
+        );
+        reply.error(libc::ENOSYS);
+    }
+
     /// Map block index within file to block index within device.
     /// Note: This makes sense only for block device backed filesystems mounted
     /// with the 'blkdev' option
     fn bmap(&mut self, req: &Request, ino: u64, blocksize: u32, idx: u64, reply: ReplyBmap) {
         todo!()
-    }
-
-    /// macOS only: Rename the volume. Set fuse_init_out.flags during init to
-    /// FUSE_VOL_RENAME to enable
-    #[cfg(target_os = "macos")]
-    fn setvolname(&mut self, _req: &Request, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(ENOSYS);
-    }
-
-    /// macOS only (undocumented)
-    #[cfg(target_os = "macos")]
-    fn exchange(
-        &mut self,
-        _req: &Request,
-        _parent: u64,
-        _name: &OsStr,
-        _newparent: u64,
-        _newname: &OsStr,
-        _options: u64,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(ENOSYS);
-    }
-
-    /// macOS only: Query extended times (bkuptime and crtime). Set fuse_init_out.flags
-    /// during init to FUSE_XTIMES to enable
-    #[cfg(target_os = "macos")]
-    fn getxtimes(&mut self, _req: &Request, _ino: u64, reply: ReplyXTimes) {
-        reply.error(ENOSYS);
     }
 }

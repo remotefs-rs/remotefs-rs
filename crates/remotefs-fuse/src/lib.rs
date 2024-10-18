@@ -32,19 +32,24 @@ extern crate log;
 
 mod driver;
 
-use std::{ffi::OsStr, path::Path};
+use std::path::Path;
 
 #[cfg(target_family = "unix")]
-pub use fuse::spawn_mount;
+pub use fuser::spawn_mount2;
+use fuser::MountOption;
 
 pub use self::driver::Driver;
 
 /// Mount a remote filesystem to a local directory.
 ///
 /// The `mount` function will take a [`Driver`] instance and mount it to the provided mountpoint.
-pub fn mount<P>(driver: Driver, mountpoint: &P, options: &[&OsStr]) -> Result<(), std::io::Error>
+pub fn mount<P>(
+    driver: Driver,
+    mountpoint: &P,
+    options: &[MountOption],
+) -> Result<(), std::io::Error>
 where
     P: AsRef<Path>,
 {
-    fuse::mount(driver, mountpoint, options)
+    fuser::mount2(driver, mountpoint, options)
 }
