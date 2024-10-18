@@ -5,7 +5,7 @@ authors = { workspace = true }
 edition = { workspace = true }
 license = { workspace = true }
 keywords = { workspace = true }
-categories = { workspace = true }
+categories = ["command-line-utilities", "network-programming"]
 repository = { workspace = true }
 documentation = "https://docs.rs/remotefs-fuse"
 description = "A FUSE Driver for remote-fs"
@@ -18,7 +18,26 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+argh = "0.1"
+ctrlc = "3"
+env_logger = "0.11"
 log = "^0.4"
 remotefs = "0.3"
+remotefs-aws-s3 = { version = "0.3", optional = true }
+remotefs-ftp = { version = "0.2", features = ["rustls"], optional = true }
 remotefs-fuse = { path = "../remotefs-fuse", version = "0.1" }
+remotefs-kube = { version = "0.4", optional = true }
+remotefs-smb = { version = "0.3", optional = true }
+remotefs-ssh = { version = "0.4", optional = true }
+remotefs-webdav = { version = "0.2", optional = true }
 thiserror = "^1"
+tokio = { version = "1", features = ["rt"] }
+
+[features]
+default = ["aws-s3", "ftp", "kube", "smb", "ssh", "webdav"]
+aws-s3 = ["dep:remotefs-aws-s3"]
+ftp = ["dep:remotefs-ftp"]
+kube = ["dep:remotefs-kube"]
+smb = ["dep:remotefs-smb"]
+ssh = ["dep:remotefs-ssh"]
+webdav = ["dep:remotefs-webdav"]

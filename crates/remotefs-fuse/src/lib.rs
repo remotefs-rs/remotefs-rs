@@ -35,8 +35,7 @@ mod driver;
 use std::path::Path;
 
 #[cfg(target_family = "unix")]
-pub use fuser::spawn_mount2;
-use fuser::MountOption;
+pub use fuser::{spawn_mount2, MountOption};
 
 pub use self::driver::Driver;
 

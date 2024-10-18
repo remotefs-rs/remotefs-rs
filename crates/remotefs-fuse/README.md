@@ -60,6 +60,70 @@
 
 Coming soon...
 
+## CLI Tool
+
+remotefs-fuse comes with a CLI tool **remotefs-fuse-cli** to mount remote file systems with FUSE.
+
+```sh
+cargo install remotefs-fuse-cli
+```
+
+### Features
+
+remotefs-fuse-cli can be built with the features below; each feature enables a different file transfer protocol
+
+- `aws-s3`
+- `ftp`
+- `kube`
+- `smb`: requires `libsmbclient` on MacOS and GNU/Linux systems
+- `ssh` (enables **both sftp and scp**); requires `libssh2` on MacOS and GNU/Linux systems
+- `webdav`
+
+All the features are enabled by default; so if you want to build it with only certain features, pass the `--no-default-features` option.
+
+### Usage
+
+```sh
+remotefs-fuse-cli --to /mnt/to <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
+```
+
+where protocol options are
+
+- aws-s3
+  - `--bucket <name>`
+  - `--region <region>` (optional)
+  - `--endpoint <endpoint_url>` (optional)
+  - `--profile <profile_name>` (optional)
+  - `--access-key <access_key>` (optional)
+  - `--security-token <security_access_token>` (optional)
+  - `--new-path-style` use new path style
+- ftp
+  - `--hostname <host>`
+  - `--port <port>` (default 21)
+  - `--username <username>` (default: `anonymous`)
+  - `--password <password>` (optional)
+  - `--secure` specify it if you want to use FTPS
+  - `--active` specify it if you want to use ACTIVE mode
+- kube
+  - `--namespace <namespace>` (default: `default`)
+  - `--cluster-url <url>`
+- smb
+  - `--address <address>`
+  - `--port <port>` (default: `139`; Linux/Mac only)
+  - `--share <share_name>`
+  - `--username <username>` (optional)
+  - `--password <password>` (optional)
+  - `--workgroup <workgroup>` (optional; Linux/Mac only)
+- scp / sftp
+  - `--hostname <hostname>`
+  - `--port <port>` (default `22`)
+  - `--username <username>`
+  - `--password <password>`
+- webdav
+  - `--url <url>`
+  - `--username <username>`
+  - `--password <password>`
+
 ## Changelog ⏳
 
 View remotefs` changelog [HERE](CHANGELOG.md)
