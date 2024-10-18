@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -9,15 +11,23 @@ use tempfile::TempDir;
 /// The filesystem must be unmounted manually and then the thread must be joined.
 fn mount(p: &Path) -> JoinHandle<()> {
     let mountpoint = p.to_path_buf();
+    let error_flag = Arc::new(AtomicBool::new(false));
+    let error_flag_t = error_flag.clone();
 
     let join = std::thread::spawn(move || {
         let driver = crate::driver::setup_driver();
         // this operation is blocking and will not return until the filesystem is unmounted
         assert!(remotefs_fuse::mount(driver, &mountpoint, &[]).is_ok());
+
+        // set the error flag if the filesystem was unmounted
+        error_flag_t.store(true, std::sync::atomic::Ordering::Relaxed);
     });
 
     // wait for the filesystem to be mounted
     std::thread::sleep(Duration::from_secs(1));
+    if error_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("Failed to mount filesystem");
+    }
 
     join
 }
