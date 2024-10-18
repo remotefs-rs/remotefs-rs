@@ -44,6 +44,11 @@
   /></a>
   <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions"
     ><img
+      src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/macos/badge.svg"
+      alt="MacOS CI"
+  /></a>
+  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions"
+    ><img
       src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/windows/badge.svg"
       alt="Windows CI"
   /></a>
