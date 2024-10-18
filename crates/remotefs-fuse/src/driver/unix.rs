@@ -1,4 +1,5 @@
-use std::{ffi::OsStr, time::SystemTime};
+use std::ffi::OsStr;
+use std::time::SystemTime;
 
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData, ReplyDirectory,

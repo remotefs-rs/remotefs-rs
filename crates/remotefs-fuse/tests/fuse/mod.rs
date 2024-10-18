@@ -1,4 +1,6 @@
-use std::{path::Path, thread::JoinHandle, time::Duration};
+use std::path::Path;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
