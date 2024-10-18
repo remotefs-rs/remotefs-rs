@@ -54,7 +54,6 @@ fn umount(path: &Path) -> Result<(), String> {
 }
 
 #[test]
-#[cfg(feature = "integration-tests")]
 fn test_should_mount_fs() {
     let mnt = TempDir::new().expect("Failed to create tempdir");
     // mount
