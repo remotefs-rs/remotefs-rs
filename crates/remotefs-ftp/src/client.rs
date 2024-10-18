@@ -216,16 +216,15 @@ impl FtpFs {
     #[cfg(feature = "rustls")]
     fn setup_tls_connector(&self) -> RemoteResult<TlsConnector> {
         let mut root_store = suppaftp::rustls::RootCertStore::empty();
-        root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.0.iter().map(|ta| {
-            suppaftp::rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject,
-                ta.spki,
-                ta.name_constraints,
-            )
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+            rustls_pki_types::TrustAnchor {
+                subject: ta.subject.clone(),
+                subject_public_key_info: ta.subject_public_key_info.clone(),
+                name_constraints: ta.name_constraints.clone(),
+            }
         }));
         Ok(std::sync::Arc::new(
             ClientConfig::builder()
-                .with_safe_defaults()
                 .with_root_certificates(root_store)
                 .with_no_client_auth(),
         )
