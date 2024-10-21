@@ -9,9 +9,8 @@ fn main() -> anyhow::Result<()> {
     let args = argh::from_env::<cli::CliArgs>();
     let mount_path = args.to.clone();
     let remote = args.remote();
-    let data_dir = TempDir::new()?;
 
-    let driver = Driver::new(data_dir.path(), remote)?;
+    let driver = Driver::new(remote);
 
     // setup signal handler
     ctrlc::set_handler(move || {

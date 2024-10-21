@@ -1,12 +1,11 @@
 use std::io::Write;
-use std::path::Path;
 
 use remotefs::RemoteFs;
 use remotefs_fuse::Driver;
 use remotefs_ssh::{SftpFs, SshAgentIdentity, SshConfigParseRule, SshKeyStorage, SshOpts};
 use tempfile::NamedTempFile;
 
-pub fn setup_driver(data_dir: &Path) -> Driver {
+pub fn setup_driver() -> Driver {
     let config_file = create_ssh_config();
     let client = SftpFs::new(
         SshOpts::new("sftp")
@@ -17,7 +16,7 @@ pub fn setup_driver(data_dir: &Path) -> Driver {
 
     let boxed_client = Box::new(client) as Box<dyn RemoteFs>;
 
-    Driver::new(data_dir, boxed_client).expect("Failed to create driver")
+    Driver::new(boxed_client)
 }
 
 /// Mock ssh key storage

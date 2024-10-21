@@ -1,7 +1,9 @@
 mod inode;
 
 use std::ffi::OsStr;
+use std::fs;
 use std::hash::{Hash as _, Hasher as _};
+use std::io::{Cursor, Read as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -11,9 +13,10 @@ use fuser::{
     ReplyXattr, Request, TimeOrNow,
 };
 use libc::c_int;
+use remotefs::fs::UnixPex;
 use remotefs::{File, RemoteResult};
 
-pub use self::inode::{InodeDb, InodeDbError};
+pub use self::inode::InodeDb;
 use super::Driver;
 
 const BLOCK_SIZE: usize = 512;
@@ -67,6 +70,20 @@ fn time_or_now(t: TimeOrNow) -> SystemTime {
     }
 }
 
+fn as_file_kind(mut mode: u32) -> Option<FileType> {
+    mode &= libc::S_IFMT as u32;
+
+    if mode == libc::S_IFREG as u32 {
+        Some(FileType::RegularFile)
+    } else if mode == libc::S_IFLNK as u32 {
+        Some(FileType::Symlink)
+    } else if mode == libc::S_IFDIR as u32 {
+        Some(FileType::Directory)
+    } else {
+        None
+    }
+}
+
 impl Driver {
     /// Get the inode for a path.
     ///
@@ -97,6 +114,14 @@ impl Driver {
 
         self.get_inode_from_path(&path)
     }
+
+    /// Look up a name in a directory.
+    fn lookup_name(&self, parent: u64, name: &OsStr) -> Option<PathBuf> {
+        let parent_path = self.database.get(parent)?;
+        let path = parent_path.join(name);
+
+        Some(path)
+    }
 }
 
 impl Filesystem for Driver {
@@ -125,8 +150,15 @@ impl Filesystem for Driver {
     }
 
     /// Look up a directory entry by name and get its attributes.
-    fn lookup(&mut self, _req: &Request, _parent: u64, name: &OsStr, reply: ReplyEntry) {
-        let path = PathBuf::from(name.to_string_lossy().to_string());
+    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+        debug!("lookup() called with {:?} {:?}", parent, name);
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
 
         match self.get_inode_from_path(path.as_path()) {
             Err(err) => {
@@ -148,6 +180,7 @@ impl Filesystem for Driver {
 
     /// Get file attributes.
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+        debug!("getattr() called with {:?}", ino);
         let attrs = match self.get_inode_from_inode(ino) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
@@ -179,6 +212,10 @@ impl Filesystem for Driver {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
+        debug!(
+            "setattr() called with mode: {:?}, uid: {:?}, gid: {:?}, size: {:?}, atime: {:?}, mtime: {:?}, ctime: {:?}",
+            mode, uid, gid, size, atime, mtime, ctime
+        );
         let (mut file, _) = match self.get_inode_from_inode(ino) {
             Ok(attrs) => attrs,
             Err(err) => {
@@ -224,8 +261,57 @@ impl Filesystem for Driver {
     }
 
     /// Read symbolic link.
-    fn readlink(&mut self, req: &Request, ino: u64, reply: ReplyData) {
-        todo!()
+    fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
+        debug!("readlink() called with {:?}", ino);
+        let (file, _) = match self.get_inode_from_inode(ino) {
+            Ok(attrs) => attrs,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // read file
+
+        let Ok(tempfile) = tempfile::NamedTempFile::new() else {
+            error!("Failed to create temporary file");
+            reply.error(libc::EIO);
+            return;
+        };
+        let Ok(writer) = fs::OpenOptions::new().write(true).open(tempfile.path()) else {
+            error!("Failed to open temporary file");
+            reply.error(libc::EIO);
+            return;
+        };
+
+        let bytes_written = match self.remote.open_file(file.path(), Box::new(writer)) {
+            Ok(bytes) => bytes as usize,
+            Err(err) => {
+                error!("Failed to read file: {err}");
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+
+        let Ok(mut reader) = fs::File::open(tempfile.path()) else {
+            error!("Failed to open temporary file");
+            reply.error(libc::EIO);
+            return;
+        };
+
+        let mut buffer = vec![0; bytes_written];
+        if let Err(err) = reader.read_to_end(&mut buffer) {
+            error!("Failed to read file: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        if let Err(err) = tempfile.close() {
+            error!("Failed to close temporary file: {err}");
+        }
+
+        reply.data(&buffer);
     }
 
     /// Create file node.
@@ -236,72 +322,227 @@ impl Filesystem for Driver {
         parent: u64,
         name: &OsStr,
         mode: u32,
-        umask: u32,
-        rdev: u32,
+        _umask: u32,
+        _rdev: u32,
         reply: ReplyEntry,
     ) {
-        todo!()
+        debug!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
+        let file_type = mode & libc::S_IFMT as u32;
+
+        if file_type != libc::S_IFREG as u32
+            && file_type != libc::S_IFLNK as u32
+            && file_type != libc::S_IFDIR as u32
+        {
+            warn!("mknod() implementation is incomplete. Only supports regular files, symlinks, and directories. Got {:o}", mode);
+            reply.error(libc::ENOSYS);
+            return;
+        }
+
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // Check file type
+        let res = match as_file_kind(mode) {
+            Some(FileType::Directory) => self.remote.create_dir(&path, UnixPex::from(mode)),
+            Some(FileType::RegularFile) => {
+                let metadata = remotefs::fs::Metadata {
+                    mode: Some(mode.into()),
+                    gid: Some(req.gid()),
+                    uid: Some(req.uid()),
+                    ..Default::default()
+                };
+                let reader = Cursor::new(Vec::new());
+                self.remote
+                    .create_file(&path, &metadata, Box::new(reader))
+                    .map(|_| ())
+            }
+            Some(_) | None => {
+                warn!("mknod() implementation is incomplete. Only supports regular files and directories. Got {:o}", mode);
+                reply.error(libc::ENOSYS);
+                return;
+            }
+        };
+
+        if let Err(err) = res {
+            error!("Failed to create file: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        // Get the inode
+        match self.get_inode_from_path(path.as_path()) {
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+        }
     }
 
     /// Create a directory.
     fn mkdir(
         &mut self,
-        req: &Request,
+        _req: &Request,
         parent: u64,
         name: &OsStr,
         mode: u32,
-        umask: u32,
+        _umask: u32,
         reply: ReplyEntry,
     ) {
-        todo!()
+        debug!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        let mode = UnixPex::from(mode);
+        if let Err(err) = self.remote.create_dir(&path, mode) {
+            error!("Failed to create directory: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        // Get the inode
+        match self.get_inode_from_path(path.as_path()) {
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+        }
     }
 
     /// Remove a file
-    fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        todo!()
+    fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("unlink() called with {:?} {:?}", parent, name);
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if let Err(err) = self.remote.remove_file(&path) {
+            error!("Failed to remove file: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        reply.ok();
     }
 
     /// Remove a directory
-    fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        todo!()
+    fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("rmdir() called with {:?} {:?}", parent, name);
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if let Err(err) = self.remote.remove_dir(&path) {
+            error!("Failed to remove directory: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        reply.ok();
     }
 
     /// Create a symbolic link
     fn symlink(
         &mut self,
-        req: &Request,
+        _req: &Request,
         parent: u64,
         name: &OsStr,
-        link: &std::path::Path,
+        link: &Path,
         reply: ReplyEntry,
     ) {
+        debug!("symlink() called with {:?} {:?} {:?}", parent, name, link);
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if let Err(err) = self.remote.symlink(&path, link) {
+            error!("Failed to create symlink: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
         todo!();
     }
 
     /// Rename a file
     fn rename(
         &mut self,
-        req: &Request,
+        _req: &Request,
         parent: u64,
         name: &OsStr,
         newparent: u64,
         newname: &OsStr,
-        flags: u32,
+        _flags: u32,
         reply: ReplyEmpty,
     ) {
-        todo!()
+        debug!(
+            "rename() called with {:?} {:?} {:?} {:?}",
+            parent, name, newparent, newname
+        );
+        let src = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        let dest = match self.lookup_name(newparent, newname) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if let Err(err) = self.remote.mov(&src, &dest) {
+            error!("Failed to move file: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        // Update the database
+        self.database.put(inode(&dest), dest);
+
+        reply.ok();
     }
 
     /// Create a hard link
     fn link(
         &mut self,
-        req: &Request,
-        ino: u64,
-        newparent: u64,
-        newname: &OsStr,
+        _req: &Request,
+        _ino: u64,
+        _newparent: u64,
+        _newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        todo!()
+        // not implemented
+        reply.error(libc::ENOSYS);
     }
 
     /// Open a file.
@@ -396,9 +637,7 @@ impl Filesystem for Driver {
     /// Synchronize file contents.
     /// If the datasync parameter is non-zero, then only the user data should be flushed,
     /// not the meta data.
-    fn fsync(&mut self, req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
-        todo!()
-    }
+    fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, _reply: ReplyEmpty) {}
 
     /// Open a directory.
     /// Filesystem may store an arbitrary file handle (pointer, index, etc) in fh, and
@@ -407,7 +646,7 @@ impl Filesystem for Driver {
     /// anything in fh, though that makes it impossible to implement standard conforming
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
-    fn opendir(&mut self, req: &Request, _ino: u64, _flags: i32, reply: ReplyOpen) {
+    fn opendir(&mut self, _req: &Request, _ino: u64, _flags: i32, reply: ReplyOpen) {
         reply.opened(0, 0);
     }
 
@@ -460,7 +699,13 @@ impl Filesystem for Driver {
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
     fn getxattr(&mut self, req: &Request, ino: u64, name: &OsStr, size: u32, reply: ReplyXattr) {
-        todo!()
+        let path = match self.lookup_name(ino, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
     }
 
     /// List extended attribute names.
@@ -504,7 +749,13 @@ impl Filesystem for Driver {
         flags: i32,
         reply: ReplyCreate,
     ) {
-        todo!()
+        let path = match self.lookup_name(parent, name) {
+            Some(path) => path,
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
     }
 
     /// Test for a POSIX file lock.
@@ -562,104 +813,10 @@ impl Filesystem for Driver {
         reply.error(libc::ENOSYS);
     }
 
-    fn ioctl(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        flags: u32,
-        cmd: u32,
-        in_data: &[u8],
-        out_size: u32,
-        reply: fuser::ReplyIoctl,
-    ) {
-        log::debug!(
-            "[Not Implemented] ioctl(ino: {:#x?}, fh: {}, flags: {}, cmd: {}, \
-            in_data.len(): {}, out_size: {})",
-            ino,
-            fh,
-            flags,
-            cmd,
-            in_data.len(),
-            out_size,
-        );
-        reply.error(libc::ENOSYS);
-    }
-
-    fn fallocate(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        length: i64,
-        mode: i32,
-        reply: ReplyEmpty,
-    ) {
-        log::debug!(
-            "[Not Implemented] fallocate(ino: {:#x?}, fh: {}, offset: {}, \
-            length: {}, mode: {})",
-            ino,
-            fh,
-            offset,
-            length,
-            mode
-        );
-        reply.error(libc::ENOSYS);
-    }
-
-    fn lseek(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        whence: i32,
-        reply: fuser::ReplyLseek,
-    ) {
-        log::debug!(
-            "[Not Implemented] lseek(ino: {:#x?}, fh: {}, offset: {}, whence: {})",
-            ino,
-            fh,
-            offset,
-            whence
-        );
-        reply.error(libc::ENOSYS);
-    }
-
-    fn copy_file_range(
-        &mut self,
-        _req: &Request<'_>,
-        ino_in: u64,
-        fh_in: u64,
-        offset_in: i64,
-        ino_out: u64,
-        fh_out: u64,
-        offset_out: i64,
-        len: u64,
-        flags: u32,
-        reply: ReplyWrite,
-    ) {
-        log::debug!(
-            "[Not Implemented] copy_file_range(ino_in: {:#x?}, fh_in: {}, \
-            offset_in: {}, ino_out: {:#x?}, fh_out: {}, offset_out: {}, \
-            len: {}, flags: {})",
-            ino_in,
-            fh_in,
-            offset_in,
-            ino_out,
-            fh_out,
-            offset_out,
-            len,
-            flags
-        );
-        reply.error(libc::ENOSYS);
-    }
-
     /// Map block index within file to block index within device.
     /// Note: This makes sense only for block device backed filesystems mounted
     /// with the 'blkdev' option
-    fn bmap(&mut self, req: &Request, ino: u64, blocksize: u32, idx: u64, reply: ReplyBmap) {
+    fn bmap(&mut self, _req: &Request, _ino: u64, _blocksize: u32, _idx: u64, _reply: ReplyBmap) {
         todo!()
     }
 }
