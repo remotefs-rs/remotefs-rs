@@ -31,8 +31,33 @@ impl InodeDb {
         self.database.insert(inode, path);
     }
 
+    /// Forget an inode
+    pub fn forget(&mut self, inode: Inode) {
+        self.database.remove(&inode);
+    }
+
     /// Get a path from an inode
     pub fn get(&self, inode: Inode) -> Option<&Path> {
         self.database.get(&inode).map(|x| x.as_path())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn test_inode_db() {
+        let mut db = InodeDb::default();
+
+        db.put(1, PathBuf::from("/test"));
+        assert_eq!(db.get(1), Some(Path::new("/test")));
+        assert_eq!(db.has(1), true);
+
+        db.forget(1);
+        assert_eq!(db.get(1), None);
+        assert_eq!(db.has(1), false);
     }
 }

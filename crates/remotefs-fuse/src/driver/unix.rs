@@ -1,3 +1,4 @@
+mod file_handle;
 mod inode;
 
 use std::ffi::OsStr;
@@ -14,14 +15,16 @@ use fuser::{
 };
 use libc::c_int;
 use remotefs::fs::UnixPex;
-use remotefs::{File, RemoteResult};
+use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 
+pub use self::file_handle::FileHandleDb;
 pub use self::inode::InodeDb;
 use super::Driver;
 
 const BLOCK_SIZE: usize = 512;
+const FMODE_EXEC: i32 = 0x20;
 
-/// Get the inode number for a [`Path`]
+/// Get the inode as [`u64`] number for a [`Path`]
 fn inode(path: &Path) -> u64 {
     let mut hasher = seahash::SeaHasher::new();
     path.hash(&mut hasher);
@@ -70,6 +73,7 @@ fn time_or_now(t: TimeOrNow) -> SystemTime {
     }
 }
 
+/// Convert a mode to a [`FileType`] from [`fuser`]
 fn as_file_kind(mut mode: u32) -> Option<FileType> {
     mode &= libc::S_IFMT as u32;
 
@@ -103,7 +107,7 @@ impl Driver {
     }
 
     /// Get the inode from the inode number
-    fn get_inode_from_inode(&mut self, inode: u64) -> RemoteResult<(File, FileAttr)> {
+    fn get_inode(&mut self, inode: u64) -> RemoteResult<(File, FileAttr)> {
         let path = self
             .database
             .get(inode)
@@ -116,11 +120,155 @@ impl Driver {
     }
 
     /// Look up a name in a directory.
-    fn lookup_name(&self, parent: u64, name: &OsStr) -> Option<PathBuf> {
+    fn lookup_name(&mut self, parent: u64, name: &OsStr) -> Option<PathBuf> {
         let parent_path = self.database.get(parent)?;
         let path = parent_path.join(name);
 
+        // Get the inode and save it to the database
+        let inode = inode(&path);
+        if !self.database.has(inode) {
+            self.database.put(inode, path.clone());
+        }
+
         Some(path)
+    }
+
+    /// Check whether the user has access to a file's parent.
+    fn check_parent_access(&mut self, inode: u64, request: &Request, access_mask: i32) -> bool {
+        let (parent, _) = match self.get_inode(inode) {
+            Ok(res) => res,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                return false;
+            }
+        };
+
+        Self::check_access(&parent, request.uid(), request.gid(), access_mask)
+    }
+
+    /// Check whether the user has access to a file.
+    fn check_access(file: &File, uid: u32, gid: u32, mut access_mask: i32) -> bool {
+        debug!("Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask}", file.path(), file.metadata());
+        if access_mask == libc::F_OK {
+            return true;
+        }
+
+        let file_mode =
+            u32::from(file.metadata().mode.unwrap_or_else(|| UnixPex::from(0o777))) as i32;
+
+        // root is allowed to read & write anything
+        if uid == 0 {
+            // root only allowed to exec if one of the X bits is set
+            access_mask &= libc::X_OK;
+            access_mask -= access_mask & (file_mode >> 6);
+            access_mask -= access_mask & (file_mode >> 3);
+            access_mask -= access_mask & file_mode;
+            return access_mask == 0;
+        }
+
+        if uid == file.metadata().uid.unwrap_or_default() {
+            access_mask -= access_mask & (file_mode >> 6);
+        } else if gid == file.metadata().gid.unwrap_or_default() {
+            access_mask -= access_mask & (file_mode >> 3);
+        } else {
+            access_mask -= access_mask & file_mode;
+        }
+
+        return access_mask == 0;
+    }
+
+    /// Read data from a file.
+    ///
+    /// If possible, this system will use the stream from remotefs directly,
+    /// otherwise it will use a temporary file (*sigh*).
+    /// Note that most of remotefs supports streaming, so this should be rare.
+    fn read(&mut self, path: &Path, buffer: &mut [u8], offset: u64) -> RemoteResult<usize> {
+        match self.remote.open(path) {
+            Ok(mut reader) => {
+                debug!("Reading file from stream: {:?} at {offset}", path);
+                if offset > 0 {
+                    // read file until offset
+                    let mut offset_buff = vec![0; offset as usize];
+                    reader.read_exact(&mut offset_buff).map_err(|err| {
+                        remotefs::RemoteError::new_ex(
+                            remotefs::RemoteErrorType::IoError,
+                            err.to_string(),
+                        )
+                    })?;
+                }
+
+                // read file
+                let bytes_read = reader.read(buffer).map_err(|err| {
+                    remotefs::RemoteError::new_ex(
+                        remotefs::RemoteErrorType::IoError,
+                        err.to_string(),
+                    )
+                })?;
+                debug!("Read {bytes_read} bytes from stream; closing stream");
+
+                // close file
+                self.remote.on_read(reader)?;
+
+                Ok(bytes_read)
+            }
+            Err(RemoteError {
+                kind: RemoteErrorType::UnsupportedFeature,
+                ..
+            }) => self.read_tempfile(path, buffer, offset),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Read data from a file using a temporary file.
+    fn read_tempfile(
+        &mut self,
+        path: &Path,
+        buffer: &mut [u8],
+        offset: u64,
+    ) -> RemoteResult<usize> {
+        let Ok(tempfile) = tempfile::NamedTempFile::new() else {
+            return Err(remotefs::RemoteError::new(
+                remotefs::RemoteErrorType::IoError,
+            ));
+        };
+        let Ok(writer) = fs::OpenOptions::new().write(true).open(tempfile.path()) else {
+            error!("Failed to open temporary file");
+            return Err(remotefs::RemoteError::new(
+                remotefs::RemoteErrorType::IoError,
+            ));
+        };
+
+        // transfer to tempfile
+        self.remote.open_file(path, Box::new(writer))?;
+
+        let Ok(mut reader) = fs::File::open(tempfile.path()) else {
+            error!("Failed to open temporary file");
+            return Err(remotefs::RemoteError::new(
+                remotefs::RemoteErrorType::IoError,
+            ));
+        };
+
+        // skip to offset
+        if offset > 0 {
+            let mut offset_buff = vec![0; offset as usize];
+            if let Err(err) = reader.read_exact(&mut offset_buff) {
+                error!("Failed to read file: {err}");
+                return Err(remotefs::RemoteError::new(
+                    remotefs::RemoteErrorType::IoError,
+                ));
+            }
+        }
+
+        // read file
+        reader.read_exact(buffer).map_err(|err| {
+            remotefs::RemoteError::new_ex(remotefs::RemoteErrorType::IoError, err.to_string())
+        })?;
+
+        if let Err(err) = tempfile.close() {
+            error!("Failed to close temporary file: {err}");
+        }
+
+        Ok(buffer.len())
     }
 }
 
@@ -150,7 +298,7 @@ impl Filesystem for Driver {
     }
 
     /// Look up a directory entry by name and get its attributes.
-    fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
@@ -160,13 +308,21 @@ impl Filesystem for Driver {
             }
         };
 
-        match self.get_inode_from_path(path.as_path()) {
+        let (file, attrs) = match self.get_inode_from_path(path.as_path()) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT)
+                reply.error(libc::ENOENT);
+                return;
             }
-            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+            Ok(res) => res,
+        };
+
+        if !Self::check_access(&file, req.uid(), req.gid(), libc::X_OK) {
+            reply.error(libc::EACCES);
+            return;
         }
+
+        reply.entry(&Duration::new(0, 0), &attrs, 0)
     }
 
     /// Forget about an inode.
@@ -176,12 +332,15 @@ impl Filesystem for Driver {
     /// each forget. The filesystem may ignore forget calls, if the inodes don't need to
     /// have a limited lifetime. On unmount it is not guaranteed, that all referenced
     /// inodes will receive a forget message.
-    fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {}
+    fn forget(&mut self, _req: &Request, ino: u64, _nlookup: u64) {
+        debug!("forget() called with {ino}");
+        self.database.forget(ino);
+    }
 
     /// Get file attributes.
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
         debug!("getattr() called with {:?}", ino);
-        let attrs = match self.get_inode_from_inode(ino) {
+        let attrs = match self.get_inode(ino) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
                 reply.error(libc::ENOENT);
@@ -196,7 +355,7 @@ impl Filesystem for Driver {
     /// Set file attributes.
     fn setattr(
         &mut self,
-        _req: &Request,
+        req: &Request,
         ino: u64,
         mode: Option<u32>,
         uid: Option<u32>,
@@ -216,7 +375,7 @@ impl Filesystem for Driver {
             "setattr() called with mode: {:?}, uid: {:?}, gid: {:?}, size: {:?}, atime: {:?}, mtime: {:?}, ctime: {:?}",
             mode, uid, gid, size, atime, mtime, ctime
         );
-        let (mut file, _) = match self.get_inode_from_inode(ino) {
+        let (mut file, _) = match self.get_inode(ino) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
@@ -224,6 +383,11 @@ impl Filesystem for Driver {
                 return;
             }
         };
+
+        if !Self::check_access(&file, req.uid(), req.gid(), libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
 
         if let Some(mode) = mode {
             file.metadata.mode = Some(mode.into());
@@ -263,7 +427,7 @@ impl Filesystem for Driver {
     /// Read symbolic link.
     fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
         debug!("readlink() called with {:?}", ino);
-        let (file, _) = match self.get_inode_from_inode(ino) {
+        let (file, _) = match self.get_inode(ino) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
@@ -272,43 +436,11 @@ impl Filesystem for Driver {
             }
         };
 
-        // read file
-
-        let Ok(tempfile) = tempfile::NamedTempFile::new() else {
-            error!("Failed to create temporary file");
-            reply.error(libc::EIO);
-            return;
-        };
-        let Ok(writer) = fs::OpenOptions::new().write(true).open(tempfile.path()) else {
-            error!("Failed to open temporary file");
-            reply.error(libc::EIO);
-            return;
-        };
-
-        let bytes_written = match self.remote.open_file(file.path(), Box::new(writer)) {
-            Ok(bytes) => bytes as usize,
-            Err(err) => {
-                error!("Failed to read file: {err}");
-                reply.error(libc::EIO);
-                return;
-            }
-        };
-
-        let Ok(mut reader) = fs::File::open(tempfile.path()) else {
-            error!("Failed to open temporary file");
-            reply.error(libc::EIO);
-            return;
-        };
-
-        let mut buffer = vec![0; bytes_written];
-        if let Err(err) = reader.read_to_end(&mut buffer) {
+        let mut buffer = vec![0; file.metadata().size as usize];
+        if let Err(err) = self.read(file.path(), &mut buffer, 0) {
             error!("Failed to read file: {err}");
             reply.error(libc::EIO);
             return;
-        }
-
-        if let Err(err) = tempfile.close() {
-            error!("Failed to close temporary file: {err}");
         }
 
         reply.data(&buffer);
@@ -345,6 +477,12 @@ impl Filesystem for Driver {
                 return;
             }
         };
+
+        // Check access for parent
+        if !self.check_parent_access(parent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
 
         // Check file type
         let res = match as_file_kind(mode) {
@@ -388,7 +526,7 @@ impl Filesystem for Driver {
     /// Create a directory.
     fn mkdir(
         &mut self,
-        _req: &Request,
+        req: &Request,
         parent: u64,
         name: &OsStr,
         mode: u32,
@@ -403,6 +541,12 @@ impl Filesystem for Driver {
                 return;
             }
         };
+
+        // Check access for parent
+        if !self.check_parent_access(parent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
 
         let mode = UnixPex::from(mode);
         if let Err(err) = self.remote.create_dir(&path, mode) {
@@ -423,7 +567,7 @@ impl Filesystem for Driver {
     }
 
     /// Remove a file
-    fn unlink(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         debug!("unlink() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
@@ -432,6 +576,12 @@ impl Filesystem for Driver {
                 return;
             }
         };
+
+        // Check access for parent
+        if !self.check_parent_access(parent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
 
         if let Err(err) = self.remote.remove_file(&path) {
             error!("Failed to remove file: {err}");
@@ -443,7 +593,7 @@ impl Filesystem for Driver {
     }
 
     /// Remove a directory
-    fn rmdir(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         debug!("rmdir() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
@@ -452,6 +602,12 @@ impl Filesystem for Driver {
                 return;
             }
         };
+
+        // Check access for parent
+        if !self.check_parent_access(parent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
 
         if let Err(err) = self.remote.remove_dir(&path) {
             error!("Failed to remove directory: {err}");
@@ -465,7 +621,7 @@ impl Filesystem for Driver {
     /// Create a symbolic link
     fn symlink(
         &mut self,
-        _req: &Request,
+        req: &Request,
         parent: u64,
         name: &OsStr,
         link: &Path,
@@ -480,6 +636,12 @@ impl Filesystem for Driver {
             }
         };
 
+        // Check access for parent
+        if !self.check_parent_access(parent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
+
         if let Err(err) = self.remote.symlink(&path, link) {
             error!("Failed to create symlink: {err}");
             reply.error(libc::EIO);
@@ -492,7 +654,7 @@ impl Filesystem for Driver {
     /// Rename a file
     fn rename(
         &mut self,
-        _req: &Request,
+        req: &Request,
         parent: u64,
         name: &OsStr,
         newparent: u64,
@@ -504,6 +666,13 @@ impl Filesystem for Driver {
             "rename() called with {:?} {:?} {:?} {:?}",
             parent, name, newparent, newname
         );
+
+        // Check access for parent
+        if !self.check_parent_access(parent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
+
         let src = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -511,6 +680,12 @@ impl Filesystem for Driver {
                 return;
             }
         };
+
+        // Check access for new parent
+        if !self.check_parent_access(newparent, req, libc::W_OK) {
+            reply.error(libc::EACCES);
+            return;
+        }
 
         let dest = match self.lookup_name(newparent, newname) {
             Some(path) => path,
@@ -554,7 +729,47 @@ impl Filesystem for Driver {
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        todo!()
+        debug!("open() called for {ino}");
+        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                // Behavior is undefined, but most filesystems return EACCES
+                if flags & libc::O_TRUNC != 0 {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+                if flags & FMODE_EXEC != 0 {
+                    // Open is from internal exec syscall
+                    (libc::X_OK, true, false)
+                } else {
+                    (libc::R_OK, true, false)
+                }
+            }
+            libc::O_WRONLY => (libc::W_OK, false, true),
+            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            // Exactly one access mode flag must be specified
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let (file, _) = match self.get_inode(ino) {
+            Ok(res) => res,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if !Self::check_access(&file, req.uid(), req.gid(), access_mask) {
+            reply.error(libc::EACCES);
+            return;
+        }
+
+        // Set file handle and reply
+        let fh = self.file_handlers.put(ino, read, write);
+        reply.opened(fh, 0);
     }
 
     /// Read data.
@@ -566,16 +781,52 @@ impl Filesystem for Driver {
     /// if the open method didn't set any value.
     fn read(
         &mut self,
-        req: &Request,
+        _req: &Request,
         ino: u64,
         fh: u64,
         offset: i64,
         size: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        todo!()
+        debug!("read() called for {ino} {size} bytes at {offset}");
+        // check access
+        if !self
+            .file_handlers
+            .get(fh)
+            .map(|handler| handler.read)
+            .unwrap_or_default()
+        {
+            debug!("No read permission for fh {fh}");
+            reply.error(libc::EACCES);
+            return;
+        }
+        if offset < 0 {
+            debug!("Invalid offset {offset}");
+            reply.error(libc::EINVAL);
+            return;
+        }
+
+        let (file, _) = match self.get_inode(ino) {
+            Ok(attrs) => attrs,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        let read_size = (size as u64).min(file.metadata().size.saturating_sub(offset as u64));
+        debug!("Reading {read_size} bytes from at {offset}");
+        let mut buffer = vec![0; read_size as usize];
+        if let Err(err) = self.read(file.path(), &mut buffer, offset as u64) {
+            error!("Failed to read file: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        reply.data(&buffer);
     }
 
     /// Write data.

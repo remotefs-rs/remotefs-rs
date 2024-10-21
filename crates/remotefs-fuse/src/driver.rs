@@ -14,8 +14,13 @@ pub use self::error::{DriverError, DriverResult};
 /// The driver will use the [`fuser`](https://crates.io/crates/fuser) crate to mount the filesystem, on Unix systems, while
 /// it will use [dokan](https://crates.io/crates/dokan) on Windows.
 pub struct Driver {
+    /// Inode database
     #[cfg(target_family = "unix")]
     database: unix::InodeDb,
+    /// File handle database
+    #[cfg(target_family = "unix")]
+    file_handlers: unix::FileHandleDb,
+    /// [`RemoteFs`] instance
     remote: Box<dyn RemoteFs>,
 }
 
@@ -31,6 +36,8 @@ impl Driver {
         Self {
             #[cfg(target_family = "unix")]
             database: unix::InodeDb::load(),
+            #[cfg(target_family = "unix")]
+            file_handlers: unix::FileHandleDb::default(),
             remote,
         }
     }
