@@ -1,6 +1,7 @@
 mod cli;
 
 use remotefs_fuse::{Driver, MountOption};
+use tempfile::TempDir;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -8,8 +9,9 @@ fn main() -> anyhow::Result<()> {
     let args = argh::from_env::<cli::CliArgs>();
     let mount_path = args.to.clone();
     let remote = args.remote();
+    let data_dir = TempDir::new()?;
 
-    let driver = Driver::from(remote);
+    let driver = Driver::new(data_dir.path(), remote)?;
 
     // setup signal handler
     ctrlc::set_handler(move || {

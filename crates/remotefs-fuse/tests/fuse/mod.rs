@@ -9,13 +9,15 @@ use tempfile::TempDir;
 /// Mounts the filesystem in a separate thread.
 ///
 /// The filesystem must be unmounted manually and then the thread must be joined.
-fn mount(p: &Path) -> JoinHandle<()> {
+fn mount(p: &Path, data_dir: &Path) -> JoinHandle<()> {
     let mountpoint = p.to_path_buf();
+
     let error_flag = Arc::new(AtomicBool::new(false));
     let error_flag_t = error_flag.clone();
+    let data_dir = data_dir.to_path_buf();
 
     let join = std::thread::spawn(move || {
-        let driver = crate::driver::setup_driver();
+        let driver = crate::driver::setup_driver(&data_dir);
         // this operation is blocking and will not return until the filesystem is unmounted
         assert!(remotefs_fuse::mount(driver, &mountpoint, &[]).is_ok());
 
@@ -56,8 +58,9 @@ fn umount(path: &Path) -> Result<(), String> {
 #[test]
 fn test_should_mount_fs() {
     let mnt = TempDir::new().expect("Failed to create tempdir");
+    let data_dir = TempDir::new().expect("Failed to create tempdir");
     // mount
-    let join = mount(mnt.path());
+    let join = mount(mnt.path(), data_dir.path());
     // umount
     assert!(umount(mnt.path()).is_ok());
     // join

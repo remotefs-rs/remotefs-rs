@@ -1,14 +1,103 @@
+mod inode;
+
 use std::ffi::OsStr;
-use std::time::SystemTime;
+use std::hash::{Hash as _, Hasher as _};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
-    Filesystem, KernelConfig, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData, ReplyDirectory,
-    ReplyEmpty, ReplyEntry, ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
-    TimeOrNow,
+    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite,
+    ReplyXattr, Request, TimeOrNow,
 };
 use libc::c_int;
+use remotefs::{File, RemoteResult};
 
+pub use self::inode::{InodeDb, InodeDbError};
 use super::Driver;
+
+const BLOCK_SIZE: usize = 512;
+
+/// Get the inode number for a [`Path`]
+fn inode(path: &Path) -> u64 {
+    let mut hasher = seahash::SeaHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Convert a [`remotefs::fs::FileType`] to a [`FileType`] from [`fuser`]
+fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
+    match filetype {
+        remotefs::fs::FileType::Directory => FileType::Directory,
+        remotefs::fs::FileType::File => FileType::RegularFile,
+        remotefs::fs::FileType::Symlink => FileType::Symlink,
+    }
+}
+
+/// Convert a [`File`] from [`remotefs`] to a [`FileAttr`] from [`fuser`]
+fn convert_file(value: &File) -> FileAttr {
+    FileAttr {
+        ino: inode(value.path()),
+        size: value.metadata().size,
+        blocks: (value.metadata().size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
+        atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
+        mtime: value.metadata().modified.unwrap_or(UNIX_EPOCH),
+        ctime: value.metadata().created.unwrap_or(UNIX_EPOCH),
+        crtime: UNIX_EPOCH,
+        kind: convert_remote_filetype(value.metadata().file_type.clone()),
+        perm: value
+            .metadata()
+            .mode
+            .map(|mode| (u32::from(mode)) as u16)
+            .unwrap_or(0o777),
+        nlink: 0,
+        uid: value.metadata().uid.unwrap_or(0),
+        gid: value.metadata().gid.unwrap_or(0),
+        rdev: 0,
+        blksize: BLOCK_SIZE as u32,
+        flags: 0,
+    }
+}
+
+/// Convert a [`TimeOrNow`] to a [`SystemTime`]
+fn time_or_now(t: TimeOrNow) -> SystemTime {
+    match t {
+        TimeOrNow::SpecificTime(t) => t,
+        TimeOrNow::Now => SystemTime::now(),
+    }
+}
+
+impl Driver {
+    /// Get the inode for a path.
+    ///
+    /// If the inode is not in the database, it will be fetched from the remote filesystem.
+    fn get_inode_from_path(&mut self, path: &Path) -> RemoteResult<(File, FileAttr)> {
+        let (file, attrs) = self.remote.stat(path).map(|file| {
+            let attrs = convert_file(&file);
+            (file, attrs)
+        })?;
+
+        // Save the inode to the database
+        if !self.database.has(attrs.ino) {
+            self.database.put(attrs.ino, path.to_path_buf());
+        }
+
+        Ok((file, attrs))
+    }
+
+    /// Get the inode from the inode number
+    fn get_inode_from_inode(&mut self, inode: u64) -> RemoteResult<(File, FileAttr)> {
+        let path = self
+            .database
+            .get(inode)
+            .ok_or_else(|| {
+                remotefs::RemoteError::new(remotefs::RemoteErrorType::NoSuchFileOrDirectory)
+            })?
+            .to_path_buf();
+
+        self.get_inode_from_path(&path)
+    }
+}
 
 impl Filesystem for Driver {
     /// Initialize filesystem.
@@ -36,8 +125,16 @@ impl Filesystem for Driver {
     }
 
     /// Look up a directory entry by name and get its attributes.
-    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        todo!()
+    fn lookup(&mut self, _req: &Request, _parent: u64, name: &OsStr, reply: ReplyEntry) {
+        let path = PathBuf::from(name.to_string_lossy().to_string());
+
+        match self.get_inode_from_path(path.as_path()) {
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT)
+            }
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+        }
     }
 
     /// Forget about an inode.
@@ -47,13 +144,20 @@ impl Filesystem for Driver {
     /// each forget. The filesystem may ignore forget calls, if the inodes don't need to
     /// have a limited lifetime. On unmount it is not guaranteed, that all referenced
     /// inodes will receive a forget message.
-    fn forget(&mut self, req: &Request, ino: u64, nlookup: u64) {
-        todo!()
-    }
+    fn forget(&mut self, _req: &Request, _ino: u64, _nlookup: u64) {}
 
     /// Get file attributes.
-    fn getattr(&mut self, req: &Request, ino: u64, reply: ReplyAttr) {
-        todo!()
+    fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
+        let attrs = match self.get_inode_from_inode(ino) {
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+            Ok((_, attrs)) => attrs,
+        };
+
+        reply.attr(&Duration::new(0, 0), &attrs);
     }
 
     /// Set file attributes.
@@ -65,17 +169,58 @@ impl Filesystem for Driver {
         uid: Option<u32>,
         gid: Option<u32>,
         size: Option<u64>,
-        _atime: Option<TimeOrNow>,
-        _mtime: Option<TimeOrNow>,
-        _ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<SystemTime>,
+        _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        flags: Option<u32>,
+        _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        todo!()
+        let (mut file, _) = match self.get_inode_from_inode(ino) {
+            Ok(attrs) => attrs,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if let Some(mode) = mode {
+            file.metadata.mode = Some(mode.into());
+        }
+        if let Some(uid) = uid {
+            file.metadata.uid = Some(uid);
+        }
+        if let Some(gid) = gid {
+            file.metadata.gid = Some(gid);
+        }
+        if let Some(size) = size {
+            file.metadata.size = size;
+        }
+        if let Some(atime) = atime {
+            file.metadata.accessed = Some(time_or_now(atime));
+        }
+        if let Some(mtime) = mtime {
+            file.metadata.modified = Some(time_or_now(mtime));
+        }
+        if let Some(ctime) = ctime {
+            file.metadata.created = Some(ctime);
+        }
+
+        // set attributes
+        match self.remote.setstat(file.path(), file.metadata().clone()) {
+            Ok(_) => {
+                let attrs = convert_file(&file);
+                reply.attr(&Duration::new(0, 0), &attrs);
+            }
+            Err(err) => {
+                error!("Failed to set file attributes: {err}");
+                reply.error(libc::EIO);
+            }
+        }
     }
 
     /// Read symbolic link.

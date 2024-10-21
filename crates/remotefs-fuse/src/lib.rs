@@ -37,7 +37,7 @@ use std::path::Path;
 #[cfg(target_family = "unix")]
 pub use fuser::{spawn_mount2, MountOption};
 
-pub use self::driver::Driver;
+pub use self::driver::{Driver, DriverError, DriverResult};
 
 /// Mount a remote filesystem to a local directory.
 ///
