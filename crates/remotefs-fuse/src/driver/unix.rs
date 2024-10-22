@@ -1,5 +1,7 @@
 mod file_handle;
 mod inode;
+#[cfg(test)]
+mod test;
 
 use std::ffi::OsStr;
 use std::fs;

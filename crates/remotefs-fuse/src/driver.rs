@@ -24,6 +24,12 @@ pub struct Driver {
     remote: Box<dyn RemoteFs>,
 }
 
+impl From<Box<dyn RemoteFs>> for Driver {
+    fn from(remote: Box<dyn RemoteFs>) -> Self {
+        Self::new(remote)
+    }
+}
+
 impl Driver {
     /// Create a new instance of the [`Driver`] providing a instance which implements the [`RemoteFs`] trait.
     ///
