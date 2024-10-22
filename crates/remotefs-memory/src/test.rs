@@ -525,6 +525,21 @@ fn should_not_make_symlink() {
     finalize_client(client);
 }
 
+#[test]
+fn test_should_set_gid_and_uid() {
+    let mut fs = setup_client().with_get_gid(|| 1000).with_get_uid(|| 100);
+
+    // create dir
+    let dir_path = Path::new("test");
+    assert!(fs.create_dir(dir_path, UnixPex::from(0o775)).is_ok());
+
+    // stat
+    let entry = fs.stat(dir_path).unwrap();
+    let stat = entry.metadata();
+    assert_eq!(stat.gid.unwrap(), 1000);
+    assert_eq!(stat.uid.unwrap(), 100);
+}
+
 fn setup_client() -> MemoryFs {
     let tempdir = PathBuf::from("/tmp");
     let tree = Tree::new(node!(

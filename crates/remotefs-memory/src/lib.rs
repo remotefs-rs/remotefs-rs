@@ -80,6 +80,10 @@ pub struct MemoryFs {
     tree: FsTree,
     wrkdir: PathBuf,
     connected: bool,
+    // Fn to get uid
+    get_uid: Box<dyn Fn() -> u32>,
+    // Fn to get gid
+    get_gid: Box<dyn Fn() -> u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,12 +110,33 @@ impl Write for WriteHandle {
 }
 
 impl MemoryFs {
+    /// Create a new instance of the [`MemoryFs`] with the provided [`FsTree`].
     pub fn new(tree: FsTree) -> Self {
         Self {
             tree,
             wrkdir: PathBuf::from("/"),
             connected: false,
+            get_uid: Box::new(|| 0),
+            get_gid: Box::new(|| 0),
         }
+    }
+
+    /// Set the function to get the user id (uid).
+    pub fn with_get_uid<F>(mut self, get_uid: F) -> Self
+    where
+        F: Fn() -> u32 + 'static,
+    {
+        self.get_uid = Box::new(get_uid);
+        self
+    }
+
+    /// Set the function to get the group id (gid).
+    pub fn with_get_gid<F>(mut self, get_gid: F) -> Self
+    where
+        F: Fn() -> u32 + 'static,
+    {
+        self.get_gid = Box::new(get_gid);
+        self
     }
 
     fn absolutize(&self, path: &Path) -> PathBuf {
@@ -345,7 +370,7 @@ impl RemoteFs for MemoryFs {
             .unwrap_or_else(|| Path::new("/"))
             .to_path_buf();
 
-        let dir = Inode::dir(0, 0, mode);
+        let dir = Inode::dir((self.get_uid)(), (self.get_gid)(), mode);
 
         let parent = self
             .tree
@@ -380,7 +405,12 @@ impl RemoteFs for MemoryFs {
             .unwrap_or_else(|| Path::new("/"))
             .to_path_buf();
 
-        let symlink = Inode::symlink(0, 0, UnixPex::from(0o755), target.to_path_buf());
+        let symlink = Inode::symlink(
+            (self.get_uid)(),
+            (self.get_gid)(),
+            UnixPex::from(0o755),
+            target.to_path_buf(),
+        );
 
         let parent = self
             .tree
@@ -497,8 +527,8 @@ impl RemoteFs for MemoryFs {
         };
 
         let file = Inode::file(
-            0,
-            0,
+            metadata.uid.unwrap_or((self.get_uid)()),
+            metadata.gid.unwrap_or((self.get_gid)()),
             metadata.mode.unwrap_or_else(|| UnixPex::from(0o755)),
             content.clone().unwrap_or_default(),
         );
@@ -535,8 +565,8 @@ impl RemoteFs for MemoryFs {
             .ok_or_else(|| RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))?;
 
         let file = Inode::file(
-            0,
-            0,
+            metadata.uid.unwrap_or((self.get_uid)()),
+            metadata.gid.unwrap_or((self.get_gid)()),
             metadata.mode.unwrap_or_else(|| UnixPex::from(0o755)),
             vec![],
         );
