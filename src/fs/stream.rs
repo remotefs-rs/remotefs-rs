@@ -6,15 +6,15 @@ use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read, Seek, Write};
 
 // -- read stream
 
-/// A trait which combines `io::Read` and `io::Seek` together
+/// A trait which combines [`Read`] and [`Seek`] together
 pub trait ReadAndSeek: Read + Seek + Send {}
 
-/// The stream returned by RemoteFs to read a file from the remote server
+/// The stream returned by [`crate::RemoteFs`] to read a file from the remote server
 pub struct ReadStream {
     stream: StreamReader,
 }
 
-/// The kind of stream contained in the stream. Can be Read only or Read + Seek
+/// The kind of stream contained in the stream. Can be [`Read`] only or [`Read`] + [`Seek`]
 enum StreamReader {
     Read(Box<dyn Read + Send>),
     ReadAndSeek(Box<dyn ReadAndSeek>),
@@ -81,19 +81,19 @@ impl Seek for StreamReader {
 /// A trait which combines `io::Write` and `io::Seek` together
 pub trait WriteAndSeek: Write + Seek + Send {}
 
-/// The stream returned by RemoteFs to write a file from the remote server
+/// The stream returned by [`crate::RemoteFs`] to write a file from the remote server
 pub struct WriteStream {
-    stream: StreamWriter,
+    pub stream: StreamWriter,
 }
 
-/// The kind of stream contained in the stream. Can be Write only or Write + Seek
-enum StreamWriter {
+/// The kind of stream contained in the stream. Can be Write only or [`Write`] + [`Seek`]
+pub enum StreamWriter {
     Write(Box<dyn Write + Send>),
     WriteAndSeek(Box<dyn WriteAndSeek>),
 }
 
 impl WriteStream {
-    /// Returns whether `WriteStream` is seekable
+    /// Returns whether [`WriteStream`] is [`Seek`]
     pub fn seekable(&self) -> bool {
         matches!(self.stream, StreamWriter::WriteAndSeek(_))
     }

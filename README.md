@@ -15,7 +15,7 @@
 <p align="center">~ The Omni Filetransfer Client Library (and more!) ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.3.0 (30/09/2024)</p>
+<p align="center">Current version: 0.3.1 (22/10/2024)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"

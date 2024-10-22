@@ -5,7 +5,7 @@
 use std::fs::FileType as StdFileType;
 
 /// Describes the file type (directory, regular file or symlink)
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileType {
     /// A directory
     Directory,

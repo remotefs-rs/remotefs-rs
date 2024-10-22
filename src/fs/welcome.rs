@@ -4,7 +4,7 @@
 
 /// Structure holding all data related to a successful connection and authentication
 /// on remote host.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Welcome {
     /// Welcome message / banner
     pub banner: Option<String>,

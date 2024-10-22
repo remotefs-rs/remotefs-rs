@@ -14,7 +14,7 @@ use crate::RemoteResult;
 pub trait RemoteFs {
     /// Connect to the remote server and authenticate.
     /// Can return banner / welcome message on success.
-    /// If client has already established connection, then `AlreadyConnected` error is returned.
+    /// If client has already established connection, then [`RemoteErrorType::AlreadyConnected`] error is returned.
     fn connect(&mut self) -> RemoteResult<Welcome>;
 
     /// Disconnect from the remote server
@@ -33,7 +33,7 @@ pub trait RemoteFs {
     /// List directory entries at specified `path`
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>>;
 
-    /// Stat file at specified `path` and return Entry
+    /// Stat file at specified `path` and return [`File`]
     fn stat(&mut self, path: &Path) -> RemoteResult<File>;
 
     /// Set metadata for file at specified `path`
@@ -52,13 +52,13 @@ pub trait RemoteFs {
 
     /// Removes a directory at this path, after removing all its contents. **Use carefully!**
     ///
-    /// If path is a `File`, file is removed anyway, as it was a file (after all, directories are files!)
+    /// If path is a [`crate::fs::FileType::File`], file is removed anyway, as it was a file (after all, directories are files!)
     ///
     /// This function does not follow symbolic links and it will simply remove the symbolic link itself.
     ///
     /// ### Default implementation
     ///
-    /// By default this method will combine `remove_file` and `remove_file` to remove all the content.
+    /// By default this method will combine [`RemoteFs::remove_dir`] and [`RemoteFs::remove_file`] to remove all the content.
     /// Implement this method when there is a faster way to achieve this
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
         if self.is_connected() {
@@ -89,6 +89,8 @@ pub trait RemoteFs {
     }
 
     /// Create a directory at `path` with specified mode.
+    ///
+    /// If the directory already exists, it **MUST** return [`RemoteErrorType::DirectoryAlreadyExists`]
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
 
     /// Create a symlink at `path` pointing at `target`
@@ -125,36 +127,36 @@ pub trait RemoteFs {
     /// Open file at specified path for read.
     fn open(&mut self, path: &Path) -> RemoteResult<ReadStream>;
 
-    /// Finalize `create_file` and `append_file` methods.
-    /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
+    /// Finalize [`RemoteFs::create`] and [`RemoteFs::append`] methods.
+    /// This method must be implemented only if necessary; in case you don't need it, just return [`Ok`]
     /// The purpose of this method is to finalize the connection with the peer when writing data.
     /// This is necessary for some protocols such as FTP.
     /// You must call this method each time you want to finalize the write of the remote file.
     ///
     /// ### Default implementation
     ///
-    /// By default this function returns already `Ok(())`
+    /// By default this function returns already [`Ok`]
     fn on_written(&mut self, _writable: WriteStream) -> RemoteResult<()> {
         Ok(())
     }
 
-    /// Finalize `open_file` method.
-    /// This method must be implemented only if necessary; in case you don't need it, just return `Ok(())`
+    /// Finalize [`RemoteFs::open`] method.
+    /// This method must be implemented only if necessary; in case you don't need it, just return [`Ok`]
     /// The purpose of this method is to finalize the connection with the peer when reading data.
     /// This might be necessary for some protocols.
     /// You must call this method each time you want to finalize the read of the remote file.
     ///
     /// ### Default implementation
     ///
-    /// By default this function returns already `Ok(())`
+    /// By default this function returns already [`Ok`]
     fn on_read(&mut self, _readable: ReadStream) -> RemoteResult<()> {
         Ok(())
     }
 
-    /// Blocking implementation of `append`
+    /// Blocking implementation of [`RemoteFs::append`]
     /// This method **SHOULD** be implemented **ONLY** when streams are not supported by the current file transfer.
     /// The developer using the client should FIRST try with `create` followed by `on_written`
-    /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    /// If the function returns error of kind [`RemoteErrorType::UnsupportedFeature`], then he should call this function.
     /// In case of success, returns the amount of bytes written to the remote file
     ///
     /// ### Default implementation
@@ -179,10 +181,10 @@ pub trait RemoteFs {
         }
     }
 
-    /// Blocking implementation of `create`
+    /// Blocking implementation of [`RemoteFs::create`]
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// The developer using the client should FIRST try with `create` followed by `on_written`
-    /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    /// If the function returns error of kind [`RemoteErrorType::UnsupportedFeature`], then he should call this function.
     /// In case of success, returns the amount of bytes written to the remote file
     ///
     /// ### Default implementation
@@ -207,11 +209,11 @@ pub trait RemoteFs {
         }
     }
 
-    /// Blocking implementation of `open`
+    /// Blocking implementation of [`RemoteFs::open`]
     /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
     /// (since it would work thanks to the default implementation)
-    /// The developer using the client should FIRST try with `open` followed by `on_sent`
-    /// If the function returns error of kind `UnsupportedFeature`, then he should call this function.
+    /// The developer using the client should FIRST try with [`RemoteFs::open`] followed by [`RemoteFs::on_read`]
+    /// If the function returns error of kind [`RemoteErrorType::UnsupportedFeature`], then he should call this function.
     /// In case of success, returns the amount of bytes written to the local stream
     ///
     /// ### Default implementation
