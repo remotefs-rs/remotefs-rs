@@ -4,19 +4,19 @@ mod inode;
 use std::ffi::OsStr;
 use std::fs;
 use std::hash::{Hash as _, Hasher as _};
-use std::io::{Cursor, Read as _};
+use std::io::{Cursor, Read as _, Seek as _};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyBmap, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite,
-    ReplyXattr, Request, TimeOrNow,
+    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyCreate, ReplyData,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
+    Request, TimeOrNow,
 };
 use libc::c_int;
 use remotefs::fs::UnixPex;
-use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
-use serde::de;
+use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
 pub use self::file_handle::FileHandlersDb;
 pub use self::inode::InodeDb;
@@ -76,13 +76,13 @@ fn time_or_now(t: TimeOrNow) -> SystemTime {
 
 /// Convert a mode to a [`FileType`] from [`fuser`]
 fn as_file_kind(mut mode: u32) -> Option<FileType> {
-    mode &= libc::S_IFMT as u32;
+    mode &= libc::S_IFMT;
 
-    if mode == libc::S_IFREG as u32 {
+    if mode == libc::S_IFREG {
         Some(FileType::RegularFile)
-    } else if mode == libc::S_IFLNK as u32 {
+    } else if mode == libc::S_IFLNK {
         Some(FileType::Symlink)
-    } else if mode == libc::S_IFDIR as u32 {
+    } else if mode == libc::S_IFDIR {
         Some(FileType::Directory)
     } else {
         None
@@ -175,7 +175,7 @@ impl Driver {
             access_mask -= access_mask & file_mode;
         }
 
-        return access_mask == 0;
+        access_mask == 0
     }
 
     /// Read data from a file.
@@ -270,6 +270,75 @@ impl Driver {
         }
 
         Ok(buffer.len())
+    }
+
+    /// Write data to a file.
+    fn write(&mut self, file: &File, data: &[u8], offset: u64) -> RemoteResult<u32> {
+        // write data
+        let mut reader = Cursor::new(data);
+        let mut writer = match self.remote.create(file.path(), file.metadata()) {
+            Ok(writer) => writer,
+            Err(RemoteError {
+                kind: RemoteErrorType::UnsupportedFeature,
+                ..
+            }) if offset > 0 => {
+                error!("remote file system doesn't support stream, so it is not possible to write at offset");
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::UnsupportedFeature,
+                    "remote file system doesn't support stream, so it is not possible to write at offset".to_string(),
+                ));
+            }
+            Err(RemoteError {
+                kind: RemoteErrorType::UnsupportedFeature,
+                ..
+            }) => {
+                return self.write_wno_stream(file, data);
+            }
+            Err(err) => {
+                error!("Failed to write file: {err}");
+                return Err(err);
+            }
+        };
+        if offset > 0 {
+            // try to seek
+            if let Err(err) = writer.seek(std::io::SeekFrom::Start(offset)) {
+                error!("Failed to seek file: {err}. Not that not all the remote filesystems support seeking");
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::IoError,
+                    err.to_string(),
+                ));
+            }
+        }
+        // write
+        let bytes_written = match std::io::copy(&mut reader, &mut writer) {
+            Ok(bytes) => bytes as u32,
+            Err(err) => {
+                error!("Failed to write file: {err}");
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::IoError,
+                    err.to_string(),
+                ));
+            }
+        };
+        // on write
+        self.remote
+            .on_written(writer)
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
+
+        Ok(bytes_written)
+    }
+
+    /// Write data to a file without using a stream.
+    fn write_wno_stream(&mut self, file: &File, data: &[u8]) -> RemoteResult<u32> {
+        debug!(
+            "Writing file without stream: {:?} {} bytes",
+            file.path(),
+            data.len()
+        );
+        let reader = Cursor::new(data.to_vec());
+        self.remote
+            .create_file(file.path(), file.metadata(), Box::new(reader))
+            .map(|len| len as u32)
     }
 }
 
@@ -460,12 +529,9 @@ impl Filesystem for Driver {
         reply: ReplyEntry,
     ) {
         debug!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
-        let file_type = mode & libc::S_IFMT as u32;
+        let file_type = mode & libc::S_IFMT;
 
-        if file_type != libc::S_IFREG as u32
-            && file_type != libc::S_IFLNK as u32
-            && file_type != libc::S_IFDIR as u32
-        {
+        if file_type != libc::S_IFREG && file_type != libc::S_IFLNK && file_type != libc::S_IFDIR {
             warn!("mknod() implementation is incomplete. Only supports regular files, symlinks, and directories. Got {:o}", mode);
             reply.error(libc::ENOSYS);
             return;
@@ -518,7 +584,6 @@ impl Filesystem for Driver {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
                 reply.error(libc::ENOENT);
-                return;
             }
             Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
         }
@@ -561,7 +626,6 @@ impl Filesystem for Driver {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
                 reply.error(libc::ENOENT);
-                return;
             }
             Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
         }
@@ -769,7 +833,7 @@ impl Filesystem for Driver {
         }
 
         // Set file handle and reply
-        let fh = self.file_handlers.put(req.pid(), ino, read, write);
+        let fh = self.file_handlers.open(req.pid(), ino, read, write);
         reply.opened(fh, 0);
     }
 
@@ -844,13 +908,50 @@ impl Filesystem for Driver {
         fh: u64,
         offset: i64,
         data: &[u8],
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
         debug!("write() called for {ino} {} bytes at {offset}", data.len());
-        todo!()
+        // check access
+        if !self
+            .file_handlers
+            .get(req.pid(), fh)
+            .map(|handler| handler.write)
+            .unwrap_or_default()
+        {
+            debug!("No write permission for fh {fh}");
+            reply.error(libc::EACCES);
+            return;
+        }
+        // check offset
+        if offset < 0 {
+            debug!("Invalid offset {offset}");
+            reply.error(libc::EINVAL);
+            return;
+        }
+
+        let (file, _) = match self.get_inode(ino) {
+            Ok(attrs) => attrs,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // write data
+        let bytes_written = match self.write(&file, data, offset as u64) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                error!("Failed to write file: {err}");
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+
+        reply.written(bytes_written);
     }
 
     /// Flush method.
@@ -919,8 +1020,41 @@ impl Filesystem for Driver {
     /// anything in fh, though that makes it impossible to implement standard conforming
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
-    fn opendir(&mut self, _req: &Request, _ino: u64, _flags: i32, reply: ReplyOpen) {
-        reply.opened(0, 0);
+    fn opendir(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+        debug!("opendir() called on {:?}", ino);
+        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => {
+                // Behavior is undefined, but most filesystems return EACCES
+                if flags & libc::O_TRUNC != 0 {
+                    reply.error(libc::EACCES);
+                    return;
+                }
+                (libc::R_OK, true, false)
+            }
+            libc::O_WRONLY => (libc::W_OK, false, true),
+            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            // Exactly one access mode flag must be specified
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
+        let (file, _) = match self.get_inode(ino) {
+            Ok(attrs) => attrs,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if Self::check_access(&file, req.uid(), req.gid(), access_mask) {
+            let fh = self.file_handlers.open(req.pid(), ino, read, write);
+            reply.opened(fh, 0);
+        } else {
+            reply.error(libc::EACCES);
+        }
     }
 
     /// Read directory.
@@ -928,70 +1062,197 @@ impl Filesystem for Driver {
     /// requested size. Send an empty buffer on end of stream. fh will contain the
     /// value set by the opendir method, or will be undefined if the opendir method
     /// didn't set any value.
-    fn readdir(&mut self, req: &Request, ino: u64, fh: u64, offset: i64, reply: ReplyDirectory) {
-        todo!()
+    fn readdir(
+        &mut self,
+        req: &Request,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        mut reply: ReplyDirectory,
+    ) {
+        debug!("readdir() called on {:?}", ino);
+        // check fh with read permissions
+        match self.file_handlers.get(req.pid(), fh) {
+            Some(handler) if !handler.read => {
+                reply.error(libc::EACCES);
+                return;
+            }
+            None => {
+                reply.error(libc::ENOENT);
+                return;
+            }
+            _ => {}
+        }
+
+        // get directory
+        let file = match self.get_inode(ino) {
+            Ok((file, _)) => file,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        // list directory
+        let entries = match self.remote.list_dir(file.path()) {
+            Ok(entries) => entries,
+            Err(err) => {
+                error!("Failed to list directory: {err}");
+                reply.error(libc::EIO);
+                return;
+            }
+        };
+
+        for (index, entry) in entries.into_iter().skip(offset as usize).enumerate() {
+            let inode = inode(entry.path());
+            let name = match entry.path().file_name() {
+                Some(name) => OsStr::from_bytes(name.as_bytes()),
+                None => {
+                    error!("Failed to get file name");
+
+                    continue;
+                }
+            };
+            let buffer_full = reply.add(
+                inode,
+                offset + index as i64 + 1,
+                convert_remote_filetype(entry.metadata().file_type.clone()),
+                name,
+            );
+
+            if buffer_full {
+                debug!("buffer is full");
+                break;
+            }
+        }
+
+        reply.ok();
     }
 
     /// Release an open directory.
     /// For every opendir call there will be exactly one releasedir call. fh will
     /// contain the value set by the opendir method, or will be undefined if the
     /// opendir method didn't set any value.
-    fn releasedir(&mut self, req: &Request, ino: u64, fh: u64, flags: i32, reply: ReplyEmpty) {
-        todo!()
+    fn releasedir(&mut self, req: &Request, _ino: u64, fh: u64, _flags: i32, reply: ReplyEmpty) {
+        // get fh
+        if self.file_handlers.get(req.pid(), fh).is_none() {
+            reply.error(libc::ENOENT);
+            return;
+        }
+
+        // remove fh and ok
+        self.file_handlers.close(req.pid(), fh);
+        reply.ok();
     }
 
     /// Synchronize directory contents.
     /// If the datasync parameter is set, then only the directory contents should
     /// be flushed, not the meta data. fh will contain the value set by the opendir
     /// method, or will be undefined if the opendir method didn't set any value.
-    fn fsyncdir(&mut self, req: &Request, ino: u64, fh: u64, datasync: bool, reply: ReplyEmpty) {
-        todo!()
+    fn fsyncdir(&mut self, req: &Request, ino: u64, fh: u64, _datasync: bool, reply: ReplyEmpty) {
+        debug!("fsyncdir() called for {ino}");
+        // get fh
+        if self.file_handlers.get(req.pid(), fh).is_none() {
+            reply.error(libc::ENOENT);
+            return;
+        }
+        reply.ok();
     }
 
     /// Get file system statistics.
-    fn statfs(&mut self, req: &Request, ino: u64, reply: ReplyStatfs) {
-        reply.statfs(0, 0, 0, 0, 0, 512, 255, 0);
+    fn statfs(&mut self, _req: &Request, ino: u64, reply: ReplyStatfs) {
+        debug!("statfs() called for {ino}");
+
+        // get statfs
+        struct FsStats {
+            files: u64,
+            size: u64,
+        }
+
+        let path = match self.get_inode(ino) {
+            Ok((file, _)) => file.path().to_path_buf(),
+            Err(_) => PathBuf::from("/"),
+        };
+        debug!("Getting filesystem statistics for {path:?}");
+
+        // recursive directory iteration
+        fn iter_dir(
+            remote: &mut Box<dyn RemoteFs>,
+            p: &Path,
+            stats: &mut FsStats,
+        ) -> RemoteResult<()> {
+            let entries = remote.list_dir(p)?;
+            for entry in entries {
+                stats.files += 1;
+                stats.size += entry.metadata().size;
+                if entry.metadata().file_type == remotefs::fs::FileType::Directory {
+                    iter_dir(remote, entry.path(), stats)?;
+                }
+            }
+            Ok(())
+        }
+
+        let mut stats = FsStats { files: 0, size: 0 };
+        if let Err(err) = iter_dir(&mut self.remote, &path, &mut stats) {
+            error!("Failed to get filesystem statistics: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
+
+        reply.statfs(
+            stats.size / BLOCK_SIZE as u64,
+            u64::MAX - stats.size / BLOCK_SIZE as u64,
+            u64::MAX - stats.size / BLOCK_SIZE as u64,
+            stats.files,
+            0,
+            BLOCK_SIZE as u32,
+            255,
+            0,
+        );
     }
 
     /// Set an extended attribute.
     fn setxattr(
         &mut self,
-        req: &Request,
+        _req: &Request,
         ino: u64,
         name: &OsStr,
         value: &[u8],
-        flags: i32,
-        position: u32,
+        _flags: i32,
+        _position: u32,
         reply: ReplyEmpty,
     ) {
-        todo!()
+        debug!("setxattr() called on {:?} {:?} {:?}", ino, name, value);
+        // not supported
+        reply.error(libc::ENOSYS);
     }
 
     /// Get an extended attribute.
     /// If `size` is 0, the size of the value should be sent with `reply.size()`.
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
-    fn getxattr(&mut self, req: &Request, ino: u64, name: &OsStr, size: u32, reply: ReplyXattr) {
-        let path = match self.lookup_name(ino, name) {
-            Some(path) => path,
-            None => {
-                reply.error(libc::ENOENT);
-                return;
-            }
-        };
+    fn getxattr(&mut self, _req: &Request, ino: u64, name: &OsStr, _size: u32, reply: ReplyXattr) {
+        debug!("getxattr() called on {:?} {:?}", ino, name);
+        // not supported
+        reply.error(libc::ENOSYS);
     }
 
     /// List extended attribute names.
     /// If `size` is 0, the size of the value should be sent with `reply.size()`.
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
-    fn listxattr(&mut self, req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
-        todo!()
+    fn listxattr(&mut self, _req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
+        debug!("listxattr() called on {:?} {:?}", ino, size);
+        // not supported
+        reply.error(libc::ENOSYS);
     }
 
     /// Remove an extended attribute.
-    fn removexattr(&mut self, req: &Request, ino: u64, name: &OsStr, reply: ReplyEmpty) {
-        todo!()
+    fn removexattr(&mut self, _req: &Request, ino: u64, name: &OsStr, reply: ReplyEmpty) {
+        debug!("removexattr() called on {:?} {:?}", ino, name);
+        // not supported
+        reply.error(libc::ENOSYS);
     }
 
     /// Check file access permissions.
@@ -999,7 +1260,21 @@ impl Filesystem for Driver {
     /// mount option is given, this method is not called. This method is not called
     /// under Linux kernel versions 2.4.x
     fn access(&mut self, req: &Request, ino: u64, mask: i32, reply: ReplyEmpty) {
-        todo!()
+        debug!("access() called on {:?} {:o}", ino, mask);
+        let file = match self.get_inode(ino) {
+            Ok((file, _)) => file,
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+                return;
+            }
+        };
+
+        if Self::check_access(&file, req.uid(), req.gid(), mask) {
+            reply.ok();
+        } else {
+            reply.error(libc::EACCES);
+        }
     }
 
     /// Create and open a file.
@@ -1018,10 +1293,23 @@ impl Filesystem for Driver {
         parent: u64,
         name: &OsStr,
         mode: u32,
-        umask: u32,
+        _umask: u32,
         flags: i32,
         reply: ReplyCreate,
     ) {
+        debug!("create() called with {:?} {:?} {:o}", parent, name, mode);
+
+        let (read, write) = match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => (true, false),
+            libc::O_WRONLY => (false, true),
+            libc::O_RDWR => (true, true),
+            // Exactly one access mode flag must be specified
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
+
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -1029,67 +1317,32 @@ impl Filesystem for Driver {
                 return;
             }
         };
-    }
 
-    /// Test for a POSIX file lock.
-    fn getlk(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        fh: u64,
-        lock_owner: u64,
-        start: u64,
-        end: u64,
-        typ: i32,
-        pid: u32,
-        reply: ReplyLock,
-    ) {
-        todo!()
-    }
+        let metadata = remotefs::fs::Metadata {
+            mode: Some(mode.into()),
+            gid: Some(req.gid()),
+            uid: Some(req.uid()),
+            ..Default::default()
+        };
+        let reader = Cursor::new(Vec::new());
+        if let Err(err) = self.remote.create_file(&path, &metadata, Box::new(reader)) {
+            error!("Failed to create file: {err}");
+            reply.error(libc::EIO);
+            return;
+        }
 
-    /// Acquire, modify or release a POSIX file lock.
-    /// For POSIX threads (NPTL) there's a 1-1 relation between pid and owner, but
-    /// otherwise this is not always the case.  For checking lock ownership,
-    /// 'fi->owner' must be used. The l_pid field in 'struct flock' should only be
-    /// used to fill in this field in getlk(). Note: if the locking methods are not
-    /// implemented, the kernel will still allow file locking to work locally.
-    fn setlk(
-        &mut self,
-        req: &Request,
-        ino: u64,
-        fh: u64,
-        lock_owner: u64,
-        start: u64,
-        end: u64,
-        typ: i32,
-        pid: u32,
-        sleep: bool,
-        reply: ReplyEmpty,
-    ) {
-        todo!();
-    }
+        let inode = inode(&path);
 
-    fn readdirplus(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        fh: u64,
-        offset: i64,
-        reply: fuser::ReplyDirectoryPlus,
-    ) {
-        log::debug!(
-            "[Not Implemented] readdirplus(ino: {:#x?}, fh: {}, offset: {})",
-            ino,
-            fh,
-            offset
-        );
-        reply.error(libc::ENOSYS);
-    }
-
-    /// Map block index within file to block index within device.
-    /// Note: This makes sense only for block device backed filesystems mounted
-    /// with the 'blkdev' option
-    fn bmap(&mut self, _req: &Request, _ino: u64, _blocksize: u32, _idx: u64, _reply: ReplyBmap) {
-        todo!()
+        // return created
+        match self.get_inode(inode) {
+            Err(err) => {
+                debug!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+            }
+            Ok((_, attrs)) => {
+                let fh = self.file_handlers.open(req.pid(), inode, read, write);
+                reply.created(&Duration::new(0, 0), &attrs, 0, fh, 0);
+            }
+        }
     }
 }

@@ -31,7 +31,6 @@ remotefs-smb = { version = "0.3", optional = true }
 remotefs-ssh = { version = "0.4", optional = true }
 remotefs-webdav = { version = "0.2", optional = true }
 thiserror = "^1"
-tempfile = "3"
 tokio = { version = "1", features = ["rt"] }
 
 [features]

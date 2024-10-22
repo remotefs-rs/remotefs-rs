@@ -1,7 +1,6 @@
 mod cli;
 
 use remotefs_fuse::{Driver, MountOption};
-use tempfile::TempDir;
 
 fn main() -> anyhow::Result<()> {
     env_logger::init();

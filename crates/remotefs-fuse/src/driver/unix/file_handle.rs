@@ -15,12 +15,19 @@ pub struct FileHandlersDb {
 }
 
 impl FileHandlersDb {
-    /// Put a new file handle into the database.
-    pub fn put(&mut self, pid: Pid, inode: Inode, read: bool, write: bool) -> u64 {
-        self.handlers
+    /// Open a new file handle into the database.
+    pub fn open(&mut self, pid: Pid, inode: Inode, read: bool, write: bool) -> u64 {
+        let fh = self
+            .handlers
             .entry(pid)
-            .or_insert_with(ProcessFileHandlers::default)
-            .put(inode, read, write)
+            .or_default()
+            .open(inode, read, write);
+
+        debug!(
+            "opened file handle {fh} for pid {pid} and inode {inode}; read: {read}, write: {write}",
+        );
+
+        fh
     }
 
     /// Get a file handle from the database.
@@ -33,6 +40,7 @@ impl FileHandlersDb {
     /// Close a file handle.
     pub fn close(&mut self, pid: Pid, fh: u64) {
         if let Some(handlers) = self.handlers.get_mut(&pid) {
+            debug!("closing file handle {fh} for pid {pid}");
             handlers.close(fh);
         }
 
@@ -43,6 +51,7 @@ impl FileHandlersDb {
             .map(|handlers| handlers.handles.is_empty())
             .unwrap_or_default()
         {
+            debug!("removing file handlers for pid {pid}");
             self.handlers.remove(&pid);
         }
     }
@@ -70,13 +79,14 @@ pub struct FileHandle {
 }
 
 impl ProcessFileHandlers {
-    /// Put a new [`FileHandle`] into the database.
+    /// Open a new [`FileHandle`] into the database.
     ///
     /// Returns the created file handle number.
-    fn put(&mut self, inode: Inode, read: bool, write: bool) -> u64 {
+    fn open(&mut self, inode: Inode, read: bool, write: bool) -> u64 {
         let fh = self.next;
         self.handles.insert(fh, FileHandle { inode, read, write });
         self.next = self.handles.len() as u64;
+
         fh
     }
 
@@ -106,7 +116,7 @@ mod test {
     fn test_should_store_handlers_for_pid() {
         let mut db = FileHandlersDb::default();
 
-        let fh = db.put(1, 1, true, false);
+        let fh = db.open(1, 1, true, false);
         assert_eq!(
             db.get(1, fh),
             Some(&FileHandle {
@@ -118,7 +128,7 @@ mod test {
 
         assert_eq!(db.get(2, fh), None);
 
-        let fh = db.put(1, 2, true, false);
+        let fh = db.open(1, 2, true, false);
         assert_eq!(
             db.get(1, fh),
             Some(&FileHandle {
@@ -128,7 +138,7 @@ mod test {
             })
         );
 
-        let fh = db.put(2, 3, true, false);
+        let fh = db.open(2, 3, true, false);
 
         assert_eq!(
             db.get(2, fh),
@@ -144,7 +154,7 @@ mod test {
     fn test_should_remove_pid_if_has_no_more_handles() {
         let mut db = FileHandlersDb::default();
 
-        let fh = db.put(1, 1, true, false);
+        let fh = db.open(1, 1, true, false);
         assert_eq!(
             db.get(1, fh),
             Some(&FileHandle {
@@ -157,8 +167,8 @@ mod test {
         db.close(1, fh);
         assert_eq!(db.get(1, fh), None);
 
-        db.put(1, 2, true, false);
-        db.put(1, 3, true, false);
+        db.open(1, 2, true, false);
+        db.open(1, 3, true, false);
         db.close(1, 2);
 
         assert!(db.handlers.contains_key(&1));
@@ -168,7 +178,7 @@ mod test {
     fn test_file_handle_db() {
         let mut db = ProcessFileHandlers::default();
 
-        let fh = db.put(1, true, false);
+        let fh = db.open(1, true, false);
         assert_eq!(
             db.get(fh),
             Some(&FileHandle {
@@ -186,13 +196,13 @@ mod test {
     fn test_should_reuse_fhs() {
         let mut db = ProcessFileHandlers::default();
 
-        let _fh1 = db.put(1, true, false);
-        let fh2 = db.put(2, true, false);
-        let _fh3 = db.put(3, true, false);
+        let _fh1 = db.open(1, true, false);
+        let fh2 = db.open(2, true, false);
+        let _fh3 = db.open(3, true, false);
 
         db.close(fh2);
 
-        let fh4 = db.put(4, true, false);
+        let fh4 = db.open(4, true, false);
 
         assert_eq!(fh4, fh2);
         assert_eq!(
@@ -205,7 +215,7 @@ mod test {
         );
 
         // next should be 3
-        let fh5 = db.put(5, true, false);
+        let fh5 = db.open(5, true, false);
         assert_eq!(fh5, 3);
     }
 }
