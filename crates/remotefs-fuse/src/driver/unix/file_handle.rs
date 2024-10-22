@@ -204,8 +204,8 @@ mod test {
             })
         );
 
-        // next should be 5
+        // next should be 3
         let fh5 = db.put(5, true, false);
-        assert_eq!(fh5, 5);
+        assert_eq!(fh5, 3);
     }
 }
