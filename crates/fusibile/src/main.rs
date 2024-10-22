@@ -6,6 +6,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let args = argh::from_env::<cli::CliArgs>();
+    let volume = args.volume.clone();
     let mount_path = args.to.clone();
     let remote = args.remote();
 
@@ -30,6 +31,7 @@ fn main() -> anyhow::Result<()> {
             MountOption::Exec,
             MountOption::Atime,
             MountOption::Sync,
+            MountOption::FSName(volume),
         ],
     )?;
 

@@ -30,6 +30,7 @@ seahash = "4"
 [dev-dependencies]
 env_logger = "^0.11"
 pretty_assertions = "^1"
+remotefs-memory = "0.1"
 
 [features]
 default = []

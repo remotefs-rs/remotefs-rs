@@ -89,7 +89,7 @@ All the features are enabled by default; so if you want to build it with only ce
 ### Usage
 
 ```sh
-remotefs-fuse-cli --to /mnt/to <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
+remotefs-fuse-cli --to /mnt/to --volume <volume-name> <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
 ```
 
 where protocol options are
@@ -112,6 +112,7 @@ where protocol options are
 - kube
   - `--namespace <namespace>` (default: `default`)
   - `--cluster-url <url>`
+- memory: runs a virtual file system in memory
 - smb
   - `--address <address>`
   - `--port <port>` (default: `139`; Linux/Mac only)

@@ -4,7 +4,7 @@ use argh::FromArgs;
 use remotefs_kube::{Config, KubeMultiPodFs};
 
 #[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "ftp")]
+#[argh(subcommand, name = "kube")]
 /// Mount a Kube multipod filesystem
 pub struct KubeArgs {
     /// namespace

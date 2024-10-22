@@ -51,7 +51,7 @@ fn convert_file(value: &File) -> FileAttr {
         mtime: value.metadata().modified.unwrap_or(UNIX_EPOCH),
         ctime: value.metadata().created.unwrap_or(UNIX_EPOCH),
         crtime: UNIX_EPOCH,
-        kind: convert_remote_filetype(value.metadata().file_type.clone()),
+        kind: convert_remote_filetype(value.metadata().file_type),
         perm: value
             .metadata()
             .mode
@@ -1117,7 +1117,7 @@ impl Filesystem for Driver {
             let buffer_full = reply.add(
                 inode,
                 offset + index as i64 + 1,
-                convert_remote_filetype(entry.metadata().file_type.clone()),
+                convert_remote_filetype(entry.metadata().file_type),
                 name,
             );
 

@@ -4,6 +4,7 @@ mod aws_s3;
 mod ftp;
 #[cfg(feature = "kube")]
 mod kube;
+mod memory;
 #[cfg(feature = "smb")]
 mod smb;
 #[cfg(feature = "ssh")]
@@ -22,6 +23,7 @@ use self::aws_s3::AwsS3Args;
 use self::ftp::FtpArgs;
 #[cfg(feature = "kube")]
 use self::kube::KubeArgs;
+use self::memory::MemoryArgs;
 #[cfg(feature = "smb")]
 use self::smb::SmbArgs;
 #[cfg(feature = "ssh")]
@@ -37,6 +39,9 @@ pub struct CliArgs {
     /// path where the remote filesystem will be mounted to
     #[argh(option)]
     pub to: PathBuf,
+    /// name of mounted filesystem volume
+    #[argh(option)]
+    pub volume: String,
     #[argh(subcommand)]
     remote: RemoteArgs,
 }
@@ -50,6 +55,7 @@ pub enum RemoteArgs {
     Ftp(FtpArgs),
     #[cfg(feature = "kube")]
     Kube(KubeArgs),
+    Memory(MemoryArgs),
     #[cfg(feature = "ssh")]
     Scp(ScpArgs),
     #[cfg(feature = "ssh")]
@@ -70,6 +76,7 @@ impl CliArgs {
             RemoteArgs::Ftp(args) => Box::new(remotefs_ftp::FtpFs::from(args)),
             #[cfg(feature = "kube")]
             RemoteArgs::Kube(args) => Box::new(remotefs_kube::KubeMultiPodFs::from(args)),
+            RemoteArgs::Memory(args) => Box::new(remotefs_memory::MemoryFs::from(args)),
             #[cfg(feature = "ssh")]
             RemoteArgs::Scp(args) => Box::new(remotefs_ssh::ScpFs::from(args)),
             #[cfg(feature = "ssh")]

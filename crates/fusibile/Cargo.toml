@@ -27,11 +27,15 @@ remotefs-aws-s3 = { version = "0.3", optional = true }
 remotefs-ftp = { version = "0.2", features = ["rustls"], optional = true }
 remotefs-fuse = { path = "../remotefs-fuse", version = "0.1" }
 remotefs-kube = { version = "0.4", optional = true }
+remotefs-memory = "0.1"
 remotefs-smb = { version = "0.3", optional = true }
 remotefs-ssh = { version = "0.4", optional = true }
 remotefs-webdav = { version = "0.2", optional = true }
 thiserror = "^1"
 tokio = { version = "1", features = ["rt"] }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+nix = { version = "0.29", features = ["user"] }
 
 [features]
 default = ["aws-s3", "ftp", "kube", "smb", "ssh", "webdav"]
