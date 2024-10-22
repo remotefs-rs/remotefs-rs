@@ -1,0 +1,25 @@
+[package]
+name = "remotefs-memory"
+version = "0.1.0"
+authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+edition = "2021"
+license = "MIT"
+keywords = ["remotefs", "memory"]
+categories = ["simulation"]
+repository = "https://github.com/remotefs-rs/remotefs-rs-memory"
+documentation = "https://docs.rs/remotefs-memory"
+description = "remotefs implementation for volatile memory. Good for testing and simulation."
+include = ["src/**/*", "./LICENSE", "./README.md", "./CHANGELOG.md"]
+readme = "README.md"
+
+[lib]
+name = "remotefs_memory"
+path = "src/lib.rs"
+
+[dependencies]
+log = "^0.4"
+orange-trees = "0.1"
+remotefs = "0.3"
+
+[dev-dependencies]
+pretty_assertions = "^1"
