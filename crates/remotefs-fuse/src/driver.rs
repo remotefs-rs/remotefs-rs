@@ -19,7 +19,7 @@ pub struct Driver {
     database: unix::InodeDb,
     /// File handle database
     #[cfg(target_family = "unix")]
-    file_handlers: unix::FileHandleDb,
+    file_handlers: unix::FileHandlersDb,
     /// [`RemoteFs`] instance
     remote: Box<dyn RemoteFs>,
 }
@@ -37,7 +37,7 @@ impl Driver {
             #[cfg(target_family = "unix")]
             database: unix::InodeDb::load(),
             #[cfg(target_family = "unix")]
-            file_handlers: unix::FileHandleDb::default(),
+            file_handlers: unix::FileHandlersDb::default(),
             remote,
         }
     }

@@ -16,8 +16,9 @@ use fuser::{
 use libc::c_int;
 use remotefs::fs::UnixPex;
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
+use serde::de;
 
-pub use self::file_handle::FileHandleDb;
+pub use self::file_handle::FileHandlersDb;
 pub use self::inode::InodeDb;
 use super::Driver;
 
@@ -768,7 +769,7 @@ impl Filesystem for Driver {
         }
 
         // Set file handle and reply
-        let fh = self.file_handlers.put(ino, read, write);
+        let fh = self.file_handlers.put(req.pid(), ino, read, write);
         reply.opened(fh, 0);
     }
 
@@ -781,7 +782,7 @@ impl Filesystem for Driver {
     /// if the open method didn't set any value.
     fn read(
         &mut self,
-        _req: &Request,
+        req: &Request,
         ino: u64,
         fh: u64,
         offset: i64,
@@ -794,7 +795,7 @@ impl Filesystem for Driver {
         // check access
         if !self
             .file_handlers
-            .get(fh)
+            .get(req.pid(), fh)
             .map(|handler| handler.read)
             .unwrap_or_default()
         {
@@ -802,6 +803,7 @@ impl Filesystem for Driver {
             reply.error(libc::EACCES);
             return;
         }
+        // check offset
         if offset < 0 {
             debug!("Invalid offset {offset}");
             reply.error(libc::EINVAL);
@@ -847,6 +849,7 @@ impl Filesystem for Driver {
         lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
+        debug!("write() called for {ino} {} bytes at {offset}", data.len());
         todo!()
     }
 
@@ -860,8 +863,17 @@ impl Filesystem for Driver {
     /// is not forced to flush pending writes. One reason to flush data, is if the
     /// filesystem wants to return write errors. If the filesystem supports file locking
     /// operations (setlk, getlk) it should remove all locks belonging to 'lock_owner'.
-    fn flush(&mut self, req: &Request, ino: u64, fh: u64, lock_owner: u64, reply: ReplyEmpty) {
-        todo!()
+    fn flush(&mut self, req: &Request, ino: u64, fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
+        debug!("flush() called for {ino}");
+
+        // get fh
+        if self.file_handlers.get(req.pid(), fh).is_none() {
+            reply.error(libc::ENOENT);
+            return;
+        }
+
+        // nop and ok
+        reply.ok();
     }
 
     /// Release an open file.
@@ -876,19 +888,29 @@ impl Filesystem for Driver {
         &mut self,
         req: &Request,
         _ino: u64,
-        _fh: u64,
+        fh: u64,
         _flags: i32,
         _lock_owner: Option<u64>,
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        todo!()
+        // get fh
+        if self.file_handlers.get(req.pid(), fh).is_none() {
+            reply.error(libc::ENOENT);
+            return;
+        }
+
+        // remove fh and ok
+        self.file_handlers.close(req.pid(), fh);
+        reply.ok();
     }
 
     /// Synchronize file contents.
     /// If the datasync parameter is non-zero, then only the user data should be flushed,
     /// not the meta data.
-    fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, _reply: ReplyEmpty) {}
+    fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, reply: ReplyEmpty) {
+        reply.ok();
+    }
 
     /// Open a directory.
     /// Filesystem may store an arbitrary file handle (pointer, index, etc) in fh, and
