@@ -55,6 +55,16 @@ fn mount(p: &Path) -> (UmountLock, JoinHandle<()>) {
     (umount, join)
 }
 
+fn umount(umount: UmountLock) {
+    umount
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .umount()
+        .expect("Failed to unmount");
+}
+
 #[test]
 fn test_should_mount_fs() {
     let mnt = TempDir::new().expect("Failed to create tempdir");
@@ -70,13 +80,7 @@ fn test_should_mount_fs() {
     assert!(mounted_file_path.exists());
 
     // unmount
-    umounter
-        .lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .umount()
-        .expect("Failed to unmount");
+    umount(umounter);
 
     join.join().expect("Failed to join thread");
 }
