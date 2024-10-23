@@ -1,6 +1,6 @@
 mod cli;
 
-use remotefs_fuse::{Driver, MountOption};
+use remotefs_fuse::{Driver, Mount, MountOption};
 
 fn main() -> anyhow::Result<()> {
     let args = argh::from_env::<cli::CliArgs>();
@@ -11,13 +11,6 @@ fn main() -> anyhow::Result<()> {
 
     let driver = Driver::new(remote);
 
-    // setup signal handler
-    ctrlc::set_handler(move || {
-        log::warn!(
-            "Received interrupt signal. Please, umount file system to terminate the process."
-        );
-    })?;
-
     log::info!("Mounting remote fs at {}", mount_path.display());
 
     // create the mount point if it does not exist
@@ -27,7 +20,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Mount the remote file system
-    remotefs_fuse::mount(
+    let mut mount = Mount::mount(
         driver,
         &mount_path,
         &[
@@ -38,6 +31,17 @@ fn main() -> anyhow::Result<()> {
             MountOption::FSName(volume),
         ],
     )?;
+
+    let mut umount = mount.unmounter();
+
+    // setup signal handler
+    ctrlc::set_handler(move || {
+        log::info!("Received SIGINT, unmounting filesystem");
+        umount.umount().expect("Failed to unmount");
+    })?;
+
+    log::info!("Running filesystem event loop");
+    mount.run()?;
 
     Ok(())
 }

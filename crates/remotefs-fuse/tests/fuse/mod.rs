@@ -1,28 +1,32 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use fuser::MountOption;
+use remotefs_fuse::{Mount, Umount};
 use tempfile::TempDir;
 
 use crate::driver::mounted_file_path;
 
+pub type UmountLock = Arc<Mutex<Option<Umount>>>;
+
 /// Mounts the filesystem in a separate thread.
 ///
 /// The filesystem must be unmounted manually and then the thread must be joined.
-fn mount(p: &Path) -> JoinHandle<()> {
+fn mount(p: &Path) -> (UmountLock, JoinHandle<()>) {
     let mountpoint = p.to_path_buf();
 
     let error_flag = Arc::new(AtomicBool::new(false));
     let error_flag_t = error_flag.clone();
 
+    let umount = Arc::new(Mutex::new(None));
+    let umount_t = umount.clone();
+
     let join = std::thread::spawn(move || {
-        let driver = crate::driver::setup_driver();
-        // this operation is blocking and will not return until the filesystem is unmounted
-        remotefs_fuse::mount(
-            driver,
+        let mut mount = Mount::mount(
+            crate::driver::setup_driver(),
             &mountpoint,
             &[
                 MountOption::AllowRoot,
@@ -32,6 +36,11 @@ fn mount(p: &Path) -> JoinHandle<()> {
             ],
         )
         .expect("failed to mount");
+
+        let umount = mount.unmounter();
+        *umount_t.lock().unwrap() = Some(umount);
+
+        mount.run().expect("failed to run filesystem event loop");
 
         // set the error flag if the filesystem was unmounted
         error_flag_t.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -43,14 +52,14 @@ fn mount(p: &Path) -> JoinHandle<()> {
         panic!("Failed to mount filesystem");
     }
 
-    join
+    (umount, join)
 }
 
 #[test]
 fn test_should_mount_fs() {
     let mnt = TempDir::new().expect("Failed to create tempdir");
     // mount
-    let _join = mount(mnt.path());
+    let (umounter, join) = mount(mnt.path());
     // mounted file exists
     let mounted_file_path = PathBuf::from(format!(
         "{}{}",
@@ -59,4 +68,15 @@ fn test_should_mount_fs() {
     ));
     println!("Mounted file path: {:?}", mounted_file_path);
     assert!(mounted_file_path.exists());
+
+    // unmount
+    umounter
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .umount()
+        .expect("Failed to unmount");
+
+    join.join().expect("Failed to join thread");
 }
