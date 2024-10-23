@@ -3,9 +3,8 @@ mod cli;
 use remotefs_fuse::{Driver, MountOption};
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
-
     let args = argh::from_env::<cli::CliArgs>();
+    args.init_logger()?;
     let volume = args.volume.clone();
     let mount_path = args.to.clone();
     let remote = args.remote();
@@ -21,6 +20,12 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("Mounting remote fs at {}", mount_path.display());
 
+    // create the mount point if it does not exist
+    if !mount_path.exists() {
+        log::info!("creating mount point at {}", mount_path.display());
+        std::fs::create_dir_all(&mount_path)?;
+    }
+
     // Mount the remote file system
     remotefs_fuse::mount(
         driver,
@@ -29,7 +34,6 @@ fn main() -> anyhow::Result<()> {
             MountOption::AllowRoot,
             MountOption::RW,
             MountOption::Exec,
-            MountOption::Atime,
             MountOption::Sync,
             MountOption::FSName(volume),
         ],

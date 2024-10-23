@@ -42,8 +42,43 @@ pub struct CliArgs {
     /// name of mounted filesystem volume
     #[argh(option)]
     pub volume: String,
+    /// enable verbose logging.
+    ///
+    /// use multiple times to increase verbosity
+    #[argh(option, short = 'v')]
+    log_level: Option<String>,
     #[argh(subcommand)]
     remote: RemoteArgs,
+}
+
+impl CliArgs {
+    pub fn init_logger(&self) -> anyhow::Result<()> {
+        let Some(verbose) = self.log_level.as_ref() else {
+            env_logger::init();
+            return Ok(());
+        };
+
+        match verbose.as_str() {
+            "error" => env_logger::builder()
+                .filter_level(log::LevelFilter::Error)
+                .init(),
+            "warn" => env_logger::builder()
+                .filter_level(log::LevelFilter::Warn)
+                .init(),
+            "info" => env_logger::builder()
+                .filter_level(log::LevelFilter::Info)
+                .init(),
+            "debug" => env_logger::builder()
+                .filter_level(log::LevelFilter::Debug)
+                .init(),
+            "trace" => env_logger::builder()
+                .filter_level(log::LevelFilter::Trace)
+                .init(),
+            _ => anyhow::bail!("Invalid log level: {verbose}"),
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(FromArgs, Debug)]

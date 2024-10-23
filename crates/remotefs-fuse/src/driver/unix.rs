@@ -16,6 +16,7 @@ use fuser::{
     ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
     Request, TimeOrNow,
 };
+use inode::Inode;
 use libc::c_int;
 use remotefs::fs::UnixPex;
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
@@ -26,13 +27,6 @@ use super::Driver;
 
 const BLOCK_SIZE: usize = 512;
 const FMODE_EXEC: i32 = 0x20;
-
-/// Get the inode as [`u64`] number for a [`Path`]
-fn inode(path: &Path) -> u64 {
-    let mut hasher = seahash::SeaHasher::new();
-    path.hash(&mut hasher);
-    hasher.finish()
-}
 
 /// Convert a [`remotefs::fs::FileType`] to a [`FileType`] from [`fuser`]
 fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
@@ -46,7 +40,7 @@ fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
 /// Convert a [`File`] from [`remotefs`] to a [`FileAttr`] from [`fuser`]
 fn convert_file(value: &File) -> FileAttr {
     FileAttr {
-        ino: inode(value.path()),
+        ino: Driver::inode(value.path()),
         size: value.metadata().size,
         blocks: (value.metadata().size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
         atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
@@ -92,6 +86,13 @@ fn as_file_kind(mut mode: u32) -> Option<FileType> {
 }
 
 impl Driver {
+    /// Get the inode as [`Inode`] ([`u64`]) number for a [`Path`]
+    fn inode(path: &Path) -> Inode {
+        let mut hasher = seahash::SeaHasher::new();
+        path.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Get the inode for a path.
     ///
     /// If the inode is not in the database, it will be fetched from the remote filesystem.
@@ -109,8 +110,8 @@ impl Driver {
         Ok((file, attrs))
     }
 
-    /// Get the inode from the inode number
-    fn get_inode(&mut self, inode: u64) -> RemoteResult<(File, FileAttr)> {
+    /// Get the inode from the [`Inode`] number
+    fn get_inode(&mut self, inode: Inode) -> RemoteResult<(File, FileAttr)> {
         let path = self
             .database
             .get(inode)
@@ -123,12 +124,14 @@ impl Driver {
     }
 
     /// Look up a name in a directory.
-    fn lookup_name(&mut self, parent: u64, name: &OsStr) -> Option<PathBuf> {
+    ///
+    /// This function is used to resolve a name of a child given the parent [`Inode`] and the name of the child file.
+    fn lookup_name(&mut self, parent: Inode, name: &OsStr) -> Option<PathBuf> {
         let parent_path = self.database.get(parent)?;
         let path = parent_path.join(name);
 
         // Get the inode and save it to the database
-        let inode = inode(&path);
+        let inode = Self::inode(&path);
         if !self.database.has(inode) {
             self.database.put(inode, path.clone());
         }
@@ -136,8 +139,8 @@ impl Driver {
         Some(path)
     }
 
-    /// Check whether the user has access to a file's parent.
-    fn check_parent_access(&mut self, inode: u64, request: &Request, access_mask: i32) -> bool {
+    /// Check whether the user has access to a inode.
+    fn check_inode_access(&mut self, inode: Inode, request: &Request, access_mask: i32) -> bool {
         let (parent, _) = match self.get_inode(inode) {
             Ok(res) => res,
             Err(err) => {
@@ -158,9 +161,11 @@ impl Driver {
 
         let file_mode =
             u32::from(file.metadata().mode.unwrap_or_else(|| UnixPex::from(0o777))) as i32;
+        debug!("file mode for {}: {file_mode:o}", file.path().display());
 
         // root is allowed to read & write anything
         if uid == 0 {
+            debug!("Root access to file: {}", file.path().display());
             // root only allowed to exec if one of the X bits is set
             access_mask &= libc::X_OK;
             access_mask -= access_mask & (file_mode >> 6);
@@ -171,11 +176,16 @@ impl Driver {
 
         if uid == file.metadata().uid.unwrap_or_default() {
             access_mask -= access_mask & (file_mode >> 6);
+            debug!("UID access to file: {}", file.path().display());
         } else if gid == file.metadata().gid.unwrap_or_default() {
             access_mask -= access_mask & (file_mode >> 3);
+            debug!("GID access to file: {}", file.path().display());
         } else {
+            debug!("Other access to file: {}", file.path().display());
             access_mask -= access_mask & file_mode;
         }
+
+        debug!("Access mask: {access_mask}");
 
         access_mask == 0
     }
@@ -375,6 +385,7 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -389,7 +400,8 @@ impl Filesystem for Driver {
             Ok(res) => res,
         };
 
-        if !Self::check_access(&file, req.uid(), req.gid(), libc::X_OK) {
+        if !Self::check_access(&file, req.uid(), req.gid(), libc::F_OK) {
+            error!("No access to file: {path:?}");
             reply.error(libc::EACCES);
             return;
         }
@@ -411,10 +423,10 @@ impl Filesystem for Driver {
 
     /// Get file attributes.
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        debug!("getattr() called with {:?}", ino);
+        debug!("getattr() called with {ino}");
         let attrs = match self.get_inode(ino) {
             Err(err) => {
-                error!("Failed to get file attributes: {err}");
+                error!("Failed to get file attributes for {ino}: {err}");
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -457,6 +469,7 @@ impl Filesystem for Driver {
         };
 
         if !Self::check_access(&file, req.uid(), req.gid(), libc::W_OK) {
+            error!("No access to file: {}", file.path().display());
             reply.error(libc::EACCES);
             return;
         }
@@ -542,13 +555,15 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_parent_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, libc::W_OK) {
+            error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -605,13 +620,15 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_parent_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, libc::W_OK) {
+            error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -639,13 +656,15 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_parent_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, libc::W_OK) {
+            error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -665,13 +684,15 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_parent_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, libc::W_OK) {
+            error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -698,13 +719,15 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_parent_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, libc::W_OK) {
+            error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -735,7 +758,8 @@ impl Filesystem for Driver {
         );
 
         // Check access for parent
-        if !self.check_parent_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, libc::W_OK) {
+            error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -743,13 +767,15 @@ impl Filesystem for Driver {
         let src = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
         };
 
         // Check access for new parent
-        if !self.check_parent_access(newparent, req, libc::W_OK) {
+        if !self.check_inode_access(newparent, req, libc::W_OK) {
+            error!("No access to new parent: {newparent}");
             reply.error(libc::EACCES);
             return;
         }
@@ -757,6 +783,7 @@ impl Filesystem for Driver {
         let dest = match self.lookup_name(newparent, newname) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup file: {newname:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -769,7 +796,7 @@ impl Filesystem for Driver {
         }
 
         // Update the database
-        self.database.put(inode(&dest), dest);
+        self.database.put(Self::inode(&dest), dest);
 
         reply.ok();
     }
@@ -783,6 +810,7 @@ impl Filesystem for Driver {
         _newname: &OsStr,
         reply: ReplyEntry,
     ) {
+        debug!("link() called");
         // not implemented
         reply.error(libc::ENOSYS);
     }
@@ -801,6 +829,7 @@ impl Filesystem for Driver {
             libc::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
                 if flags & libc::O_TRUNC != 0 {
+                    error!("EACCESS due to O_TRUNC flag");
                     reply.error(libc::EACCES);
                     return;
                 }
@@ -815,6 +844,7 @@ impl Filesystem for Driver {
             libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
             // Exactly one access mode flag must be specified
             _ => {
+                error!("Invalid access mode flags: {flags}");
                 reply.error(libc::EINVAL);
                 return;
             }
@@ -830,6 +860,7 @@ impl Filesystem for Driver {
         };
 
         if !Self::check_access(&file, req.uid(), req.gid(), access_mask) {
+            error!("No access to file: {}", file.path().display());
             reply.error(libc::EACCES);
             return;
         }
@@ -865,13 +896,13 @@ impl Filesystem for Driver {
             .map(|handler| handler.read)
             .unwrap_or_default()
         {
-            debug!("No read permission for fh {fh}");
+            error!("No read permission for fh {fh} and pid {}", req.pid());
             reply.error(libc::EACCES);
             return;
         }
         // check offset
         if offset < 0 {
-            debug!("Invalid offset {offset}");
+            error!("Invalid offset {offset}");
             reply.error(libc::EINVAL);
             return;
         }
@@ -971,6 +1002,7 @@ impl Filesystem for Driver {
 
         // get fh
         if self.file_handlers.get(req.pid(), fh).is_none() {
+            error!("no file handler found for {fh} and pid {}", req.pid());
             reply.error(libc::ENOENT);
             return;
         }
@@ -999,6 +1031,7 @@ impl Filesystem for Driver {
     ) {
         // get fh
         if self.file_handlers.get(req.pid(), fh).is_none() {
+            error!("no file handler found for {fh} and pid {}", req.pid());
             reply.error(libc::ENOENT);
             return;
         }
@@ -1028,6 +1061,7 @@ impl Filesystem for Driver {
             libc::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
                 if flags & libc::O_TRUNC != 0 {
+                    error!("EACCES due to O_TRUNC flag");
                     reply.error(libc::EACCES);
                     return;
                 }
@@ -1037,6 +1071,7 @@ impl Filesystem for Driver {
             libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
             // Exactly one access mode flag must be specified
             _ => {
+                error!("Invalid flags: {flags}");
                 reply.error(libc::EINVAL);
                 return;
             }
@@ -1055,6 +1090,7 @@ impl Filesystem for Driver {
             let fh = self.file_handlers.open(req.pid(), ino, read, write);
             reply.opened(fh, 0);
         } else {
+            error!("No access to file: {ino}");
             reply.error(libc::EACCES);
         }
     }
@@ -1076,10 +1112,12 @@ impl Filesystem for Driver {
         // check fh with read permissions
         match self.file_handlers.get(req.pid(), fh) {
             Some(handler) if !handler.read => {
+                error!("No read permission for fh {fh} and pid {}", req.pid());
                 reply.error(libc::EACCES);
                 return;
             }
             None => {
+                error!("no file handler found for {fh} and pid {}", req.pid());
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -1107,7 +1145,8 @@ impl Filesystem for Driver {
         };
 
         for (index, entry) in entries.into_iter().skip(offset as usize).enumerate() {
-            let inode = inode(entry.path());
+            let inode = Self::inode(entry.path());
+            debug!("Reading entry {inode} {index} {}", entry.path().display());
             let name = match entry.path().file_name() {
                 Some(name) => OsStr::from_bytes(name.as_bytes()),
                 None => {
@@ -1139,6 +1178,10 @@ impl Filesystem for Driver {
     fn releasedir(&mut self, req: &Request, _ino: u64, fh: u64, _flags: i32, reply: ReplyEmpty) {
         // get fh
         if self.file_handlers.get(req.pid(), fh).is_none() {
+            error!(
+                "Failed to get file handler for {fh} and process {}",
+                req.pid()
+            );
             reply.error(libc::ENOENT);
             return;
         }
@@ -1156,6 +1199,10 @@ impl Filesystem for Driver {
         debug!("fsyncdir() called for {ino}");
         // get fh
         if self.file_handlers.get(req.pid(), fh).is_none() {
+            error!(
+                "Failed to get file handler for {fh} and process {}",
+                req.pid()
+            );
             reply.error(libc::ENOENT);
             return;
         }
@@ -1275,6 +1322,7 @@ impl Filesystem for Driver {
         if Self::check_access(&file, req.uid(), req.gid(), mask) {
             reply.ok();
         } else {
+            error!("No access to file: {}", file.path().display());
             reply.error(libc::EACCES);
         }
     }
@@ -1307,6 +1355,7 @@ impl Filesystem for Driver {
             libc::O_RDWR => (true, true),
             // Exactly one access mode flag must be specified
             _ => {
+                error!("Invalid access mode flag: {flags}");
                 reply.error(libc::EINVAL);
                 return;
             }
@@ -1315,6 +1364,7 @@ impl Filesystem for Driver {
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
+                error!("Failed to lookup name {name:?}");
                 reply.error(libc::ENOENT);
                 return;
             }
@@ -1333,7 +1383,7 @@ impl Filesystem for Driver {
             return;
         }
 
-        let inode = inode(&path);
+        let inode = Self::inode(&path);
 
         // return created
         match self.get_inode(inode) {

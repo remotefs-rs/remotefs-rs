@@ -1,10 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use fuser::MountOption;
 use tempfile::TempDir;
+
+use crate::driver::mounted_file_path;
 
 /// Mounts the filesystem in a separate thread.
 ///
@@ -18,7 +21,17 @@ fn mount(p: &Path) -> JoinHandle<()> {
     let join = std::thread::spawn(move || {
         let driver = crate::driver::setup_driver();
         // this operation is blocking and will not return until the filesystem is unmounted
-        assert!(remotefs_fuse::mount(driver, &mountpoint, &[]).is_ok());
+        remotefs_fuse::mount(
+            driver,
+            &mountpoint,
+            &[
+                MountOption::AllowRoot,
+                MountOption::RW,
+                MountOption::Exec,
+                MountOption::Sync,
+            ],
+        )
+        .expect("failed to mount");
 
         // set the error flag if the filesystem was unmounted
         error_flag_t.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -33,34 +46,17 @@ fn mount(p: &Path) -> JoinHandle<()> {
     join
 }
 
-/// Unmounts the filesystem.
-fn umount(path: &Path) -> Result<(), String> {
-    // Converti il Path in una stringa C
-    let path_cstr = match std::ffi::CString::new(path.to_str().ok_or("Invalid path")?) {
-        Ok(cstr) => cstr,
-        Err(_) => return Err("Failed to convert path to CString".into()),
-    };
-
-    // Chiamata alla funzione umount della libc
-    let result = unsafe { libc::umount(path_cstr.as_ptr()) };
-
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "umount failed with errno: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
-}
-
 #[test]
 fn test_should_mount_fs() {
     let mnt = TempDir::new().expect("Failed to create tempdir");
     // mount
-    let join = mount(mnt.path());
-    // umount
-    assert!(umount(mnt.path()).is_ok());
-    // join
-    assert!(join.join().is_ok());
+    let _join = mount(mnt.path());
+    // mounted file exists
+    let mounted_file_path = PathBuf::from(format!(
+        "{}{}",
+        mnt.path().display(),
+        mounted_file_path().display()
+    ));
+    println!("Mounted file path: {:?}", mounted_file_path);
+    assert!(mounted_file_path.exists());
 }
