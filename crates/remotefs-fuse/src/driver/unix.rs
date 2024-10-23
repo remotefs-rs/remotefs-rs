@@ -17,7 +17,7 @@ use fuser::{
     Request, TimeOrNow,
 };
 use inode::Inode;
-use libc::c_int;
+use libc::{c_int, mode_t};
 use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
 use nix::unistd::AccessFlags;
@@ -545,6 +545,7 @@ impl Filesystem for Driver {
 
     /// Create file node.
     /// Create a regular file, character device, block device, fifo or socket node.
+    #[allow(clippy::unnecessary_cast)]
     fn mknod(
         &mut self,
         req: &Request,
@@ -557,7 +558,7 @@ impl Filesystem for Driver {
     ) {
         debug!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
 
-        let mode = SFlag::from_bits_retain(mode);
+        let mode = SFlag::from_bits_retain(mode as mode_t);
         let file_type = mode & SFlag::S_IFMT;
 
         if file_type != SFlag::S_IFREG && file_type != SFlag::S_IFLNK && file_type != SFlag::S_IFDIR
@@ -585,10 +586,12 @@ impl Filesystem for Driver {
 
         // Check file type
         let res = match as_file_kind(mode) {
-            Some(FileType::Directory) => self.remote.create_dir(&path, UnixPex::from(mode.bits())),
+            Some(FileType::Directory) => self
+                .remote
+                .create_dir(&path, UnixPex::from(mode.bits() as u32)),
             Some(FileType::RegularFile) => {
                 let metadata = remotefs::fs::Metadata {
-                    mode: Some(UnixPex::from(mode.bits())),
+                    mode: Some(UnixPex::from(mode.bits() as u32)),
                     gid: Some(req.gid()),
                     uid: Some(req.uid()),
                     ..Default::default()

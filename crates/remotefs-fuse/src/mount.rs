@@ -14,16 +14,15 @@ impl Mount {
     /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
     ///
     /// You can specify the mount options using the `options` parameter.
+    #[allow(clippy::self_named_constructors)]
     pub fn mount(
         driver: Driver,
         mountpoint: &Path,
         options: &[MountOption],
     ) -> Result<Self, std::io::Error> {
-        let session = Session::new(driver, mountpoint, options)?;
-
         Ok(Self {
             #[cfg(unix)]
-            session,
+            session: Session::new(driver, mountpoint, options)?,
         })
     }
 
