@@ -37,17 +37,17 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/linux.yml"
     ><img
       src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/linux/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/macos.yml"
     ><img
       src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/macos/badge.svg"
       alt="MacOS CI"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/windows.yml"
     ><img
       src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/windows/badge.svg"
       alt="Windows CI"
