@@ -27,6 +27,7 @@ use super::Driver;
 
 const BLOCK_SIZE: usize = 512;
 const FMODE_EXEC: i32 = 0x20;
+const ROOT_UID: u32 = 0;
 
 /// Convert a [`remotefs::fs::FileType`] to a [`FileType`] from [`fuser`]
 fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
@@ -164,7 +165,7 @@ impl Driver {
         debug!("file mode for {}: {file_mode:o}", file.path().display());
 
         // root is allowed to read & write anything
-        if uid == 0 {
+        if uid == ROOT_UID {
             debug!("Root access to file: {}", file.path().display());
             // root only allowed to exec if one of the X bits is set
             access_mask &= libc::X_OK;

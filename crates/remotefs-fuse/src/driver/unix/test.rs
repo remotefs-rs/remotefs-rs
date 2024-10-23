@@ -1,7 +1,9 @@
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use pretty_assertions::{assert_eq, assert_ne};
 use remotefs::fs::{Metadata, UnixPex};
-use remotefs::{RemoteError, RemoteErrorType, RemoteFs};
+use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs};
 use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
 
 use crate::Driver;
@@ -64,86 +66,339 @@ fn make_dir_at(driver: &mut Driver, path: &Path) {
     }
 }
 
-#[cfg(test)]
-mod test {
+#[test]
+fn test_should_get_unique_inode() {
+    let p = PathBuf::from("/tmp/test.txt");
+    let inode_a = Driver::inode(&p);
+    let inode_b = Driver::inode(&p);
+    assert_eq!(inode_a, inode_b);
 
-    use std::ffi::OsStr;
-    use std::path::Path;
+    let p = PathBuf::from("/dev/null");
+    let inode_c = Driver::inode(&p);
+    assert_ne!(inode_a, inode_c);
+}
 
-    use pretty_assertions::{assert_eq, assert_ne};
+#[test]
+fn test_should_get_inode_from_path() {
+    let mut driver = setup_driver();
+    // make file
+    let file_path = Path::new("/tmp/test.txt");
+    make_file_at(&mut driver, file_path, b"hello world");
 
-    use super::*;
+    // get inode from path
+    let (file, attrs) = driver
+        .get_inode_from_path(file_path)
+        .expect("failed to get inode");
+    assert_eq!(file.path(), file_path);
+    assert_eq!(attrs.size, 11);
 
-    #[test]
-    fn test_should_get_unique_inode() {
-        let p = PathBuf::from("/tmp/test.txt");
-        let inode_a = Driver::inode(&p);
-        let inode_b = Driver::inode(&p);
-        assert_eq!(inode_a, inode_b);
+    // file should be in the database
+    assert_eq!(
+        driver
+            .database
+            .get(attrs.ino)
+            .expect("inode is not in database"),
+        file_path
+    );
 
-        let p = PathBuf::from("/dev/null");
-        let inode_c = Driver::inode(&p);
-        assert_ne!(inode_a, inode_c);
-    }
+    // should get the same file if querying by inode
+    let (file_b, attrs_b) = driver.get_inode(attrs.ino).expect("failed to get inode");
+    assert_eq!(file, file_b);
+    assert_eq!(attrs, attrs_b);
+}
 
-    #[test]
-    fn test_should_get_inode_from_path() {
-        let mut driver = setup_driver();
-        // make file
-        let file_path = Path::new("/tmp/test.txt");
-        make_file_at(&mut driver, file_path, b"hello world");
+#[test]
+fn test_should_lookup_name() {
+    let mut driver = setup_driver();
+    // make dir
+    let parent_dir = Path::new("/home/user/.config");
+    make_dir_at(&mut driver, parent_dir);
+    // create inode for it
+    let inode = driver
+        .get_inode_from_path(parent_dir)
+        .expect("failed to get inode")
+        .1
+        .ino;
 
-        // get inode from path
-        let (file, attrs) = driver
-            .get_inode_from_path(file_path)
-            .expect("failed to get inode");
-        assert_eq!(file.path(), file_path);
-        assert_eq!(attrs.size, 11);
+    // lookup name
+    let looked_up_path = driver
+        .lookup_name(inode, OsStr::new("test.txt"))
+        .expect("failed to lookup name");
 
-        // file should be in the database
-        assert_eq!(
-            driver
-                .database
-                .get(attrs.ino)
-                .expect("inode is not in database"),
-            file_path
-        );
+    let expected_file_path = Path::new("/home/user/.config/test.txt");
+    assert_eq!(looked_up_path, expected_file_path);
 
-        // should get the same file if querying by inode
-        let (file_b, attrs_b) = driver.get_inode(attrs.ino).expect("failed to get inode");
-        assert_eq!(file, file_b);
-        assert_eq!(attrs, attrs_b);
-    }
+    // inode for looked up file should be in the database
+    let child_inode = Driver::inode(&looked_up_path);
+    assert_eq!(
+        driver
+            .database
+            .get(child_inode)
+            .expect("child inode is not in database"),
+        looked_up_path
+    );
+}
 
-    #[test]
-    fn test_should_lookup_name() {
-        let mut driver = setup_driver();
-        // make dir
-        let parent_dir = Path::new("/home/user/.config");
-        make_dir_at(&mut driver, parent_dir);
-        // create inode for it
-        let inode = driver
-            .get_inode_from_path(parent_dir)
-            .expect("failed to get inode")
-            .1
-            .ino;
+#[test]
+fn test_should_check_access_accessible_for_user() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
+    };
 
-        // lookup name
-        let looked_up_path = driver
-            .lookup_name(inode, OsStr::new("test.txt"))
-            .expect("failed to lookup name");
+    assert_eq!(Driver::check_access(&file, 1000, 0, libc::F_OK), true);
+}
 
-        let expected_file_path = Path::new("/home/user/.config/test.txt");
-        assert_eq!(looked_up_path, expected_file_path);
+#[test]
+fn test_should_check_access_accessible_for_group() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(500),
+    };
 
-        // inode for looked up file should be in the database
-        let child_inode = Driver::inode(&looked_up_path);
-        assert_eq!(
-            driver
-                .database
-                .get(child_inode)
-                .expect("child inode is not in database"),
-            looked_up_path
-        );
-    }
+    assert_eq!(Driver::check_access(&file, 100, 500, libc::F_OK), true);
+}
+
+#[test]
+fn test_should_check_access_accessible_for_root() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 0, 0, libc::F_OK), true);
+}
+
+#[test]
+fn test_should_check_access_read_for_user() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o600)).uid(10),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o000)).uid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 1000, 0, libc::R_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 1000, 0, libc::R_OK), false);
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 1000, 0, libc::R_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_read_for_group() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(500),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o640))
+            .uid(1000)
+            .gid(50),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o600))
+            .uid(1000)
+            .gid(500),
+    };
+
+    assert_eq!(Driver::check_access(&file, 100, 500, libc::R_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 100, 500, libc::R_OK), false);
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 100, 500, libc::R_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_read_for_root() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o600))
+            .uid(1000)
+            .gid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 0, 0, libc::R_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 0, 0, libc::R_OK), true); // root can read any file
+}
+
+#[test]
+fn test_should_check_access_write_for_user() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o600)).uid(10),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o400)).uid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 1000, 0, libc::W_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 1000, 0, libc::W_OK), false);
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 1000, 0, libc::W_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_write_for_group() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o664))
+            .uid(1000)
+            .gid(500),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o664))
+            .uid(1000)
+            .gid(5),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(500),
+    };
+
+    assert_eq!(Driver::check_access(&file, 100, 500, libc::W_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 100, 500, libc::W_OK), false);
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 100, 500, libc::W_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_write_for_root() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o600))
+            .uid(1000)
+            .gid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 0, 0, libc::R_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 0, 0, libc::R_OK), true); // root can read any file
+}
+
+#[test]
+fn test_should_check_access_exec_for_user() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o775)).uid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o744)).uid(10),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o600)).uid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 1000, 0, libc::X_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 1000, 0, libc::X_OK), false);
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 1000, 0, libc::X_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_exec_for_group() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o775))
+            .uid(1000)
+            .gid(500),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o774))
+            .uid(1000)
+            .gid(5),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o744))
+            .uid(1000)
+            .gid(500),
+    };
+
+    assert_eq!(Driver::check_access(&file, 100, 500, libc::X_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 100, 500, libc::X_OK), false);
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 100, 500, libc::X_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_exec_for_root() {
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o744))
+            .uid(1000)
+            .gid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o644))
+            .uid(1000)
+            .gid(1000),
+    };
+
+    assert_eq!(Driver::check_access(&file, 0, 0, libc::X_OK), true);
+    assert_eq!(Driver::check_access(&file_nok, 0, 0, libc::X_OK), false); // root can't execute any file
 }
