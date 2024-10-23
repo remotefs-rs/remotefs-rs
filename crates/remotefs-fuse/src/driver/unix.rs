@@ -18,6 +18,9 @@ use fuser::{
 };
 use inode::Inode;
 use libc::c_int;
+use nix::fcntl::OFlag;
+use nix::sys::stat::SFlag;
+use nix::unistd::AccessFlags;
 use remotefs::fs::UnixPex;
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
@@ -26,7 +29,7 @@ pub use self::inode::InodeDb;
 use super::Driver;
 
 const BLOCK_SIZE: usize = 512;
-const FMODE_EXEC: i32 = 0x20;
+const FMODE_EXEC: c_int = 0x20;
 const ROOT_UID: u32 = 0;
 
 /// Convert a [`remotefs::fs::FileType`] to a [`FileType`] from [`fuser`]
@@ -72,14 +75,14 @@ fn time_or_now(t: TimeOrNow) -> SystemTime {
 }
 
 /// Convert a mode to a [`FileType`] from [`fuser`]
-fn as_file_kind(mut mode: u32) -> Option<FileType> {
-    mode &= libc::S_IFMT;
+fn as_file_kind(mut mode: SFlag) -> Option<FileType> {
+    mode &= SFlag::S_IFMT;
 
-    if mode == libc::S_IFREG {
+    if mode == SFlag::S_IFREG {
         Some(FileType::RegularFile)
-    } else if mode == libc::S_IFLNK {
+    } else if mode == SFlag::S_IFLNK {
         Some(FileType::Symlink)
-    } else if mode == libc::S_IFDIR {
+    } else if mode == SFlag::S_IFDIR {
         Some(FileType::Directory)
     } else {
         None
@@ -141,7 +144,12 @@ impl Driver {
     }
 
     /// Check whether the user has access to a inode.
-    fn check_inode_access(&mut self, inode: Inode, request: &Request, access_mask: i32) -> bool {
+    fn check_inode_access(
+        &mut self,
+        inode: Inode,
+        request: &Request,
+        access_mask: AccessFlags,
+    ) -> bool {
         let (parent, _) = match self.get_inode(inode) {
             Ok(res) => res,
             Err(err) => {
@@ -154,9 +162,9 @@ impl Driver {
     }
 
     /// Check whether the user has access to a file.
-    fn check_access(file: &File, uid: u32, gid: u32, mut access_mask: i32) -> bool {
-        debug!("Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask}", file.path(), file.metadata());
-        if access_mask == libc::F_OK {
+    fn check_access(file: &File, uid: u32, gid: u32, mut access_mask: AccessFlags) -> bool {
+        debug!("Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask:?}", file.path(), file.metadata());
+        if access_mask == AccessFlags::F_OK {
             return true;
         }
 
@@ -168,12 +176,15 @@ impl Driver {
         if uid == ROOT_UID {
             debug!("Root access to file: {}", file.path().display());
             // root only allowed to exec if one of the X bits is set
-            access_mask &= libc::X_OK;
+            access_mask &= AccessFlags::X_OK;
+            let mut access_mask = access_mask.bits();
             access_mask -= access_mask & (file_mode >> 6);
             access_mask -= access_mask & (file_mode >> 3);
             access_mask -= access_mask & file_mode;
             return access_mask == 0;
         }
+
+        let mut access_mask = access_mask.bits();
 
         if uid == file.metadata().uid.unwrap_or_default() {
             access_mask -= access_mask & (file_mode >> 6);
@@ -401,7 +412,7 @@ impl Filesystem for Driver {
             Ok(res) => res,
         };
 
-        if !Self::check_access(&file, req.uid(), req.gid(), libc::F_OK) {
+        if !Self::check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK) {
             error!("No access to file: {path:?}");
             reply.error(libc::EACCES);
             return;
@@ -469,7 +480,7 @@ impl Filesystem for Driver {
             }
         };
 
-        if !Self::check_access(&file, req.uid(), req.gid(), libc::W_OK) {
+        if !Self::check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK) {
             error!("No access to file: {}", file.path().display());
             reply.error(libc::EACCES);
             return;
@@ -545,9 +556,12 @@ impl Filesystem for Driver {
         reply: ReplyEntry,
     ) {
         debug!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
-        let file_type = mode & libc::S_IFMT;
 
-        if file_type != libc::S_IFREG && file_type != libc::S_IFLNK && file_type != libc::S_IFDIR {
+        let mode = SFlag::from_bits_retain(mode);
+        let file_type = mode & SFlag::S_IFMT;
+
+        if file_type != SFlag::S_IFREG && file_type != SFlag::S_IFLNK && file_type != SFlag::S_IFDIR
+        {
             warn!("mknod() implementation is incomplete. Only supports regular files, symlinks, and directories. Got {:o}", mode);
             reply.error(libc::ENOSYS);
             return;
@@ -563,7 +577,7 @@ impl Filesystem for Driver {
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
@@ -571,10 +585,10 @@ impl Filesystem for Driver {
 
         // Check file type
         let res = match as_file_kind(mode) {
-            Some(FileType::Directory) => self.remote.create_dir(&path, UnixPex::from(mode)),
+            Some(FileType::Directory) => self.remote.create_dir(&path, UnixPex::from(mode.bits())),
             Some(FileType::RegularFile) => {
                 let metadata = remotefs::fs::Metadata {
-                    mode: Some(mode.into()),
+                    mode: Some(UnixPex::from(mode.bits())),
                     gid: Some(req.gid()),
                     uid: Some(req.uid()),
                     ..Default::default()
@@ -628,7 +642,7 @@ impl Filesystem for Driver {
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
@@ -664,7 +678,7 @@ impl Filesystem for Driver {
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
@@ -692,7 +706,7 @@ impl Filesystem for Driver {
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
@@ -727,7 +741,7 @@ impl Filesystem for Driver {
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
@@ -759,7 +773,7 @@ impl Filesystem for Driver {
         );
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, libc::W_OK) {
+        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
             reply.error(libc::EACCES);
             return;
@@ -775,7 +789,7 @@ impl Filesystem for Driver {
         };
 
         // Check access for new parent
-        if !self.check_inode_access(newparent, req, libc::W_OK) {
+        if !self.check_inode_access(newparent, req, AccessFlags::W_OK) {
             error!("No access to new parent: {newparent}");
             reply.error(libc::EACCES);
             return;
@@ -826,26 +840,27 @@ impl Filesystem for Driver {
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
         debug!("open() called for {ino}");
-        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
-            libc::O_RDONLY => {
+        let flags = OFlag::from_bits_truncate(flags);
+        let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
+            OFlag::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
-                if flags & libc::O_TRUNC != 0 {
+                if flags.intersects(OFlag::O_TRUNC) {
                     error!("EACCESS due to O_TRUNC flag");
                     reply.error(libc::EACCES);
                     return;
                 }
-                if flags & FMODE_EXEC != 0 {
+                if flags.intersects(OFlag::from_bits_retain(FMODE_EXEC)) {
                     // Open is from internal exec syscall
-                    (libc::X_OK, true, false)
+                    (AccessFlags::X_OK, true, false)
                 } else {
-                    (libc::R_OK, true, false)
+                    (AccessFlags::R_OK, true, false)
                 }
             }
-            libc::O_WRONLY => (libc::W_OK, false, true),
-            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            OFlag::O_WRONLY => (AccessFlags::W_OK, false, true),
+            OFlag::O_RDWR => (AccessFlags::R_OK | AccessFlags::W_OK, true, true),
             // Exactly one access mode flag must be specified
             _ => {
-                error!("Invalid access mode flags: {flags}");
+                error!("Invalid access mode flags: {flags:?}");
                 reply.error(libc::EINVAL);
                 return;
             }
@@ -1058,21 +1073,22 @@ impl Filesystem for Driver {
     /// between opendir and releasedir.
     fn opendir(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
         debug!("opendir() called on {:?}", ino);
-        let (access_mask, read, write) = match flags & libc::O_ACCMODE {
-            libc::O_RDONLY => {
+        let flags = OFlag::from_bits_truncate(flags);
+        let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
+            OFlag::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
-                if flags & libc::O_TRUNC != 0 {
+                if flags.intersects(OFlag::O_TRUNC) {
                     error!("EACCES due to O_TRUNC flag");
                     reply.error(libc::EACCES);
                     return;
                 }
-                (libc::R_OK, true, false)
+                (AccessFlags::R_OK, true, false)
             }
-            libc::O_WRONLY => (libc::W_OK, false, true),
-            libc::O_RDWR => (libc::R_OK | libc::W_OK, true, true),
+            OFlag::O_WRONLY => (AccessFlags::W_OK, false, true),
+            OFlag::O_RDWR => (AccessFlags::R_OK | AccessFlags::W_OK, true, true),
             // Exactly one access mode flag must be specified
             _ => {
-                error!("Invalid flags: {flags}");
+                error!("Invalid flags: {flags:?}");
                 reply.error(libc::EINVAL);
                 return;
             }
@@ -1320,7 +1336,12 @@ impl Filesystem for Driver {
             }
         };
 
-        if Self::check_access(&file, req.uid(), req.gid(), mask) {
+        if Self::check_access(
+            &file,
+            req.uid(),
+            req.gid(),
+            AccessFlags::from_bits_truncate(mask),
+        ) {
             reply.ok();
         } else {
             error!("No access to file: {}", file.path().display());
@@ -1350,13 +1371,14 @@ impl Filesystem for Driver {
     ) {
         debug!("create() called with {:?} {:?} {:o}", parent, name, mode);
 
-        let (read, write) = match flags & libc::O_ACCMODE {
-            libc::O_RDONLY => (true, false),
-            libc::O_WRONLY => (false, true),
-            libc::O_RDWR => (true, true),
+        let flags = OFlag::from_bits_truncate(flags);
+        let (read, write) = match flags & OFlag::O_ACCMODE {
+            OFlag::O_RDONLY => (true, false),
+            OFlag::O_WRONLY => (false, true),
+            OFlag::O_RDWR => (true, true),
             // Exactly one access mode flag must be specified
             _ => {
-                error!("Invalid access mode flag: {flags}");
+                error!("Invalid access mode flag: {flags:?}");
                 reply.error(libc::EINVAL);
                 return;
             }

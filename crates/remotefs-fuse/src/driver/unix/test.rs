@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use nix::unistd::AccessFlags;
 use pretty_assertions::{assert_eq, assert_ne};
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs};
@@ -146,7 +147,10 @@ fn test_should_check_access_accessible_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 1000, 0, libc::F_OK), true);
+    assert_eq!(
+        Driver::check_access(&file, 1000, 0, AccessFlags::F_OK),
+        true
+    );
 }
 
 #[test]
@@ -159,7 +163,10 @@ fn test_should_check_access_accessible_for_group() {
             .gid(500),
     };
 
-    assert_eq!(Driver::check_access(&file, 100, 500, libc::F_OK), true);
+    assert_eq!(
+        Driver::check_access(&file, 100, 500, AccessFlags::F_OK),
+        true
+    );
 }
 
 #[test]
@@ -172,7 +179,7 @@ fn test_should_check_access_accessible_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, libc::F_OK), true);
+    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::F_OK), true);
 }
 
 #[test]
@@ -190,10 +197,16 @@ fn test_should_check_access_read_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o000)).uid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 1000, 0, libc::R_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 1000, 0, libc::R_OK), false);
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 1000, 0, libc::R_OK),
+        Driver::check_access(&file, 1000, 0, AccessFlags::R_OK),
+        true
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok, 1000, 0, AccessFlags::R_OK),
+        false
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 1000, 0, AccessFlags::R_OK),
         false
     );
 }
@@ -222,10 +235,16 @@ fn test_should_check_access_read_for_group() {
             .gid(500),
     };
 
-    assert_eq!(Driver::check_access(&file, 100, 500, libc::R_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 100, 500, libc::R_OK), false);
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 100, 500, libc::R_OK),
+        Driver::check_access(&file, 100, 500, AccessFlags::R_OK),
+        true
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok, 100, 500, AccessFlags::R_OK),
+        false
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 100, 500, AccessFlags::R_OK),
         false
     );
 }
@@ -247,8 +266,11 @@ fn test_should_check_access_read_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, libc::R_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 0, 0, libc::R_OK), true); // root can read any file
+    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::R_OK), true);
+    assert_eq!(
+        Driver::check_access(&file_nok, 0, 0, AccessFlags::R_OK),
+        true
+    ); // root can read any file
 }
 
 #[test]
@@ -266,10 +288,16 @@ fn test_should_check_access_write_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o400)).uid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 1000, 0, libc::W_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 1000, 0, libc::W_OK), false);
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 1000, 0, libc::W_OK),
+        Driver::check_access(&file, 1000, 0, AccessFlags::W_OK),
+        true
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok, 1000, 0, AccessFlags::W_OK),
+        false
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 1000, 0, AccessFlags::W_OK),
         false
     );
 }
@@ -298,10 +326,16 @@ fn test_should_check_access_write_for_group() {
             .gid(500),
     };
 
-    assert_eq!(Driver::check_access(&file, 100, 500, libc::W_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 100, 500, libc::W_OK), false);
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 100, 500, libc::W_OK),
+        Driver::check_access(&file, 100, 500, AccessFlags::W_OK),
+        true
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok, 100, 500, AccessFlags::W_OK),
+        false
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 100, 500, AccessFlags::W_OK),
         false
     );
 }
@@ -323,8 +357,11 @@ fn test_should_check_access_write_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, libc::R_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 0, 0, libc::R_OK), true); // root can read any file
+    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::R_OK), true);
+    assert_eq!(
+        Driver::check_access(&file_nok, 0, 0, AccessFlags::R_OK),
+        true
+    ); // root can read any file
 }
 
 #[test]
@@ -342,10 +379,16 @@ fn test_should_check_access_exec_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o600)).uid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 1000, 0, libc::X_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 1000, 0, libc::X_OK), false);
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 1000, 0, libc::X_OK),
+        Driver::check_access(&file, 1000, 0, AccessFlags::X_OK),
+        true
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok, 1000, 0, AccessFlags::X_OK),
+        false
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 1000, 0, AccessFlags::X_OK),
         false
     );
 }
@@ -374,10 +417,16 @@ fn test_should_check_access_exec_for_group() {
             .gid(500),
     };
 
-    assert_eq!(Driver::check_access(&file, 100, 500, libc::X_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 100, 500, libc::X_OK), false);
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 100, 500, libc::X_OK),
+        Driver::check_access(&file, 100, 500, AccessFlags::X_OK),
+        true
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok, 100, 500, AccessFlags::X_OK),
+        false
+    );
+    assert_eq!(
+        Driver::check_access(&file_nok_mode, 100, 500, AccessFlags::X_OK),
         false
     );
 }
@@ -399,6 +448,9 @@ fn test_should_check_access_exec_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, libc::X_OK), true);
-    assert_eq!(Driver::check_access(&file_nok, 0, 0, libc::X_OK), false); // root can't execute any file
+    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::X_OK), true);
+    assert_eq!(
+        Driver::check_access(&file_nok, 0, 0, AccessFlags::X_OK),
+        false
+    ); // root can't execute any file
 }
