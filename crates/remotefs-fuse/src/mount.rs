@@ -2,20 +2,31 @@ mod option;
 
 use std::path::Path;
 
-#[cfg(unix)]
-use fuser::{Session, SessionUnmounter};
 use remotefs::RemoteFs;
 
 pub use self::option::MountOption;
 use crate::driver::Driver;
 
 /// A struct to mount the filesystem.
-pub struct Mount {
+pub struct Mount<'a, T>
+where
+    T: RemoteFs + Sync + 'a,
+{
     #[cfg(unix)]
     session: Session<Driver>,
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    file_system: dokan::FileSystem<'a, 'a, Driver<T>>,
+    #[cfg(windows)]
+    mountpoint: widestring::U16CString,
+    #[cfg(unix)]
+    marker: std::marker::PhantomData<&'a u8>,
 }
 
-impl Mount {
+impl<'a, T> Mount<'a, T>
+where
+    T: RemoteFs + Sync + 'a,
+{
     /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
     ///
     /// You can specify the mount options using the `options` parameter.
@@ -35,7 +46,8 @@ impl Mount {
             .collect::<Vec<_>>();
 
         Ok(Self {
-            session: Session::new(driver, mountpoint, &options)?,
+            session: fuser::Session::new(driver, mountpoint, &options)?,
+            marker: std::marker::PhantomData,
         })
     }
 
@@ -45,13 +57,36 @@ impl Mount {
     #[cfg(windows)]
     #[allow(clippy::self_named_constructors)]
     pub fn mount(
-        mut driver: Driver,
+        remote: T,
         mountpoint: &Path,
         options: &[MountOption],
     ) -> Result<Self, std::io::Error> {
-        driver.options = options.to_vec();
+        use widestring::U16CString;
 
-        todo!()
+        let driver = Driver::new(remote, options.to_vec());
+        dokan::init();
+
+        //let options = driver
+        //    .options
+        //    .iter()
+        //    .flat_map(|opt| opt.try_into())
+        //    .collect::<Vec<_>>();
+
+        let mountpoint =
+            U16CString::from_os_str(std::ffi::OsStr::new(mountpoint)).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid mountpoint")
+            })?;
+
+        // For reference <https://github.com/dokan-dev/dokan-rust/blob/master/dokan/examples/memfs/main.rs>
+        let mut mounter = dokan::FileSystemMounter::new(&driver, &mountpoint, todo!());
+        let fs = mounter
+            .mount()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        Ok(Self {
+            file_system: fs,
+            mountpoint,
+        })
     }
 
     /// Run the filesystem event loop.
@@ -71,6 +106,8 @@ impl Mount {
         Umount {
             #[cfg(unix)]
             umount: self.session.unmount_callable(),
+            #[cfg(windows)]
+            mountpoint: self.mountpoint.clone(),
         }
     }
 }
@@ -78,7 +115,9 @@ impl Mount {
 /// A thread-safe handle to unmount the filesystem.
 pub struct Umount {
     #[cfg(unix)]
-    umount: SessionUnmounter,
+    umount: fuser::SessionUnmounter,
+    #[cfg(windows)]
+    mountpoint: widestring::U16CString,
 }
 
 impl Umount {
@@ -86,6 +125,14 @@ impl Umount {
     pub fn umount(&mut self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
         self.umount.unmount()?;
+
+        #[cfg(windows)]
+        if !dokan::unmount(&self.mountpoint) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to unmount",
+            ));
+        }
 
         Ok(())
     }

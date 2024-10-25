@@ -44,7 +44,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Mount the remote file system
-    let mut mount = Mount::mount(args.remote(), &mount_path, &options)?;
+    let remote = args.remote();
+    let mut mount = Mount::mount(remote, &mount_path, &options)?;
     let mut umount = mount.unmounter();
 
     // setup signal handler

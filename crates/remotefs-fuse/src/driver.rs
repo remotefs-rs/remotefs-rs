@@ -1,6 +1,11 @@
 #[cfg(unix)]
 #[cfg_attr(docsrs, doc(cfg(unix)))]
 mod unix;
+#[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
+mod windows;
+
+use std::sync::{Arc, Mutex};
 
 use remotefs::RemoteFs;
 
@@ -12,7 +17,7 @@ use crate::MountOption;
 ///
 /// The driver will use the [`fuser`](https://crates.io/crates/fuser) crate to mount the filesystem, on Unix systems, while
 /// it will use [dokan](https://crates.io/crates/dokan) on Windows.
-pub struct Driver {
+pub struct Driver<T: RemoteFs> {
     /// Inode database
     #[cfg(unix)]
     database: unix::InodeDb,
@@ -22,10 +27,13 @@ pub struct Driver {
     /// Mount options
     pub(crate) options: Vec<MountOption>,
     /// [`RemoteFs`] instance
-    remote: Box<dyn RemoteFs>,
+    remote: T,
 }
 
-impl Driver {
+impl<T> Driver<T>
+where
+    T: RemoteFs,
+{
     /// Create a new instance of the [`Driver`] providing a instance which implements the [`RemoteFs`] trait.
     ///
     /// The [`RemoteFs`] instance must be boxed.
@@ -34,7 +42,7 @@ impl Driver {
     ///
     /// * `remote` - The instance which implements the [`RemoteFs`] trait.
     /// * `options` - The mount options.
-    pub fn new(remote: Box<dyn RemoteFs>, options: Vec<MountOption>) -> Self {
+    pub fn new(remote: T, options: Vec<MountOption>) -> Self {
         Self {
             #[cfg(unix)]
             database: unix::InodeDb::load(),
@@ -46,6 +54,7 @@ impl Driver {
     }
 
     /// Get the specified uid from the mount options.
+    #[cfg(unix)]
     fn uid(&self) -> Option<u32> {
         self.options.iter().find_map(|opt| match opt {
             MountOption::Uid(uid) => Some(*uid),
@@ -54,6 +63,7 @@ impl Driver {
     }
 
     /// Get the specified gid from the mount options.
+    #[cfg(unix)]
     fn gid(&self) -> Option<u32> {
         self.options.iter().find_map(|opt| match opt {
             MountOption::Gid(gid) => Some(*gid),
@@ -63,6 +73,7 @@ impl Driver {
 
     /// Get the specified default mode from the mount options.
     /// If not set, the default is 0755.
+    #[cfg(unix)]
     fn default_mode(&self) -> u32 {
         self.options
             .iter()
