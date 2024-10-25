@@ -1,5 +1,5 @@
 use argh::FromArgs;
-use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
+use remotefs_smb::{SmbCredentials, SmbFs};
 
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "smb")]
@@ -44,13 +44,21 @@ impl From<SmbArgs> for SmbFs {
             credentials = credentials.workgroup(workgroup);
         }
 
-        SmbFs::try_new(
-            credentials,
-            SmbOptions::default()
-                .one_share_per_server(true)
-                .case_sensitive(false),
-        )
-        .expect("Failed to create SMB client")
+        #[cfg(unix)]
+        {
+            SmbFs::try_new(
+                credentials,
+                remotefs_smb::SmbOptions::default()
+                    .one_share_per_server(true)
+                    .case_sensitive(false),
+            )
+            .expect("Failed to create SMB client")
+        }
+
+        #[cfg(windows)]
+        {
+            SmbFs::new(credentials)
+        }
     }
 }
 
