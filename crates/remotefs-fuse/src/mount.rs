@@ -18,6 +18,7 @@ impl Mount {
     ///
     /// You can specify the mount options using the `options` parameter.
     #[allow(clippy::self_named_constructors)]
+    #[cfg(unix)]
     pub fn mount(driver: Driver, mountpoint: &Path) -> Result<Self, std::io::Error> {
         let options = driver
             .options
@@ -26,9 +27,13 @@ impl Mount {
             .collect::<Vec<_>>();
 
         Ok(Self {
-            #[cfg(unix)]
             session: Session::new(driver, mountpoint, &options)?,
         })
+    }
+
+    #[cfg(windows)]
+    pub fn mount(driver: Driver, mountpoint: &Path) -> Result<Self, std::io::Error> {
+        todo!()
     }
 
     /// Run the filesystem event loop.
@@ -36,15 +41,17 @@ impl Mount {
     /// This function will block the current thread.
     pub fn run(&mut self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
-        self.session.run()
+        self.session.run()?;
+
+        Ok(())
     }
 
     /// Get a handle to unmount the filesystem.
     ///
     /// To umount see [`Umount::umount`].
     pub fn unmounter(&mut self) -> Umount {
-        #[cfg(unix)]
         Umount {
+            #[cfg(unix)]
             umount: self.session.unmount_callable(),
         }
     }
@@ -60,6 +67,8 @@ impl Umount {
     /// Unmount the filesystem.
     pub fn umount(&mut self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
-        self.umount.unmount()
+        self.umount.unmount()?;
+
+        Ok(())
     }
 }
