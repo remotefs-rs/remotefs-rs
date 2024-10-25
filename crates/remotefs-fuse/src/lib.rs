@@ -33,8 +33,5 @@ extern crate log;
 mod driver;
 mod mount;
 
-#[cfg(target_family = "unix")]
-pub use fuser::MountOption;
-
 pub use self::driver::{Driver, DriverError, DriverResult};
-pub use self::mount::{Mount, Umount};
+pub use self::mount::{Mount, MountOption, Umount};

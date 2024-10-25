@@ -7,7 +7,7 @@ use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs};
 use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
 
-use crate::Driver;
+use crate::{Driver, MountOption};
 
 fn setup_driver() -> Driver {
     let gid = nix::unistd::getgid().as_raw();
@@ -27,7 +27,43 @@ fn setup_driver() -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    Driver::from(fs)
+    Driver::new(
+        fs,
+        vec![
+            MountOption::AllowRoot,
+            MountOption::RW,
+            MountOption::Exec,
+            MountOption::Sync,
+        ],
+    )
+}
+
+fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(uid, gid, UnixPex::from(0o755)),
+    ));
+
+    let mut fs = MemoryFs::new(tree)
+        .with_get_gid(move || uid)
+        .with_get_uid(move || gid);
+
+    fs.connect().expect("Failed to connect");
+    assert!(fs.is_connected());
+
+    let fs = Box::new(fs) as Box<dyn RemoteFs>;
+
+    Driver::new(
+        fs,
+        vec![
+            MountOption::AllowRoot,
+            MountOption::RW,
+            MountOption::Exec,
+            MountOption::Sync,
+            MountOption::Uid(uid),
+            MountOption::Gid(gid),
+        ],
+    )
 }
 
 /// Make file on the remote fs at `path` with `content`
@@ -65,6 +101,13 @@ fn make_dir_at(driver: &mut Driver, path: &Path) {
             Err(err) => panic!("Failed to create directory: {err}"),
         }
     }
+}
+
+#[test]
+fn test_should_get_configured_gid() {
+    let driver = setup_driver_with_uid(1001, 1002);
+    assert_eq!(driver.gid(), Some(1002));
+    assert_eq!(driver.uid(), Some(1001));
 }
 
 #[test]
@@ -142,19 +185,18 @@ fn test_should_lookup_name() {
 
 #[test]
 fn test_should_check_access_accessible_for_user() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
     };
 
-    assert_eq!(
-        Driver::check_access(&file, 1000, 0, AccessFlags::F_OK),
-        true
-    );
+    assert_eq!(driver.check_access(&file, 1000, 0, AccessFlags::F_OK), true);
 }
 
 #[test]
 fn test_should_check_access_accessible_for_group() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -164,13 +206,14 @@ fn test_should_check_access_accessible_for_group() {
     };
 
     assert_eq!(
-        Driver::check_access(&file, 100, 500, AccessFlags::F_OK),
+        driver.check_access(&file, 100, 500, AccessFlags::F_OK),
         true
     );
 }
 
 #[test]
 fn test_should_check_access_accessible_for_root() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -179,11 +222,12 @@ fn test_should_check_access_accessible_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::F_OK), true);
+    assert_eq!(driver.check_access(&file, 0, 0, AccessFlags::F_OK), true);
 }
 
 #[test]
 fn test_should_check_access_read_for_user() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
@@ -197,22 +241,20 @@ fn test_should_check_access_read_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o000)).uid(1000),
     };
 
+    assert_eq!(driver.check_access(&file, 1000, 0, AccessFlags::R_OK), true);
     assert_eq!(
-        Driver::check_access(&file, 1000, 0, AccessFlags::R_OK),
-        true
-    );
-    assert_eq!(
-        Driver::check_access(&file_nok, 1000, 0, AccessFlags::R_OK),
+        driver.check_access(&file_nok, 1000, 0, AccessFlags::R_OK),
         false
     );
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 1000, 0, AccessFlags::R_OK),
+        driver.check_access(&file_nok_mode, 1000, 0, AccessFlags::R_OK),
         false
     );
 }
 
 #[test]
 fn test_should_check_access_read_for_group() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -236,21 +278,22 @@ fn test_should_check_access_read_for_group() {
     };
 
     assert_eq!(
-        Driver::check_access(&file, 100, 500, AccessFlags::R_OK),
+        driver.check_access(&file, 100, 500, AccessFlags::R_OK),
         true
     );
     assert_eq!(
-        Driver::check_access(&file_nok, 100, 500, AccessFlags::R_OK),
+        driver.check_access(&file_nok, 100, 500, AccessFlags::R_OK),
         false
     );
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 100, 500, AccessFlags::R_OK),
+        driver.check_access(&file_nok_mode, 100, 500, AccessFlags::R_OK),
         false
     );
 }
 
 #[test]
 fn test_should_check_access_read_for_root() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -266,15 +309,16 @@ fn test_should_check_access_read_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::R_OK), true);
+    assert_eq!(driver.check_access(&file, 0, 0, AccessFlags::R_OK), true);
     assert_eq!(
-        Driver::check_access(&file_nok, 0, 0, AccessFlags::R_OK),
+        driver.check_access(&file_nok, 0, 0, AccessFlags::R_OK),
         true
     ); // root can read any file
 }
 
 #[test]
 fn test_should_check_access_write_for_user() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
@@ -288,22 +332,20 @@ fn test_should_check_access_write_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o400)).uid(1000),
     };
 
+    assert_eq!(driver.check_access(&file, 1000, 0, AccessFlags::W_OK), true);
     assert_eq!(
-        Driver::check_access(&file, 1000, 0, AccessFlags::W_OK),
-        true
-    );
-    assert_eq!(
-        Driver::check_access(&file_nok, 1000, 0, AccessFlags::W_OK),
+        driver.check_access(&file_nok, 1000, 0, AccessFlags::W_OK),
         false
     );
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 1000, 0, AccessFlags::W_OK),
+        driver.check_access(&file_nok_mode, 1000, 0, AccessFlags::W_OK),
         false
     );
 }
 
 #[test]
 fn test_should_check_access_write_for_group() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -327,21 +369,22 @@ fn test_should_check_access_write_for_group() {
     };
 
     assert_eq!(
-        Driver::check_access(&file, 100, 500, AccessFlags::W_OK),
+        driver.check_access(&file, 100, 500, AccessFlags::W_OK),
         true
     );
     assert_eq!(
-        Driver::check_access(&file_nok, 100, 500, AccessFlags::W_OK),
+        driver.check_access(&file_nok, 100, 500, AccessFlags::W_OK),
         false
     );
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 100, 500, AccessFlags::W_OK),
+        driver.check_access(&file_nok_mode, 100, 500, AccessFlags::W_OK),
         false
     );
 }
 
 #[test]
 fn test_should_check_access_write_for_root() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -357,15 +400,16 @@ fn test_should_check_access_write_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::R_OK), true);
+    assert_eq!(driver.check_access(&file, 0, 0, AccessFlags::R_OK), true);
     assert_eq!(
-        Driver::check_access(&file_nok, 0, 0, AccessFlags::R_OK),
+        driver.check_access(&file_nok, 0, 0, AccessFlags::R_OK),
         true
     ); // root can read any file
 }
 
 #[test]
 fn test_should_check_access_exec_for_user() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default().mode(UnixPex::from(0o775)).uid(1000),
@@ -379,22 +423,20 @@ fn test_should_check_access_exec_for_user() {
         metadata: Metadata::default().mode(UnixPex::from(0o600)).uid(1000),
     };
 
+    assert_eq!(driver.check_access(&file, 1000, 0, AccessFlags::X_OK), true);
     assert_eq!(
-        Driver::check_access(&file, 1000, 0, AccessFlags::X_OK),
-        true
-    );
-    assert_eq!(
-        Driver::check_access(&file_nok, 1000, 0, AccessFlags::X_OK),
+        driver.check_access(&file_nok, 1000, 0, AccessFlags::X_OK),
         false
     );
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 1000, 0, AccessFlags::X_OK),
+        driver.check_access(&file_nok_mode, 1000, 0, AccessFlags::X_OK),
         false
     );
 }
 
 #[test]
 fn test_should_check_access_exec_for_group() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -418,21 +460,22 @@ fn test_should_check_access_exec_for_group() {
     };
 
     assert_eq!(
-        Driver::check_access(&file, 100, 500, AccessFlags::X_OK),
+        driver.check_access(&file, 100, 500, AccessFlags::X_OK),
         true
     );
     assert_eq!(
-        Driver::check_access(&file_nok, 100, 500, AccessFlags::X_OK),
+        driver.check_access(&file_nok, 100, 500, AccessFlags::X_OK),
         false
     );
     assert_eq!(
-        Driver::check_access(&file_nok_mode, 100, 500, AccessFlags::X_OK),
+        driver.check_access(&file_nok_mode, 100, 500, AccessFlags::X_OK),
         false
     );
 }
 
 #[test]
 fn test_should_check_access_exec_for_root() {
+    let driver = setup_driver();
     let file = File {
         path: PathBuf::from("/tmp/test.txt"),
         metadata: Metadata::default()
@@ -448,9 +491,71 @@ fn test_should_check_access_exec_for_root() {
             .gid(1000),
     };
 
-    assert_eq!(Driver::check_access(&file, 0, 0, AccessFlags::X_OK), true);
+    assert_eq!(driver.check_access(&file, 0, 0, AccessFlags::X_OK), true);
     assert_eq!(
-        Driver::check_access(&file_nok, 0, 0, AccessFlags::X_OK),
+        driver.check_access(&file_nok, 0, 0, AccessFlags::X_OK),
         false
     ); // root can't execute any file
+}
+
+#[test]
+fn test_should_check_access_write_for_configured_uid() {
+    let driver = setup_driver_with_uid(5, 1);
+
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o644)).uid(1000),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o400)).uid(10),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o400)).uid(0),
+    };
+
+    assert_eq!(driver.check_access(&file, 5, 0, AccessFlags::W_OK), true);
+    assert_eq!(
+        driver.check_access(&file_nok, 5, 0, AccessFlags::W_OK),
+        false
+    );
+    assert_eq!(
+        driver.check_access(&file_nok_mode, 5, 0, AccessFlags::W_OK),
+        false
+    );
+}
+
+#[test]
+fn test_should_check_access_write_for_configured_gid() {
+    let driver = setup_driver_with_uid(1000, 1);
+
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o664))
+            .uid(1000)
+            .gid(1),
+    };
+    let file_nok = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default()
+            .mode(UnixPex::from(0o600))
+            .uid(10)
+            .gid(1),
+    };
+    let file_nok_mode = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().mode(UnixPex::from(0o400)).uid(0).gid(1),
+    };
+
+    assert_eq!(driver.check_access(&file, 5, 1, AccessFlags::W_OK), true);
+    assert_eq!(
+        driver.check_access(&file_nok, 5, 1, AccessFlags::W_OK),
+        false
+    );
+    assert_eq!(
+        driver.check_access(&file_nok_mode, 5, 1, AccessFlags::W_OK),
+        false
+    );
 }

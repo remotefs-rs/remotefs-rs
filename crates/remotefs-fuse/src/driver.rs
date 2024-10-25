@@ -1,11 +1,12 @@
 mod error;
-#[cfg(target_family = "unix")]
-#[cfg_attr(docsrs, doc(cfg(target_family = "unix")))]
+#[cfg(unix)]
+#[cfg_attr(docsrs, doc(cfg(unix)))]
 mod unix;
 
 use remotefs::RemoteFs;
 
 pub use self::error::{DriverError, DriverResult};
+use crate::MountOption;
 
 /// Remote Filesystem Driver
 ///
@@ -15,19 +16,15 @@ pub use self::error::{DriverError, DriverResult};
 /// it will use [dokan](https://crates.io/crates/dokan) on Windows.
 pub struct Driver {
     /// Inode database
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     database: unix::InodeDb,
     /// File handle database
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     file_handlers: unix::FileHandlersDb,
+    /// Mount options
+    pub(crate) options: Vec<MountOption>,
     /// [`RemoteFs`] instance
     remote: Box<dyn RemoteFs>,
-}
-
-impl From<Box<dyn RemoteFs>> for Driver {
-    fn from(remote: Box<dyn RemoteFs>) -> Self {
-        Self::new(remote)
-    }
 }
 
 impl Driver {
@@ -38,13 +35,31 @@ impl Driver {
     /// # Arguments
     ///
     /// * `remote` - The instance which implements the [`RemoteFs`] trait.
-    pub fn new(remote: Box<dyn RemoteFs>) -> Self {
+    /// * `options` - The mount options.
+    pub fn new(remote: Box<dyn RemoteFs>, options: Vec<MountOption>) -> Self {
         Self {
-            #[cfg(target_family = "unix")]
+            #[cfg(unix)]
             database: unix::InodeDb::load(),
-            #[cfg(target_family = "unix")]
+            #[cfg(unix)]
             file_handlers: unix::FileHandlersDb::default(),
+            options,
             remote,
         }
+    }
+
+    /// Get the specified uid from the mount options.
+    fn uid(&self) -> Option<u32> {
+        self.options.iter().find_map(|opt| match opt {
+            MountOption::Uid(uid) => Some(*uid),
+            _ => None,
+        })
+    }
+
+    /// Get the specified gid from the mount options.
+    fn gid(&self) -> Option<u32> {
+        self.options.iter().find_map(|opt| match opt {
+            MountOption::Gid(gid) => Some(*gid),
+            _ => None,
+        })
     }
 }

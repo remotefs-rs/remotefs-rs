@@ -9,7 +9,7 @@ pub struct SmbArgs {
     #[argh(option)]
     address: String,
     /// port of the SCP server
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     #[argh(option, default = "139")]
     port: u16,
     /// username to authenticate with
@@ -22,12 +22,12 @@ pub struct SmbArgs {
     #[argh(option)]
     share: String,
     /// workgroup to authenticate with
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     #[argh(option)]
     workgroup: Option<String>,
 }
 
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 impl From<SmbArgs> for SmbFs {
     fn from(args: SmbArgs) -> Self {
         let mut credentials = SmbCredentials::default()

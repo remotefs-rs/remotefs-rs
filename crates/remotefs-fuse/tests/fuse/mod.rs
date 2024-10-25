@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use fuser::MountOption;
 use remotefs_fuse::{Mount, Umount};
 use tempfile::TempDir;
 
@@ -25,17 +24,8 @@ fn mount(p: &Path) -> (UmountLock, JoinHandle<()>) {
     let umount_t = umount.clone();
 
     let join = std::thread::spawn(move || {
-        let mut mount = Mount::mount(
-            crate::driver::setup_driver(),
-            &mountpoint,
-            &[
-                MountOption::AllowRoot,
-                MountOption::RW,
-                MountOption::Exec,
-                MountOption::Sync,
-            ],
-        )
-        .expect("failed to mount");
+        let mut mount =
+            Mount::mount(crate::driver::setup_driver(), &mountpoint).expect("failed to mount");
 
         let umount = mount.unmounter();
         *umount_t.lock().unwrap() = Some(umount);

@@ -7,9 +7,29 @@ fn main() -> anyhow::Result<()> {
     args.init_logger()?;
     let volume = args.volume.clone();
     let mount_path = args.to.clone();
-    let remote = args.remote();
 
-    let driver = Driver::new(remote);
+    // make options
+    let mut options = vec![
+        #[cfg(unix)]
+        MountOption::AllowRoot,
+        #[cfg(unix)]
+        MountOption::RW,
+        #[cfg(unix)]
+        MountOption::Exec,
+        #[cfg(unix)]
+        MountOption::Sync,
+        #[cfg(unix)]
+        MountOption::FSName(volume),
+    ];
+
+    if let Some(uid) = args.uid {
+        options.push(MountOption::Uid(uid));
+    }
+    if let Some(gid) = args.gid {
+        options.push(MountOption::Gid(gid));
+    }
+
+    let driver = Driver::new(args.remote(), options);
 
     log::info!("Mounting remote fs at {}", mount_path.display());
 
@@ -20,17 +40,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Mount the remote file system
-    let mut mount = Mount::mount(
-        driver,
-        &mount_path,
-        &[
-            MountOption::AllowRoot,
-            MountOption::RW,
-            MountOption::Exec,
-            MountOption::Sync,
-            MountOption::FSName(volume),
-        ],
-    )?;
+    let mut mount = Mount::mount(driver, &mount_path)?;
 
     let mut umount = mount.unmounter();
 

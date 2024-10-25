@@ -1,7 +1,10 @@
+mod option;
+
 use std::path::Path;
 
-use fuser::{MountOption, Session, SessionUnmounter};
+use fuser::{Session, SessionUnmounter};
 
+pub use self::option::MountOption;
 use crate::Driver;
 
 /// A struct to mount the filesystem.
@@ -15,14 +18,16 @@ impl Mount {
     ///
     /// You can specify the mount options using the `options` parameter.
     #[allow(clippy::self_named_constructors)]
-    pub fn mount(
-        driver: Driver,
-        mountpoint: &Path,
-        options: &[MountOption],
-    ) -> Result<Self, std::io::Error> {
+    pub fn mount(driver: Driver, mountpoint: &Path) -> Result<Self, std::io::Error> {
+        let options = driver
+            .options
+            .iter()
+            .flat_map(|opt| opt.try_into())
+            .collect::<Vec<_>>();
+
         Ok(Self {
             #[cfg(unix)]
-            session: Session::new(driver, mountpoint, options)?,
+            session: Session::new(driver, mountpoint, &options)?,
         })
     }
 

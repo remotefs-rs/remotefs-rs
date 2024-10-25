@@ -42,6 +42,12 @@ pub struct CliArgs {
     /// name of mounted filesystem volume
     #[argh(option)]
     pub volume: String,
+    /// uid to use for the mounted filesystem
+    #[argh(option)]
+    pub uid: Option<u32>,
+    /// gid to use for the mounted filesystem
+    #[argh(option)]
+    pub gid: Option<u32>,
     /// enable verbose logging.
     ///
     /// use multiple times to increase verbosity

@@ -158,11 +158,11 @@ impl Driver {
             }
         };
 
-        Self::check_access(&parent, request.uid(), request.gid(), access_mask)
+        self.check_access(&parent, request.uid(), request.gid(), access_mask)
     }
 
     /// Check whether the user has access to a file.
-    fn check_access(file: &File, uid: u32, gid: u32, mut access_mask: AccessFlags) -> bool {
+    fn check_access(&self, file: &File, uid: u32, gid: u32, mut access_mask: AccessFlags) -> bool {
         debug!("Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask:?}", file.path(), file.metadata());
         if access_mask == AccessFlags::F_OK {
             return true;
@@ -186,10 +186,17 @@ impl Driver {
 
         let mut access_mask = access_mask.bits();
 
-        if uid == file.metadata().uid.unwrap_or_default() {
+        let file_uid = self
+            .uid()
+            .unwrap_or_else(|| file.metadata().uid.unwrap_or_default());
+        let file_gid = self
+            .gid()
+            .unwrap_or_else(|| file.metadata().gid.unwrap_or_default());
+
+        if uid == file_uid {
             access_mask -= access_mask & (file_mode >> 6);
             debug!("UID access to file: {}", file.path().display());
-        } else if gid == file.metadata().gid.unwrap_or_default() {
+        } else if gid == file_gid {
             access_mask -= access_mask & (file_mode >> 3);
             debug!("GID access to file: {}", file.path().display());
         } else {
@@ -412,7 +419,7 @@ impl Filesystem for Driver {
             Ok(res) => res,
         };
 
-        if !Self::check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK) {
+        if !self.check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK) {
             error!("No access to file: {path:?}");
             reply.error(libc::EACCES);
             return;
@@ -480,7 +487,7 @@ impl Filesystem for Driver {
             }
         };
 
-        if !Self::check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK) {
+        if !self.check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK) {
             error!("No access to file: {}", file.path().display());
             reply.error(libc::EACCES);
             return;
@@ -878,7 +885,7 @@ impl Filesystem for Driver {
             }
         };
 
-        if !Self::check_access(&file, req.uid(), req.gid(), access_mask) {
+        if !self.check_access(&file, req.uid(), req.gid(), access_mask) {
             error!("No access to file: {}", file.path().display());
             reply.error(libc::EACCES);
             return;
@@ -1106,7 +1113,7 @@ impl Filesystem for Driver {
             }
         };
 
-        if Self::check_access(&file, req.uid(), req.gid(), access_mask) {
+        if self.check_access(&file, req.uid(), req.gid(), access_mask) {
             let fh = self.file_handlers.open(req.pid(), ino, read, write);
             reply.opened(fh, 0);
         } else {
@@ -1339,7 +1346,7 @@ impl Filesystem for Driver {
             }
         };
 
-        if Self::check_access(
+        if self.check_access(
             &file,
             req.uid(),
             req.gid(),
