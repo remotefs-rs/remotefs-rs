@@ -4,9 +4,10 @@ use std::path::Path;
 
 #[cfg(unix)]
 use fuser::{Session, SessionUnmounter};
+use remotefs::RemoteFs;
 
 pub use self::option::MountOption;
-use crate::Driver;
+use crate::driver::Driver;
 
 /// A struct to mount the filesystem.
 pub struct Mount {
@@ -21,11 +22,11 @@ impl Mount {
     #[allow(clippy::self_named_constructors)]
     #[cfg(unix)]
     pub fn mount(
-        mut driver: Driver,
+        remote: Box<dyn RemoteFs>,
         mountpoint: &Path,
         options: &[MountOption],
     ) -> Result<Self, std::io::Error> {
-        driver.options = options.to_vec();
+        let driver = Driver::new(remote, options.to_vec());
 
         let options = driver
             .options

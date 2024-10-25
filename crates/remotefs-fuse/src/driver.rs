@@ -1,11 +1,9 @@
-mod error;
 #[cfg(unix)]
 #[cfg_attr(docsrs, doc(cfg(unix)))]
 mod unix;
 
 use remotefs::RemoteFs;
 
-pub use self::error::{DriverError, DriverResult};
 use crate::MountOption;
 
 /// Remote Filesystem Driver
@@ -36,13 +34,13 @@ impl Driver {
     ///
     /// * `remote` - The instance which implements the [`RemoteFs`] trait.
     /// * `options` - The mount options.
-    pub fn new(remote: Box<dyn RemoteFs>) -> Self {
+    pub fn new(remote: Box<dyn RemoteFs>, options: Vec<MountOption>) -> Self {
         Self {
             #[cfg(unix)]
             database: unix::InodeDb::load(),
             #[cfg(unix)]
             file_handlers: unix::FileHandlersDb::default(),
-            options: Vec::new(),
+            options,
             remote,
         }
     }

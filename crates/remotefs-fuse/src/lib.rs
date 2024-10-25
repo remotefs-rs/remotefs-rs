@@ -33,5 +33,4 @@ extern crate log;
 mod driver;
 mod mount;
 
-pub use self::driver::{Driver, DriverError, DriverResult};
 pub use self::mount::{Mount, MountOption, Umount};

@@ -2,14 +2,13 @@ use std::path::{Path, PathBuf};
 
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs};
-use remotefs_fuse::Driver;
 use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
 
 pub fn mounted_file_path() -> &'static Path {
     Path::new("/tmp/mounted.txt")
 }
 
-pub fn setup_driver() -> Driver {
+pub fn setup_driver() -> Box<dyn RemoteFs> {
     let gid = nix::unistd::getgid().as_raw();
     let uid = nix::unistd::getuid().as_raw();
 
@@ -27,7 +26,7 @@ pub fn setup_driver() -> Driver {
 
     make_file_at(&mut fs, mounted_file_path(), b"Hello, world!");
 
-    Driver::new(fs)
+    fs
 }
 
 /// Make file on the remote fs at `path` with `content`

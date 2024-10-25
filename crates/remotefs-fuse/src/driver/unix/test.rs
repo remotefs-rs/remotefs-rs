@@ -7,7 +7,8 @@ use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs};
 use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
 
-use crate::{Driver, MountOption};
+use super::Driver;
+use crate::MountOption;
 
 fn setup_driver() -> Driver {
     let gid = nix::unistd::getgid().as_raw();
@@ -27,14 +28,15 @@ fn setup_driver() -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    let mut driver = Driver::new(fs);
-    driver.options = vec![
-        MountOption::AllowRoot,
-        MountOption::RW,
-        MountOption::Exec,
-        MountOption::Sync,
-    ];
-    driver
+    Driver::new(
+        fs,
+        vec![
+            MountOption::AllowRoot,
+            MountOption::RW,
+            MountOption::Exec,
+            MountOption::Sync,
+        ],
+    )
 }
 
 fn setup_driver_with_mode(mode: u32) -> Driver {
@@ -55,16 +57,16 @@ fn setup_driver_with_mode(mode: u32) -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    let mut driver = Driver::new(fs);
-    driver.options = vec![
-        MountOption::AllowRoot,
-        MountOption::RW,
-        MountOption::Exec,
-        MountOption::Sync,
-        MountOption::DefaultMode(mode),
-    ];
-
-    driver
+    Driver::new(
+        fs,
+        vec![
+            MountOption::AllowRoot,
+            MountOption::RW,
+            MountOption::Exec,
+            MountOption::Sync,
+            MountOption::DefaultMode(mode),
+        ],
+    )
 }
 
 fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
@@ -82,17 +84,17 @@ fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    let mut driver = Driver::new(fs);
-    driver.options = vec![
-        MountOption::AllowRoot,
-        MountOption::RW,
-        MountOption::Exec,
-        MountOption::Sync,
-        MountOption::Uid(uid),
-        MountOption::Gid(gid),
-    ];
-
-    driver
+    Driver::new(
+        fs,
+        vec![
+            MountOption::AllowRoot,
+            MountOption::RW,
+            MountOption::Exec,
+            MountOption::Sync,
+            MountOption::Uid(uid),
+            MountOption::Gid(gid),
+        ],
+    )
 }
 
 /// Make file on the remote fs at `path` with `content`

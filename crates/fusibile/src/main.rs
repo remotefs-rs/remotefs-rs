@@ -1,6 +1,6 @@
 mod cli;
 
-use remotefs_fuse::{Driver, Mount, MountOption};
+use remotefs_fuse::{Mount, MountOption};
 
 fn main() -> anyhow::Result<()> {
     let args = argh::from_env::<cli::CliArgs>();
@@ -44,7 +44,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Mount the remote file system
-    let mut mount = Mount::mount(Driver::new(args.remote()), &mount_path, &options)?;
+    let mut mount = Mount::mount(args.remote(), &mount_path, &options)?;
     let mut umount = mount.unmounter();
 
     // setup signal handler
