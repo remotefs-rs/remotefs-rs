@@ -85,9 +85,9 @@ pub struct MemoryFs {
     wrkdir: PathBuf,
     connected: bool,
     // Fn to get uid
-    get_uid: Box<dyn Fn() -> u32>,
+    get_uid: Box<dyn Fn() -> u32 + Send + Sync>,
     // Fn to get gid
-    get_gid: Box<dyn Fn() -> u32>,
+    get_gid: Box<dyn Fn() -> u32 + Send + Sync>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,7 +128,7 @@ impl MemoryFs {
     /// Set the function to get the user id (uid).
     pub fn with_get_uid<F>(mut self, get_uid: F) -> Self
     where
-        F: Fn() -> u32 + 'static,
+        F: Fn() -> u32 + Send + Sync + 'static,
     {
         self.get_uid = Box::new(get_uid);
         self
@@ -137,7 +137,7 @@ impl MemoryFs {
     /// Set the function to get the group id (gid).
     pub fn with_get_gid<F>(mut self, get_gid: F) -> Self
     where
-        F: Fn() -> u32 + 'static,
+        F: Fn() -> u32 + Send + Sync + 'static,
     {
         self.get_gid = Box::new(get_gid);
         self
