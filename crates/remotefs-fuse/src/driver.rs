@@ -62,4 +62,16 @@ impl Driver {
             _ => None,
         })
     }
+
+    /// Get the specified default mode from the mount options.
+    /// If not set, the default is 0755.
+    fn default_mode(&self) -> u32 {
+        self.options
+            .iter()
+            .find_map(|opt| match opt {
+                MountOption::DefaultMode(mode) => Some(*mode),
+                _ => None,
+            })
+            .unwrap_or(0o755)
+    }
 }

@@ -23,10 +23,16 @@ fn main() -> anyhow::Result<()> {
     ];
 
     if let Some(uid) = args.uid {
+        log::info!("Default uid: {uid}");
         options.push(MountOption::Uid(uid));
     }
     if let Some(gid) = args.gid {
+        log::info!("Default gid: {gid}");
         options.push(MountOption::Gid(gid));
+    }
+    if let Some(default_mode) = args.default_mode {
+        log::info!("Default mode: {default_mode:o}");
+        options.push(MountOption::DefaultMode(default_mode));
     }
 
     let driver = Driver::new(args.remote(), options);

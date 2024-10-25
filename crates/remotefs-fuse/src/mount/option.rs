@@ -17,6 +17,9 @@ pub enum MountOption {
     /// This doesn't change the ownership of the files, but allows the user to access them.
     /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
     Gid(u32),
+    /// Set the default file mode in case the filesystem doesn't provide one
+    /// If not set, the default is 0755
+    DefaultMode(u32),
     /* fuser */
     /// Set the name of the source in mtab
     #[cfg(unix)]

@@ -168,8 +168,12 @@ impl Driver {
             return true;
         }
 
-        let file_mode =
-            u32::from(file.metadata().mode.unwrap_or_else(|| UnixPex::from(0o777))) as i32;
+        let file_mode = file
+            .metadata()
+            .mode
+            .map(u32::from)
+            .unwrap_or_else(|| self.default_mode()) as i32;
+
         debug!("file mode for {}: {file_mode:o}", file.path().display());
 
         // root is allowed to read & write anything

@@ -38,6 +38,36 @@ fn setup_driver() -> Driver {
     )
 }
 
+fn setup_driver_with_mode(mode: u32) -> Driver {
+    let gid = nix::unistd::getgid().as_raw();
+    let uid = nix::unistd::getuid().as_raw();
+
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(uid, gid, UnixPex::from(0o755)),
+    ));
+
+    let mut fs = MemoryFs::new(tree)
+        .with_get_gid(|| nix::unistd::getgid().as_raw())
+        .with_get_uid(|| nix::unistd::getuid().as_raw());
+
+    fs.connect().expect("Failed to connect");
+    assert!(fs.is_connected());
+
+    let fs = Box::new(fs) as Box<dyn RemoteFs>;
+
+    Driver::new(
+        fs,
+        vec![
+            MountOption::AllowRoot,
+            MountOption::RW,
+            MountOption::Exec,
+            MountOption::Sync,
+            MountOption::DefaultMode(mode),
+        ],
+    )
+}
+
 fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
     let tree = Tree::new(node!(
         PathBuf::from("/"),
@@ -557,5 +587,35 @@ fn test_should_check_access_write_for_configured_gid() {
     assert_eq!(
         driver.check_access(&file_nok_mode, 5, 1, AccessFlags::W_OK),
         false
+    );
+}
+
+#[test]
+fn test_should_check_access_write_for_configured_mode() {
+    let driver = setup_driver_with_mode(0o777);
+
+    let file = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default(),
+    };
+
+    let file_w_uid = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().uid(10),
+    };
+
+    let file_w_gid = File {
+        path: PathBuf::from("/tmp/test.txt"),
+        metadata: Metadata::default().uid(10).gid(100),
+    };
+
+    assert_eq!(driver.check_access(&file, 1000, 0, AccessFlags::W_OK), true);
+    assert_eq!(
+        driver.check_access(&file_w_uid, 1000, 0, AccessFlags::W_OK),
+        true
+    );
+    assert_eq!(
+        driver.check_access(&file_w_gid, 1000, 10000, AccessFlags::W_OK),
+        true
     );
 }

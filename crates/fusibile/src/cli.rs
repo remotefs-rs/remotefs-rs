@@ -48,23 +48,27 @@ pub struct CliArgs {
     /// gid to use for the mounted filesystem
     #[argh(option)]
     pub gid: Option<u32>,
+    /// default file permissions for those remote file protocols that don't support file permissions.
+    ///
+    /// this is a 3-digit octal number, e.g. 644
+    #[argh(option, from_str_fn(from_octal))]
+    pub default_mode: Option<u32>,
     /// enable verbose logging.
     ///
     /// use multiple times to increase verbosity
-    #[argh(option, short = 'v')]
-    log_level: Option<String>,
+    #[argh(option, short = 'l', default = r#""info".to_string()"#)]
+    log_level: String,
     #[argh(subcommand)]
     remote: RemoteArgs,
 }
 
+fn from_octal(s: &str) -> Result<u32, String> {
+    u32::from_str_radix(s, 8).map_err(|_| "Invalid octal number".to_string())
+}
+
 impl CliArgs {
     pub fn init_logger(&self) -> anyhow::Result<()> {
-        let Some(verbose) = self.log_level.as_ref() else {
-            env_logger::init();
-            return Ok(());
-        };
-
-        match verbose.as_str() {
+        match self.log_level.as_str() {
             "error" => env_logger::builder()
                 .filter_level(log::LevelFilter::Error)
                 .init(),
@@ -80,7 +84,7 @@ impl CliArgs {
             "trace" => env_logger::builder()
                 .filter_level(log::LevelFilter::Trace)
                 .init(),
-            _ => anyhow::bail!("Invalid log level: {verbose}"),
+            _ => anyhow::bail!("Invalid log level: {}", self.log_level),
         }
 
         Ok(())
