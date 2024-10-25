@@ -5,7 +5,7 @@ pub type Inode = u64;
 
 type Database = HashMap<Inode, PathBuf>;
 
-const ROOT_INODE: Inode = 1;
+pub const ROOT_INODE: Inode = 1;
 
 /// A database to map inodes to files
 ///

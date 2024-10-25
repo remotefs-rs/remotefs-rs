@@ -16,7 +16,7 @@ use fuser::{
     ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
     Request, TimeOrNow,
 };
-use inode::Inode;
+use inode::{Inode, ROOT_INODE};
 use libc::{c_int, mode_t};
 use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
@@ -92,6 +92,10 @@ fn as_file_kind(mut mode: SFlag) -> Option<FileType> {
 impl Driver {
     /// Get the inode as [`Inode`] ([`u64`]) number for a [`Path`]
     fn inode(path: &Path) -> Inode {
+        if path == Path::new("/") {
+            return ROOT_INODE;
+        }
+
         let mut hasher = seahash::SeaHasher::new();
         path.hash(&mut hasher);
         hasher.finish()
@@ -139,6 +143,11 @@ impl Driver {
         if !self.database.has(inode) {
             self.database.put(inode, path.clone());
         }
+
+        info!(
+            "lookup_name() called with {:?} {:?} -> {:?}",
+            parent, name, path
+        );
 
         Some(path)
     }
@@ -404,7 +413,7 @@ impl Filesystem for Driver {
 
     /// Look up a directory entry by name and get its attributes.
     fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        debug!("lookup() called with {:?} {:?}", parent, name);
+        info!("lookup() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -440,13 +449,13 @@ impl Filesystem for Driver {
     /// have a limited lifetime. On unmount it is not guaranteed, that all referenced
     /// inodes will receive a forget message.
     fn forget(&mut self, _req: &Request, ino: u64, _nlookup: u64) {
-        debug!("forget() called with {ino}");
+        info!("forget() called with {ino}");
         self.database.forget(ino);
     }
 
     /// Get file attributes.
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        debug!("getattr() called with {ino}");
+        info!("getattr() called with {ino}");
         let attrs = match self.get_inode(ino) {
             Err(err) => {
                 error!("Failed to get file attributes for {ino}: {err}");
@@ -478,7 +487,7 @@ impl Filesystem for Driver {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        debug!(
+        info!(
             "setattr() called with mode: {:?}, uid: {:?}, gid: {:?}, size: {:?}, atime: {:?}, mtime: {:?}, ctime: {:?}",
             mode, uid, gid, size, atime, mtime, ctime
         );
@@ -534,7 +543,7 @@ impl Filesystem for Driver {
 
     /// Read symbolic link.
     fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
-        debug!("readlink() called with {:?}", ino);
+        info!("readlink() called with {:?}", ino);
         let (file, _) = match self.get_inode(ino) {
             Ok(attrs) => attrs,
             Err(err) => {
@@ -567,7 +576,7 @@ impl Filesystem for Driver {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        debug!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
+        info!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
 
         let mode = SFlag::from_bits_retain(mode as mode_t);
         let file_type = mode & SFlag::S_IFMT;
@@ -645,7 +654,7 @@ impl Filesystem for Driver {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        debug!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
+        info!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -681,7 +690,7 @@ impl Filesystem for Driver {
 
     /// Remove a file
     fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        debug!("unlink() called with {:?} {:?}", parent, name);
+        info!("unlink() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -709,7 +718,7 @@ impl Filesystem for Driver {
 
     /// Remove a directory
     fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        debug!("rmdir() called with {:?} {:?}", parent, name);
+        info!("rmdir() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -744,7 +753,7 @@ impl Filesystem for Driver {
         link: &Path,
         reply: ReplyEntry,
     ) {
-        debug!("symlink() called with {:?} {:?} {:?}", parent, name, link);
+        info!("symlink() called with {:?} {:?} {:?}", parent, name, link);
         let path = match self.lookup_name(parent, name) {
             Some(path) => path,
             None => {
@@ -767,7 +776,14 @@ impl Filesystem for Driver {
             return;
         }
 
-        todo!();
+        // Get the inode
+        match self.get_inode_from_path(path.as_path()) {
+            Err(err) => {
+                error!("Failed to get file attributes: {err}");
+                reply.error(libc::ENOENT);
+            }
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+        }
     }
 
     /// Rename a file
@@ -781,7 +797,7 @@ impl Filesystem for Driver {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        debug!(
+        info!(
             "rename() called with {:?} {:?} {:?} {:?}",
             parent, name, newparent, newname
         );
@@ -853,7 +869,7 @@ impl Filesystem for Driver {
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        debug!("open() called for {ino}");
+        info!("open() called for {ino}");
         let flags = OFlag::from_bits_truncate(flags);
         let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
             OFlag::O_RDONLY => {
@@ -918,7 +934,7 @@ impl Filesystem for Driver {
         _lock_owner: Option<u64>,
         reply: ReplyData,
     ) {
-        debug!("read() called for {ino} {size} bytes at {offset}");
+        info!("read() called for {ino} {size} bytes at {offset}");
         // check access
         if !self
             .file_handlers
@@ -976,7 +992,7 @@ impl Filesystem for Driver {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        debug!("write() called for {ino} {} bytes at {offset}", data.len());
+        info!("write() called for {ino} {} bytes at {offset}", data.len());
         // check access
         if !self
             .file_handlers
@@ -1028,7 +1044,7 @@ impl Filesystem for Driver {
     /// filesystem wants to return write errors. If the filesystem supports file locking
     /// operations (setlk, getlk) it should remove all locks belonging to 'lock_owner'.
     fn flush(&mut self, req: &Request, ino: u64, fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
-        debug!("flush() called for {ino}");
+        info!("flush() called for {ino}");
 
         // get fh
         if self.file_handlers.get(req.pid(), fh).is_none() {
@@ -1086,7 +1102,7 @@ impl Filesystem for Driver {
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
     fn opendir(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
-        debug!("opendir() called on {:?}", ino);
+        info!("opendir() called on {:?}", ino);
         let flags = OFlag::from_bits_truncate(flags);
         let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
             OFlag::O_RDONLY => {
@@ -1139,7 +1155,7 @@ impl Filesystem for Driver {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        debug!("readdir() called on {:?}", ino);
+        info!("readdir() called on {:?}", ino);
         // check fh with read permissions
         match self.file_handlers.get(req.pid(), fh) {
             Some(handler) if !handler.read => {
@@ -1164,6 +1180,7 @@ impl Filesystem for Driver {
                 return;
             }
         };
+        debug!("Reading directory {ino}: {}", file.path().display());
 
         // list directory
         let entries = match self.remote.list_dir(file.path()) {
@@ -1181,8 +1198,7 @@ impl Filesystem for Driver {
             let name = match entry.path().file_name() {
                 Some(name) => OsStr::from_bytes(name.as_bytes()),
                 None => {
-                    error!("Failed to get file name");
-
+                    error!("Failed to get file name {:?}", entry.path().display());
                     continue;
                 }
             };
@@ -1227,7 +1243,7 @@ impl Filesystem for Driver {
     /// be flushed, not the meta data. fh will contain the value set by the opendir
     /// method, or will be undefined if the opendir method didn't set any value.
     fn fsyncdir(&mut self, req: &Request, ino: u64, fh: u64, _datasync: bool, reply: ReplyEmpty) {
-        debug!("fsyncdir() called for {ino}");
+        info!("fsyncdir() called for {ino}");
         // get fh
         if self.file_handlers.get(req.pid(), fh).is_none() {
             error!(
@@ -1242,7 +1258,7 @@ impl Filesystem for Driver {
 
     /// Get file system statistics.
     fn statfs(&mut self, _req: &Request, ino: u64, reply: ReplyStatfs) {
-        debug!("statfs() called for {ino}");
+        info!("statfs() called for {ino}");
 
         // get statfs
         struct FsStats {
@@ -1303,7 +1319,7 @@ impl Filesystem for Driver {
         _position: u32,
         reply: ReplyEmpty,
     ) {
-        debug!("setxattr() called on {:?} {:?} {:?}", ino, name, value);
+        info!("setxattr() called on {:?} {:?} {:?}", ino, name, value);
         // not supported
         reply.error(libc::ENOSYS);
     }
@@ -1313,7 +1329,7 @@ impl Filesystem for Driver {
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
     fn getxattr(&mut self, _req: &Request, ino: u64, name: &OsStr, _size: u32, reply: ReplyXattr) {
-        debug!("getxattr() called on {:?} {:?}", ino, name);
+        info!("getxattr() called on {:?} {:?}", ino, name);
         // not supported
         reply.error(libc::ENOSYS);
     }
@@ -1323,14 +1339,14 @@ impl Filesystem for Driver {
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
     fn listxattr(&mut self, _req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
-        debug!("listxattr() called on {:?} {:?}", ino, size);
+        info!("listxattr() called on {:?} {:?}", ino, size);
         // not supported
         reply.error(libc::ENOSYS);
     }
 
     /// Remove an extended attribute.
     fn removexattr(&mut self, _req: &Request, ino: u64, name: &OsStr, reply: ReplyEmpty) {
-        debug!("removexattr() called on {:?} {:?}", ino, name);
+        info!("removexattr() called on {:?} {:?}", ino, name);
         // not supported
         reply.error(libc::ENOSYS);
     }
@@ -1340,7 +1356,7 @@ impl Filesystem for Driver {
     /// mount option is given, this method is not called. This method is not called
     /// under Linux kernel versions 2.4.x
     fn access(&mut self, req: &Request, ino: u64, mask: i32, reply: ReplyEmpty) {
-        debug!("access() called on {:?} {:o}", ino, mask);
+        info!("access() called on {:?} {:o}", ino, mask);
         let file = match self.get_inode(ino) {
             Ok((file, _)) => file,
             Err(err) => {
@@ -1383,7 +1399,7 @@ impl Filesystem for Driver {
         flags: i32,
         reply: ReplyCreate,
     ) {
-        debug!("create() called with {:?} {:?} {:o}", parent, name, mode);
+        info!("create() called with {:?} {:?} {:o}", parent, name, mode);
 
         let flags = OFlag::from_bits_truncate(flags);
         let (read, write) = match flags & OFlag::O_ACCMODE {

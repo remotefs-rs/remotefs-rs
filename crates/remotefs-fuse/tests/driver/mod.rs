@@ -10,14 +10,20 @@ pub fn mounted_file_path() -> &'static Path {
 }
 
 pub fn setup_driver() -> Driver {
+    let gid = nix::unistd::getgid().as_raw();
+    let uid = nix::unistd::getuid().as_raw();
+
     let tree = Tree::new(node!(
         PathBuf::from("/"),
-        Inode::dir(0, 0, UnixPex::from(0o755)),
+        Inode::dir(uid, gid, UnixPex::from(0o755)),
     ));
 
-    let fs = MemoryFs::new(tree);
-    let mut fs = Box::new(fs) as Box<dyn RemoteFs>;
+    let mut fs = MemoryFs::new(tree)
+        .with_get_gid(|| nix::unistd::getgid().as_raw())
+        .with_get_uid(|| nix::unistd::getuid().as_raw());
+
     fs.connect().expect("Failed to connect to fs");
+    let mut fs = Box::new(fs) as Box<dyn RemoteFs>;
 
     make_file_at(&mut fs, mounted_file_path(), b"Hello, world!");
 
