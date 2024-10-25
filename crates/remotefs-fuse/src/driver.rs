@@ -36,13 +36,13 @@ impl Driver {
     ///
     /// * `remote` - The instance which implements the [`RemoteFs`] trait.
     /// * `options` - The mount options.
-    pub fn new(remote: Box<dyn RemoteFs>, options: Vec<MountOption>) -> Self {
+    pub fn new(remote: Box<dyn RemoteFs>) -> Self {
         Self {
             #[cfg(unix)]
             database: unix::InodeDb::load(),
             #[cfg(unix)]
             file_handlers: unix::FileHandlersDb::default(),
-            options,
+            options: Vec::new(),
             remote,
         }
     }

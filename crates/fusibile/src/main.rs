@@ -35,8 +35,6 @@ fn main() -> anyhow::Result<()> {
         options.push(MountOption::DefaultMode(default_mode));
     }
 
-    let driver = Driver::new(args.remote(), options);
-
     log::info!("Mounting remote fs at {}", mount_path.display());
 
     // create the mount point if it does not exist
@@ -46,8 +44,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // Mount the remote file system
-    let mut mount = Mount::mount(driver, &mount_path)?;
-
+    let mut mount = Mount::mount(Driver::new(args.remote()), &mount_path, &options)?;
     let mut umount = mount.unmounter();
 
     // setup signal handler

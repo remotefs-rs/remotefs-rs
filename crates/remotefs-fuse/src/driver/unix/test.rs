@@ -27,15 +27,14 @@ fn setup_driver() -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    Driver::new(
-        fs,
-        vec![
-            MountOption::AllowRoot,
-            MountOption::RW,
-            MountOption::Exec,
-            MountOption::Sync,
-        ],
-    )
+    let mut driver = Driver::new(fs);
+    driver.options = vec![
+        MountOption::AllowRoot,
+        MountOption::RW,
+        MountOption::Exec,
+        MountOption::Sync,
+    ];
+    driver
 }
 
 fn setup_driver_with_mode(mode: u32) -> Driver {
@@ -56,16 +55,16 @@ fn setup_driver_with_mode(mode: u32) -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    Driver::new(
-        fs,
-        vec![
-            MountOption::AllowRoot,
-            MountOption::RW,
-            MountOption::Exec,
-            MountOption::Sync,
-            MountOption::DefaultMode(mode),
-        ],
-    )
+    let mut driver = Driver::new(fs);
+    driver.options = vec![
+        MountOption::AllowRoot,
+        MountOption::RW,
+        MountOption::Exec,
+        MountOption::Sync,
+        MountOption::DefaultMode(mode),
+    ];
+
+    driver
 }
 
 fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
@@ -83,17 +82,17 @@ fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
 
     let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
-    Driver::new(
-        fs,
-        vec![
-            MountOption::AllowRoot,
-            MountOption::RW,
-            MountOption::Exec,
-            MountOption::Sync,
-            MountOption::Uid(uid),
-            MountOption::Gid(gid),
-        ],
-    )
+    let mut driver = Driver::new(fs);
+    driver.options = vec![
+        MountOption::AllowRoot,
+        MountOption::RW,
+        MountOption::Exec,
+        MountOption::Sync,
+        MountOption::Uid(uid),
+        MountOption::Gid(gid),
+    ];
+
+    driver
 }
 
 /// Make file on the remote fs at `path` with `content`

@@ -20,7 +20,13 @@ impl Mount {
     /// You can specify the mount options using the `options` parameter.
     #[allow(clippy::self_named_constructors)]
     #[cfg(unix)]
-    pub fn mount(driver: Driver, mountpoint: &Path) -> Result<Self, std::io::Error> {
+    pub fn mount(
+        mut driver: Driver,
+        mountpoint: &Path,
+        options: &[MountOption],
+    ) -> Result<Self, std::io::Error> {
+        driver.options = options.to_vec();
+
         let options = driver
             .options
             .iter()
@@ -32,8 +38,18 @@ impl Mount {
         })
     }
 
+    /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
+    ///
+    /// You can specify the mount options using the `options` parameter.
     #[cfg(windows)]
-    pub fn mount(driver: Driver, mountpoint: &Path) -> Result<Self, std::io::Error> {
+    #[allow(clippy::self_named_constructors)]
+    pub fn mount(
+        mut driver: Driver,
+        mountpoint: &Path,
+        options: &[MountOption],
+    ) -> Result<Self, std::io::Error> {
+        driver.options = options.to_vec();
+
         todo!()
     }
 
