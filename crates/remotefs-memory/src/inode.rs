@@ -43,7 +43,7 @@ impl Inode {
     }
 
     /// Create a new [`Inode`] with type **Symlink** with the given metadata and target.
-    pub fn symlink(uid: u32, gid: u32, mode: UnixPex, target: PathBuf) -> Self {
+    pub fn symlink(uid: u32, gid: u32, target: PathBuf) -> Self {
         Self {
             metadata: Metadata::default()
                 .uid(uid)
@@ -51,9 +51,9 @@ impl Inode {
                 .file_type(FileType::Symlink)
                 .created(SystemTime::now())
                 .accessed(SystemTime::now())
-                .mode(mode)
-                .symlink(target),
-            content: None,
+                .mode(UnixPex::from(0o777))
+                .symlink(target.clone()),
+            content: Some(target.to_string_lossy().as_bytes().to_vec()),
         }
     }
 

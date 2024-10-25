@@ -56,6 +56,7 @@ mod test;
 
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub use orange_trees::{node, Node, Tree};
 use remotefs::fs::stream::{StreamWriter, WriteAndSeek};
@@ -436,12 +437,7 @@ impl RemoteFs for MemoryFs {
             .unwrap_or_else(|| Path::new("/"))
             .to_path_buf();
 
-        let symlink = Inode::symlink(
-            (self.get_uid)(),
-            (self.get_gid)(),
-            UnixPex::from(0o755),
-            target.to_path_buf(),
-        );
+        let symlink = Inode::symlink((self.get_uid)(), (self.get_gid)(), target.to_path_buf());
 
         let parent = self
             .tree
@@ -677,6 +673,8 @@ impl RemoteFs for MemoryFs {
             }
             WriteMode::Create => handle.data.get_ref().len() as u64,
         };
+        value.metadata.modified = Some(SystemTime::now());
+
         debug!("{:?} written {:?}", handle.path, value);
         node.set_value(value);
 
