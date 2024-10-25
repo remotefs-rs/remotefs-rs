@@ -2,6 +2,7 @@ mod option;
 
 use std::path::Path;
 
+#[cfg(unix)]
 use fuser::{Session, SessionUnmounter};
 
 pub use self::option::MountOption;
