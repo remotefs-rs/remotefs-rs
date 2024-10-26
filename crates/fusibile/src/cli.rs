@@ -40,6 +40,7 @@ pub struct CliArgs {
     #[argh(option)]
     pub to: PathBuf,
     /// name of mounted filesystem volume
+    #[cfg(unix)]
     #[argh(option)]
     pub volume: String,
     /// uid to use for the mounted filesystem
