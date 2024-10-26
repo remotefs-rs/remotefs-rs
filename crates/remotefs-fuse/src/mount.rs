@@ -44,7 +44,6 @@ where
 
         Ok(Self {
             session: fuser::Session::new(driver, mountpoint, &options)?,
-            marker: std::marker::PhantomData,
         })
     }
 
