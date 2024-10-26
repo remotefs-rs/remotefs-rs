@@ -367,7 +367,6 @@ impl RemoteFs for SmbFs {
 }
 
 #[cfg(test)]
-#[cfg(feature = "with-containers")]
 mod test {
 
     use super::*;
@@ -379,6 +378,24 @@ mod test {
         let mut client = init_client();
         assert!(client.pwd().is_ok());
         finalize_client(client);
+    }
+
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let client = SmbFs::new(SmbCredentials::new("pippo", "pippo"));
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let client = SmbFs::new(SmbCredentials::new("pippo", "pippo"));
+
+        is_send(client);
     }
 
     #[cfg(feature = "with-containers")]

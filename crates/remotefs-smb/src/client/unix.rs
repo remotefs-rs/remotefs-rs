@@ -280,12 +280,14 @@ impl RemoteFs for SmbFs {
 }
 
 #[cfg(test)]
-#[cfg(feature = "with-containers")]
 mod test {
 
+    #[cfg(feature = "with-containers")]
     use std::io::Cursor;
+    #[cfg(feature = "with-containers")]
     use std::time::Duration;
 
+    #[cfg(feature = "with-containers")]
     use serial_test::serial;
 
     use super::*;
@@ -812,6 +814,47 @@ mod test {
         finalize_client(client);
     }
 
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let client = SmbFs::try_new(
+            SmbCredentials::default()
+                .server("smb://localhost:3445")
+                .share("/temp")
+                .username("test")
+                .password("test")
+                .workgroup("pavao"),
+            SmbOptions::default()
+                .case_sensitive(true)
+                .one_share_per_server(true),
+        )
+        .unwrap();
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let client = SmbFs::try_new(
+            SmbCredentials::default()
+                .server("smb://localhost:3445")
+                .share("/temp")
+                .username("test")
+                .password("test")
+                .workgroup("pavao"),
+            SmbOptions::default()
+                .case_sensitive(true)
+                .one_share_per_server(true),
+        )
+        .unwrap();
+
+        is_send(client);
+    }
+
+    #[cfg(feature = "with-containers")]
     fn init_client() -> SmbFs {
         let _ = std::fs::remove_dir_all(Path::new("/tmp/cargo-test"));
         let client = SmbFs::try_new(
@@ -831,12 +874,14 @@ mod test {
         client
     }
 
+    #[cfg(feature = "with-containers")]
     fn finalize_client(client: SmbFs) {
         remove_dir_all("/cargo-test");
         std::thread::sleep(Duration::from_secs(1));
         drop(client);
     }
 
+    #[cfg(feature = "with-containers")]
     fn remove_dir_all<S: AsRef<str>>(dir: S) {
         let _ = std::fs::remove_dir_all(Path::new(dir.as_ref()));
     }
