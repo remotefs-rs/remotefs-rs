@@ -8,24 +8,21 @@ pub use self::option::MountOption;
 use crate::driver::Driver;
 
 /// A struct to mount the filesystem.
-pub struct Mount<'a, T>
+pub struct Mount<T>
 where
-    T: RemoteFs + Sync + 'a,
+    T: RemoteFs + Sync + Send,
 {
     #[cfg(unix)]
     session: fuser::Session<Driver<T>>,
     #[cfg(windows)]
-    #[allow(dead_code)]
-    file_system: dokan::FileSystem<'a, 'a, Driver<T>>,
-    #[cfg(windows)]
     mountpoint: widestring::U16CString,
-    #[cfg(unix)]
-    marker: std::marker::PhantomData<&'a u8>,
+    #[cfg(windows)]
+    driver: Driver<T>,
 }
 
-impl<'a, T> Mount<'a, T>
+impl<T> Mount<T>
 where
-    T: RemoteFs + Sync + 'a,
+    T: RemoteFs + Sync + Send,
 {
     /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
     ///
@@ -66,27 +63,12 @@ where
         let driver = Driver::new(remote, options.to_vec());
         dokan::init();
 
-        //let options = driver
-        //    .options
-        //    .iter()
-        //    .flat_map(|opt| opt.try_into())
-        //    .collect::<Vec<_>>();
-
         let mountpoint =
             U16CString::from_os_str(std::ffi::OsStr::new(mountpoint)).map_err(|_| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid mountpoint")
             })?;
 
-        // For reference <https://github.com/dokan-dev/dokan-rust/blob/master/dokan/examples/memfs/main.rs>
-        let mut mounter = dokan::FileSystemMounter::new(&driver, &mountpoint, todo!());
-        let fs = mounter
-            .mount()
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-        Ok(Self {
-            file_system: fs,
-            mountpoint,
-        })
+        Ok(Self { mountpoint, driver })
     }
 
     /// Run the filesystem event loop.
@@ -95,6 +77,17 @@ where
     pub fn run(&mut self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
         self.session.run()?;
+
+        #[cfg(windows)]
+        {
+            let options = MountOption::into_dokan_options(&self.driver.options);
+            // For reference <https://github.com/dokan-dev/dokan-rust/blob/master/dokan/examples/memfs/main.rs>
+            let mut mounter =
+                dokan::FileSystemMounter::new(&self.driver, &self.mountpoint, &options);
+            mounter
+                .mount()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        }
 
         Ok(())
     }

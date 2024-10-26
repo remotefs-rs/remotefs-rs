@@ -5,6 +5,8 @@ mod unix;
 #[cfg_attr(docsrs, doc(cfg(windows)))]
 mod windows;
 
+use std::sync::{Arc, Mutex};
+
 use remotefs::RemoteFs;
 
 use crate::MountOption;
@@ -24,8 +26,12 @@ pub struct Driver<T: RemoteFs> {
     file_handlers: unix::FileHandlersDb,
     /// Mount options
     pub(crate) options: Vec<MountOption>,
+    #[cfg(unix)]
     /// [`RemoteFs`] instance
     remote: T,
+    #[cfg(windows)]
+    /// [`RemoteFs`] instance usable as `Sync` in immutable references
+    remote: Arc<Mutex<T>>,
 }
 
 impl<T> Driver<T>
@@ -47,7 +53,10 @@ where
             #[cfg(unix)]
             file_handlers: unix::FileHandlersDb::default(),
             options,
+            #[cfg(unix)]
             remote,
+            #[cfg(windows)]
+            remote: Arc::new(Mutex::new(remote)),
         }
     }
 

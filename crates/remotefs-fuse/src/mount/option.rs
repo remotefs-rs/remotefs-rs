@@ -105,6 +105,32 @@ pub enum MountOption {
     #[cfg(unix)]
     #[cfg_attr(docsrs, doc(cfg(unix)))]
     Async,
+
+    // dokany
+    /// Only use a single thread to process events. This is highly not recommended as can easily create a bottleneck.
+    #[cfg(windows)]
+    #[cfg_attr(docsrs, doc(cfg(windows)))]
+    SingleThread,
+    /// Controls behavior of the volume.
+    #[cfg(windows)]
+    #[cfg_attr(docsrs, doc(cfg(windows)))]
+    Flags(u32),
+    /// Max timeout of each request before Dokan gives up to wait events to complete.
+    /// Timeout request is a sign that the userland implementation is no longer able to properly manage requests in time.
+    /// The driver will therefore unmount the device when a timeout trigger in order to keep the system stable.
+    ///
+    /// If zero, defaults to 15 seconds.
+    #[cfg(windows)]
+    #[cfg_attr(docsrs, doc(cfg(windows)))]
+    Timeout(std::time::Duration),
+    /// Allocation Unit Size of the volume. This will affect the file size.
+    #[cfg(windows)]
+    #[cfg_attr(docsrs, doc(cfg(windows)))]
+    AllocationUnitSize(u32),
+    /// Sector Size of the volume. This will affect the file size.
+    #[cfg(windows)]
+    #[cfg_attr(docsrs, doc(cfg(windows)))]
+    SectorSize(u32),
 }
 
 #[cfg(unix)]
@@ -136,5 +162,28 @@ impl TryFrom<&MountOption> for fuser::MountOption {
             MountOption::Async => fuser::MountOption::Async,
             _ => return Err("Unsupported mount option"),
         })
+    }
+}
+
+#[cfg(windows)]
+#[cfg_attr(docsrs, doc(cfg(windows)))]
+impl MountOption {
+    pub fn into_dokan_options(options: &[MountOption]) -> dokan::MountOptions<'_> {
+        let mut dokan_options = dokan::MountOptions::default();
+
+        for option in options {
+            match option {
+                MountOption::SingleThread => dokan_options.single_thread = true,
+                MountOption::Flags(flags) => {
+                    dokan_options.flags = dokan::MountFlags::from_bits_truncate(*flags)
+                }
+                MountOption::Timeout(timeout) => dokan_options.timeout = *timeout,
+                MountOption::AllocationUnitSize(size) => dokan_options.allocation_unit_size = *size,
+                MountOption::SectorSize(size) => dokan_options.sector_size = *size,
+                _ => {}
+            }
+        }
+
+        dokan_options
     }
 }
