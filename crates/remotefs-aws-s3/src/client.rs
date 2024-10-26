@@ -1165,6 +1165,24 @@ mod test {
             .is_err());
     }
 
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let client = AwsS3Fs::new("bucket");
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let client = AwsS3Fs::new("bucket");
+
+        is_send(client);
+    }
+
     // -- test utils
 
     #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
