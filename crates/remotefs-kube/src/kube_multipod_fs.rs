@@ -1404,6 +1404,36 @@ mod test {
         finalize_client(api, client);
     }
 
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let client = KubeMultiPodFs::new(&runtime);
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let client = KubeMultiPodFs::new(&runtime);
+
+        is_send(client);
+    }
+
     #[cfg(feature = "integration-tests")]
     fn setup_client() -> (Api<Pod>, KubeMultiPodFs) {
         crate::log_init();

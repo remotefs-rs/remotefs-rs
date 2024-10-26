@@ -1690,6 +1690,36 @@ mod test {
             .is_err());
     }
 
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let client = KubeContainerFs::new("pod", "alpine", &runtime);
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let runtime = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap(),
+        );
+        let client = KubeContainerFs::new("pod", "alpine", &runtime);
+
+        is_send(client);
+    }
+
     // -- test utils
 
     #[cfg(feature = "integration-tests")]
