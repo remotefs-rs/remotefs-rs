@@ -1447,6 +1447,27 @@ mod test {
             .is_err());
     }
 
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let client = ScpFs::new(
+            SshOpts::new("sftp").key_storage(Box::new(ssh_mock::MockSshKeyStorage::default())),
+        );
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let client = ScpFs::new(
+            SshOpts::new("sftp").key_storage(Box::new(ssh_mock::MockSshKeyStorage::default())),
+        );
+        is_send(client);
+    }
+
     // -- test utils
 
     #[cfg(feature = "with-containers")]

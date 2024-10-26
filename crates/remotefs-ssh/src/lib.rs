@@ -10,8 +10,8 @@
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.2"
-//! remotefs-ssh = "^0.3"
+//! remotefs = "^0.3"
+//! remotefs-ssh = "^0.5"
 //! ```
 //!
 //! these features are supported:

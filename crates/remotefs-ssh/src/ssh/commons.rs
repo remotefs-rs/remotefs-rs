@@ -17,7 +17,7 @@ use crate::SshAgentIdentity;
 
 // -- connect
 
-/// Establish connection with remote server and in case of success, return the generated `Session`
+/// Establish connection with remote server and in case of success, return the generated [`Session`]
 pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     // parse configuration
     let ssh_config = Config::try_from(opts)?;

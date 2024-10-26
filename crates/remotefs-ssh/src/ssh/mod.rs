@@ -22,7 +22,7 @@ use stream::{SftpReadStream, SftpWriteStream};
 // -- Ssh key storage
 
 /// This trait must be implemented in order to use ssh keys for authentication for sftp/scp.
-pub trait SshKeyStorage {
+pub trait SshKeyStorage: Send + Sync {
     /// Return RSA key path from host and username
     fn resolve(&self, host: &str, username: &str) -> Option<PathBuf>;
 }
@@ -30,14 +30,14 @@ pub trait SshKeyStorage {
 // -- key method
 
 /// Ssh key method.
-/// Defined by `MethodType` (see ssh2 docs) and the list of supported algorithms.
+/// Defined by [`MethodType`] (see ssh2 docs) and the list of supported algorithms.
 pub struct KeyMethod {
     pub(crate) method_type: MethodType,
     algos: Vec<String>,
 }
 
 impl KeyMethod {
-    /// Instantiates a new `KeyMethod`
+    /// Instantiates a new [`KeyMethod`]
     pub fn new(method_type: MethodType, algos: &[String]) -> Self {
         Self {
             method_type,
@@ -77,7 +77,7 @@ impl From<&[u8]> for SshAgentIdentity {
 impl SshAgentIdentity {
     /// Check if the provided public key matches the identity
     ///
-    /// If `All` is provided, this method will always return `true`
+    /// If [`SshAgentIdentity::All`] is provided, this method will always return `true`
     pub(crate) fn pubkey_matches(&self, blob: &[u8]) -> bool {
         match self {
             SshAgentIdentity::All => true,
@@ -94,7 +94,7 @@ impl SshAgentIdentity {
 /// You may specify some options that can be in conflict (e.g. `port` and `Port` parameter in ssh configuration).
 /// In these cases, the resolution is performed in this order (from highest, to lower priority):
 ///
-/// 1. SshOpts attribute (e.g. `port` or `username`)
+/// 1. [`SshOpts`] attribute (e.g. `port` or `username`)
 /// 2. Ssh configuration
 ///
 /// This applies also to ciphers and key exchange methods.
@@ -123,7 +123,7 @@ pub struct SshOpts {
 }
 
 impl SshOpts {
-    /// Initialize SshOpts.
+    /// Initialize [`SshOpts`].
     /// You must define the host you want to connect to.
     /// Host may be resolved by ssh configuration, if specified.
     ///
