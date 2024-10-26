@@ -652,7 +652,6 @@ mod test {
     use ssh2_config::ParseRule;
 
     use super::*;
-    #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
 
     #[test]
