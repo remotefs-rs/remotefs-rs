@@ -725,6 +725,24 @@ mod test {
         finalize_client(client);
     }
 
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    fn test_should_be_sync() {
+        let client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+
+        is_sync(client);
+    }
+
+    #[test]
+    fn test_should_be_send() {
+        let client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+
+        is_send(client);
+    }
+
     #[cfg(feature = "with-containers")]
     fn setup_client() -> WebDAVFs {
         let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
