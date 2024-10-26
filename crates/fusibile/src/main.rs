@@ -1,4 +1,5 @@
 mod cli;
+mod remotefs_wrapper;
 
 use remotefs_fuse::{Mount, MountOption};
 

@@ -5,8 +5,6 @@ mod unix;
 #[cfg_attr(docsrs, doc(cfg(windows)))]
 mod windows;
 
-use std::sync::{Arc, Mutex};
-
 use remotefs::RemoteFs;
 
 use crate::MountOption;

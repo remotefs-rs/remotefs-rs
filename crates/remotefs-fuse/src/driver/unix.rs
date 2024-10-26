@@ -42,9 +42,12 @@ fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
 }
 
 /// Convert a [`File`] from [`remotefs`] to a [`FileAttr`] from [`fuser`]
-fn convert_file(value: &File) -> FileAttr {
+fn convert_file<T>(value: &File) -> FileAttr
+where
+    T: RemoteFs,
+{
     FileAttr {
-        ino: Driver::inode(value.path()),
+        ino: Driver::<T>::inode(value.path()),
         size: value.metadata().size,
         blocks: (value.metadata().size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
         atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
@@ -89,7 +92,10 @@ fn as_file_kind(mut mode: SFlag) -> Option<FileType> {
     }
 }
 
-impl Driver {
+impl<T> Driver<T>
+where
+    T: RemoteFs,
+{
     /// Get the inode as [`Inode`] ([`u64`]) number for a [`Path`]
     fn inode(path: &Path) -> Inode {
         if path == Path::new("/") {
@@ -106,7 +112,7 @@ impl Driver {
     /// If the inode is not in the database, it will be fetched from the remote filesystem.
     fn get_inode_from_path(&mut self, path: &Path) -> RemoteResult<(File, FileAttr)> {
         let (file, attrs) = self.remote.stat(path).map(|file| {
-            let attrs = convert_file(&file);
+            let attrs = convert_file::<T>(&file);
             (file, attrs)
         })?;
 
@@ -386,7 +392,10 @@ impl Driver {
     }
 }
 
-impl Filesystem for Driver {
+impl<T> Filesystem for Driver<T>
+where
+    T: RemoteFs,
+{
     /// Initialize filesystem.
     /// Called before any other filesystem method.
     fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
@@ -531,7 +540,7 @@ impl Filesystem for Driver {
         // set attributes
         match self.remote.setstat(file.path(), file.metadata().clone()) {
             Ok(_) => {
-                let attrs = convert_file(&file);
+                let attrs = convert_file::<T>(&file);
                 reply.attr(&Duration::new(0, 0), &attrs);
             }
             Err(err) => {
@@ -1273,11 +1282,10 @@ impl Filesystem for Driver {
         debug!("Getting filesystem statistics for {path:?}");
 
         // recursive directory iteration
-        fn iter_dir(
-            remote: &mut Box<dyn RemoteFs>,
-            p: &Path,
-            stats: &mut FsStats,
-        ) -> RemoteResult<()> {
+        fn iter_dir<T>(remote: &mut T, p: &Path, stats: &mut FsStats) -> RemoteResult<()>
+        where
+            T: RemoteFs,
+        {
             let entries = remote.list_dir(p)?;
             for entry in entries {
                 stats.files += 1;

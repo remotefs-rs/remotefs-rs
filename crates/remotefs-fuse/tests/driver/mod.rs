@@ -8,7 +8,7 @@ pub fn mounted_file_path() -> &'static Path {
     Path::new("/tmp/mounted.txt")
 }
 
-pub fn setup_driver() -> Box<dyn RemoteFs> {
+pub fn setup_driver() -> MemoryFs {
     let gid = nix::unistd::getgid().as_raw();
     let uid = nix::unistd::getuid().as_raw();
 
@@ -22,7 +22,6 @@ pub fn setup_driver() -> Box<dyn RemoteFs> {
         .with_get_uid(|| nix::unistd::getuid().as_raw());
 
     fs.connect().expect("Failed to connect to fs");
-    let mut fs = Box::new(fs) as Box<dyn RemoteFs>;
 
     make_file_at(&mut fs, mounted_file_path(), b"Hello, world!");
 
@@ -32,7 +31,7 @@ pub fn setup_driver() -> Box<dyn RemoteFs> {
 /// Make file on the remote fs at `path` with `content`
 ///
 /// If the stems in the path do not exist, they will be created.
-fn make_file_at(remote: &mut Box<dyn RemoteFs>, path: &Path, content: &[u8]) {
+fn make_file_at(remote: &mut MemoryFs, path: &Path, content: &[u8]) {
     let parent_dir = path.parent().expect("Path has no parent");
     make_dir_at(remote, parent_dir);
 
@@ -50,7 +49,7 @@ fn make_file_at(remote: &mut Box<dyn RemoteFs>, path: &Path, content: &[u8]) {
 /// Make directory on the remote fs at `path`
 ///
 /// All the stems in the path will be created if they do not exist.
-fn make_dir_at(remote: &mut Box<dyn RemoteFs>, path: &Path) {
+fn make_dir_at(remote: &mut MemoryFs, path: &Path) {
     let mut abs_path = Path::new("/").to_path_buf();
     for stem in path.iter() {
         abs_path.push(stem);

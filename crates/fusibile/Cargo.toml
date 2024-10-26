@@ -30,7 +30,7 @@ remotefs-fuse = { path = "../remotefs-fuse", version = "0.1" }
 remotefs-kube = { version = "0.4", optional = true }
 remotefs-memory = "0.1"
 remotefs-smb = { version = "0.3", optional = true }
-remotefs-ssh = { version = "0.4", optional = true }
+remotefs-ssh = { version = "0.5", optional = true }
 remotefs-webdav = { version = "0.2", optional = true }
 thiserror = "^1"
 tokio = { version = "1", features = ["rt"] }

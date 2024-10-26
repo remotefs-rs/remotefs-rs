@@ -10,7 +10,7 @@ use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
 use super::Driver;
 use crate::MountOption;
 
-fn setup_driver() -> Driver {
+fn setup_driver() -> Driver<MemoryFs> {
     let gid = nix::unistd::getgid().as_raw();
     let uid = nix::unistd::getuid().as_raw();
 
@@ -25,8 +25,6 @@ fn setup_driver() -> Driver {
 
     fs.connect().expect("Failed to connect");
     assert!(fs.is_connected());
-
-    let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
     Driver::new(
         fs,
@@ -39,7 +37,7 @@ fn setup_driver() -> Driver {
     )
 }
 
-fn setup_driver_with_mode(mode: u32) -> Driver {
+fn setup_driver_with_mode(mode: u32) -> Driver<MemoryFs> {
     let gid = nix::unistd::getgid().as_raw();
     let uid = nix::unistd::getuid().as_raw();
 
@@ -54,8 +52,6 @@ fn setup_driver_with_mode(mode: u32) -> Driver {
 
     fs.connect().expect("Failed to connect");
     assert!(fs.is_connected());
-
-    let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
     Driver::new(
         fs,
@@ -69,7 +65,7 @@ fn setup_driver_with_mode(mode: u32) -> Driver {
     )
 }
 
-fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
+fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver<MemoryFs> {
     let tree = Tree::new(node!(
         PathBuf::from("/"),
         Inode::dir(uid, gid, UnixPex::from(0o755)),
@@ -81,8 +77,6 @@ fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
 
     fs.connect().expect("Failed to connect");
     assert!(fs.is_connected());
-
-    let fs = Box::new(fs) as Box<dyn RemoteFs>;
 
     Driver::new(
         fs,
@@ -100,7 +94,7 @@ fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver {
 /// Make file on the remote fs at `path` with `content`
 ///
 /// If the stems in the path do not exist, they will be created.
-fn make_file_at(driver: &mut Driver, path: &Path, content: &[u8]) {
+fn make_file_at(driver: &mut Driver<MemoryFs>, path: &Path, content: &[u8]) {
     let parent_dir = path.parent().expect("Path has no parent");
     make_dir_at(driver, parent_dir);
 
@@ -118,7 +112,7 @@ fn make_file_at(driver: &mut Driver, path: &Path, content: &[u8]) {
 /// Make directory on the remote fs at `path`
 ///
 /// All the stems in the path will be created if they do not exist.
-fn make_dir_at(driver: &mut Driver, path: &Path) {
+fn make_dir_at(driver: &mut Driver<MemoryFs>, path: &Path) {
     let mut abs_path = Path::new("/").to_path_buf();
     for stem in path.iter() {
         abs_path.push(stem);
@@ -144,12 +138,12 @@ fn test_should_get_configured_gid() {
 #[test]
 fn test_should_get_unique_inode() {
     let p = PathBuf::from("/tmp/test.txt");
-    let inode_a = Driver::inode(&p);
-    let inode_b = Driver::inode(&p);
+    let inode_a = Driver::<MemoryFs>::inode(&p);
+    let inode_b = Driver::<MemoryFs>::inode(&p);
     assert_eq!(inode_a, inode_b);
 
     let p = PathBuf::from("/dev/null");
-    let inode_c = Driver::inode(&p);
+    let inode_c = Driver::<MemoryFs>::inode(&p);
     assert_ne!(inode_a, inode_c);
 }
 
@@ -204,7 +198,7 @@ fn test_should_lookup_name() {
     assert_eq!(looked_up_path, expected_file_path);
 
     // inode for looked up file should be in the database
-    let child_inode = Driver::inode(&looked_up_path);
+    let child_inode = Driver::<MemoryFs>::inode(&looked_up_path);
     assert_eq!(
         driver
             .database

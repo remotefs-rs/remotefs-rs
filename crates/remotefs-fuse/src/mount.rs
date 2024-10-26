@@ -13,7 +13,7 @@ where
     T: RemoteFs + Sync + 'a,
 {
     #[cfg(unix)]
-    session: Session<Driver>,
+    session: fuser::Session<Driver<T>>,
     #[cfg(windows)]
     #[allow(dead_code)]
     file_system: dokan::FileSystem<'a, 'a, Driver<T>>,
@@ -33,7 +33,7 @@ where
     #[allow(clippy::self_named_constructors)]
     #[cfg(unix)]
     pub fn mount(
-        remote: Box<dyn RemoteFs>,
+        remote: T,
         mountpoint: &Path,
         options: &[MountOption],
     ) -> Result<Self, std::io::Error> {
