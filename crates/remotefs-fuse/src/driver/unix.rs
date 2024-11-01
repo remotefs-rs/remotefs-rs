@@ -27,6 +27,7 @@ use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 pub use self::file_handle::FileHandlersDb;
 pub use self::inode::InodeDb;
 use super::Driver;
+use crate::MountOption;
 
 const BLOCK_SIZE: usize = 512;
 const FMODE_EXEC: c_int = 0x20;
@@ -389,6 +390,34 @@ where
         self.remote
             .create_file(file.path(), file.metadata(), Box::new(reader))
             .map(|len| len as u32)
+    }
+
+    /// Get the specified uid from the mount options.
+    fn uid(&self) -> Option<u32> {
+        self.options.iter().find_map(|opt| match opt {
+            MountOption::Uid(uid) => Some(*uid),
+            _ => None,
+        })
+    }
+
+    /// Get the specified gid from the mount options.
+    fn gid(&self) -> Option<u32> {
+        self.options.iter().find_map(|opt| match opt {
+            MountOption::Gid(gid) => Some(*gid),
+            _ => None,
+        })
+    }
+
+    /// Get the specified default mode from the mount options.
+    /// If not set, the default is 0755.
+    fn default_mode(&self) -> u32 {
+        self.options
+            .iter()
+            .find_map(|opt| match opt {
+                MountOption::DefaultMode(mode) => Some(*mode),
+                _ => None,
+            })
+            .unwrap_or(0o755)
     }
 }
 

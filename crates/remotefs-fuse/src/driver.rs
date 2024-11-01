@@ -30,6 +30,10 @@ pub struct Driver<T: RemoteFs> {
     #[cfg(windows)]
     /// [`RemoteFs`] instance usable as `Sync` in immutable references
     remote: std::sync::Arc<std::sync::Mutex<T>>,
+    #[cfg(windows)]
+    /// [`windows::DirEntry`] foor directory
+    file_handlers:
+        dashmap::DashMap<widestring::U16CString, std::sync::Arc<std::sync::RwLock<windows::Stat>>>,
 }
 
 impl<T> Driver<T>
@@ -55,37 +59,8 @@ where
             remote,
             #[cfg(windows)]
             remote: std::sync::Arc::new(std::sync::Mutex::new(remote)),
+            #[cfg(windows)]
+            file_handlers: dashmap::DashMap::new(),
         }
-    }
-
-    /// Get the specified uid from the mount options.
-    #[cfg(unix)]
-    fn uid(&self) -> Option<u32> {
-        self.options.iter().find_map(|opt| match opt {
-            MountOption::Uid(uid) => Some(*uid),
-            _ => None,
-        })
-    }
-
-    /// Get the specified gid from the mount options.
-    #[cfg(unix)]
-    fn gid(&self) -> Option<u32> {
-        self.options.iter().find_map(|opt| match opt {
-            MountOption::Gid(gid) => Some(*gid),
-            _ => None,
-        })
-    }
-
-    /// Get the specified default mode from the mount options.
-    /// If not set, the default is 0755.
-    #[cfg(unix)]
-    fn default_mode(&self) -> u32 {
-        self.options
-            .iter()
-            .find_map(|opt| match opt {
-                MountOption::DefaultMode(mode) => Some(*mode),
-                _ => None,
-            })
-            .unwrap_or(0o755)
     }
 }
