@@ -370,25 +370,27 @@ where
     }
 
     /// Find files at path with the optional pattern.
-    fn find_files(
-        &self,
-        ctx: &File,
-        pattern: Option<&U16CStr>,
-        fill: impl FnMut(&FindData) -> FillDataResult,
-    ) -> OperationResult<()> {
+    fn find_files<F>(&self, ctx: &File, pattern: Option<&U16CStr>, fill: F) -> OperationResult<()>
+    where
+        F: FnMut(&FindData) -> FillDataResult,
+    {
         if ctx.is_file() {
             return Err(STATUS_NOT_A_DIRECTORY);
         }
+        self.find_files_acc(ctx.path(), pattern, fill)?;
 
-        self.find_files_acc(ctx.path(), pattern, fill)
+        Ok(())
     }
 
-    fn find_files_acc(
+    fn find_files_acc<F>(
         &self,
         p: &Path,
         pattern: Option<&U16CStr>,
-        mut acc: impl FnMut(&FindData) -> FillDataResult,
-    ) -> OperationResult<()> {
+        mut acc: F,
+    ) -> OperationResult<F>
+    where
+        F: FnMut(&FindData) -> FillDataResult,
+    {
         debug!("find_files_acc({p:?}, {pattern:?})");
 
         // list directory
@@ -419,10 +421,10 @@ where
 
         // iter dirs
         for dir in dirs {
-            self.find_files_acc(dir.path(), pattern, &mut acc)?;
+            acc = self.find_files_acc(dir.path(), pattern, acc)?;
         }
 
-        Ok(())
+        Ok(acc)
     }
 
     fn find_data(file: &File) -> FindData {
