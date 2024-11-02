@@ -7,7 +7,7 @@
 <p align="center">~ A FUSE Driver for remotefs-rs ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: WIP</p>
+<p align="center">Current version: 0.1.0</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -63,7 +63,77 @@
 
 ## Get started
 
-Coming soon...
+First of all you need to add **remotefs-fuse** to your project dependencies:
+
+```toml
+remotefs-fuse = "^0.1.0"
+```
+
+these features are supported:
+
+- `no-log`: disable logging. By default, this library will log via the `log` crate.
+
+## Example
+
+```rust,no_run,ignore
+use remotefs_fuse::Mount;
+
+let options = vec![
+    #[cfg(unix)]
+    remotefs_fuse::MountOption::AllowRoot,
+    #[cfg(unix)]
+    remotefs_fuse::MountOption::RW,
+    #[cfg(unix)]
+    remotefs_fuse::MountOption::Exec,
+    #[cfg(unix)]
+    remotefs_fuse::MountOption::Sync,
+    #[cfg(unix)]
+    remotefs_fuse::MountOption::FSName(volume),
+];
+
+let remote = MyRemoteFsImpl::new();
+let mount_path = std::path::PathBuf::from("/mnt/remote");
+let mut mount = Mount::mount(remote, &mount_path, &options).expect("Failed to mount");
+let mut umount = mount.unmounter();
+
+// setup signal handler
+ctrlc::set_handler(move || {
+    umount.umount().expect("Failed to unmount");
+})?;
+
+mount.run().expect("Failed to run filesystem event loop");
+```
+
+## Requirements
+
+- **Linux**: you need to have `fuse3` installed on your system.
+
+     Of course, you also need to have the `FUSE` kernel module installed.
+     To build `remotefs-fuse` on Linux, you need to have the `libfuse3` development package installed.
+
+     In Ubuntu, you can install it with:
+
+     ```sh
+     sudo apt-get install fuse3 libfuse3-dev
+     ```
+
+     In CentOS, you can install it with:
+
+     ```sh
+     sudo yum install fuse-devel
+     ```
+
+- **macOS**: you need to have the `macfuse` service installed on your system.
+
+     You can install it with:
+
+     ```sh
+     brew install macfuse
+     ```
+
+- **Windows**: you need to have the `dokany` service installed on your system.
+
+    You can install it from <https://github.com/dokan-dev/dokany?tab=readme-ov-file#installation>
 
 ## CLI Tool
 
@@ -89,7 +159,7 @@ All the features are enabled by default; so if you want to build it with only ce
 ### Usage
 
 ```sh
-remotefs-fuse-cli --to /mnt/to --volume <volume-name> <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
+remotefs-fuse-cli -o opt1 -o opt2=abc --to /mnt/to --volume <volume-name> <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
 ```
 
 where protocol options are
@@ -130,14 +200,37 @@ where protocol options are
   - `--username <username>`
   - `--password <password>`
 
+Other options are:
+
+- `--uid <uid>`: specify the UID to overwrite when mounting the remote fs. See [UID and GID override](#uid-and-gid-override).
+- `--gid <gid>`: specify the GID to overwrite when mounting the remote fs. See [UID and GID override](#uid-and-gid-override).
+- `--default-mode <mode>`: set the default file mode to use when the remote fs doesn't support it.
+
+Mount options can be viewed in the docs at <https://docs.rs/remotefs-fuse/latest/remotefs-fuse/enum.MountOption.html>.
+
+## UID and GID override
+
+The possibility to override UID and GID is used because sometimes this scenario can happen:
+
+1. my UID is `1000`
+2. I'm mounting for instance a SFTP file system and the remote user I used to sign in has UID `1002`
+3. I'm unable to operate on the file system because UID `1000` can't operate to files owned by `1002`
+
+But of course this doesn't make sense: I signed in with user who owns those files, so I should be able to operate on them.
+That's why I've added `Uid` and `Gid` into the `MountOption` variant.
+
+Setting the `Uid` option to `1002` you'll be able to operate on the File system as it should.
+
+> ❗ This doesn't apply to Windows.
+
 ## Changelog ⏳
 
-View remotefs` changelog [HERE](CHANGELOG.md)
+View remotefs-fuse`s changelog [HERE](CHANGELOG.md)
 
 ---
 
 ## License 📃
 
-remotefs is licensed under the MIT license.
+remotefs-fuse is licensed under the MIT license.
 
 You can read the entire license [HERE](LICENSE)

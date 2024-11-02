@@ -1,22 +1,30 @@
+use std::str::FromStr;
+use std::time::Duration;
+
 /// Mount options for mounting a FUSE filesystem
 ///
 /// Some of them are *nix-specific, and may not be available on other platforms, while other
 /// are for Windows only.
+///
+/// [`MountOption`] implements [`FromStr`] with the syntax `key[=value]` for all options.
 #[derive(Debug, Eq, PartialEq, Hash, Clone)]
 pub enum MountOption {
     /* nix driver */
+    #[cfg(unix)]
     /// Treat all files as if they are owned by the given user.
     /// This flag can be useful when mounting for instance sftp volumes,
     /// where the uid/gid of the files may be different from the user mounting the filesystem.
     /// This doesn't change the ownership of the files, but allows the user to access them.
     /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
     Uid(u32),
+    #[cfg(unix)]
     /// Treat all files as if they are owned by the given user.
     /// This flag can be useful when mounting for instance sftp volumes,
     /// where the uid/gid of the files may be different from the user mounting the filesystem.
     /// This doesn't change the ownership of the files, but allows the user to access them.
     /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
     Gid(u32),
+    #[cfg(unix)]
     /// Set the default file mode in case the filesystem doesn't provide one
     /// If not set, the default is 0755
     DefaultMode(u32),
@@ -180,10 +188,141 @@ impl MountOption {
                 MountOption::Timeout(timeout) => dokan_options.timeout = *timeout,
                 MountOption::AllocationUnitSize(size) => dokan_options.allocation_unit_size = *size,
                 MountOption::SectorSize(size) => dokan_options.sector_size = *size,
-                _ => {}
             }
         }
 
         dokan_options
+    }
+}
+
+impl FromStr for MountOption {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (option, value) = match s.find('=') {
+            Some(index) => (
+                (s[..index]).to_ascii_lowercase().to_string(),
+                Some(&s[index + 1..]),
+            ),
+            None => (s.to_ascii_lowercase().to_string(), None),
+        };
+
+        match (option.as_str(), value) {
+            #[cfg(unix)]
+            ("uid", Some(value)) => {
+                let value = value
+                    .parse()
+                    .map_err(|e| format!("Invalid uid value: {}", e))?;
+                Ok(MountOption::Uid(value))
+            }
+            #[cfg(unix)]
+            ("uid", None) => Err("uid requires a value".to_string()),
+            #[cfg(unix)]
+            ("gid", Some(value)) => {
+                let value = value
+                    .parse()
+                    .map_err(|e| format!("Invalid gid value: {}", e))?;
+                Ok(MountOption::Gid(value))
+            }
+            #[cfg(unix)]
+            ("gid", None) => Err("gid requires a value".to_string()),
+            #[cfg(unix)]
+            ("default_mode", Some(value)) => {
+                let value = u32::from_str_radix(value, 8)
+                    .map_err(|e| format!("Invalid default_mode value: {}", e))?;
+                Ok(MountOption::DefaultMode(value))
+            }
+            #[cfg(unix)]
+            ("default_mode", None) => Err("default_mode requires a value".to_string()),
+            #[cfg(unix)]
+            ("fsname", Some(value)) => Ok(MountOption::FSName(value.to_string())),
+            #[cfg(unix)]
+            ("fsname", None) => Err("fsname requires a value".to_string()),
+            #[cfg(unix)]
+            ("subtype", Some(value)) => Ok(MountOption::Subtype(value.to_string())),
+            #[cfg(unix)]
+            ("subtype", None) => Err("subtype requires a value".to_string()),
+            #[cfg(unix)]
+            ("custom", Some(value)) => Ok(MountOption::Custom(value.to_string())),
+            #[cfg(unix)]
+            ("custom", None) => Err("custom requires a value".to_string()),
+            #[cfg(unix)]
+            ("allow_other", None) => Ok(MountOption::AllowOther),
+            #[cfg(unix)]
+            ("allow_root", None) => Ok(MountOption::AllowRoot),
+            #[cfg(unix)]
+            ("auto_unmount", None) => Ok(MountOption::AutoUnmount),
+            #[cfg(unix)]
+            ("default_permissions", None) => Ok(MountOption::DefaultPermissions),
+            #[cfg(unix)]
+            ("dev", None) => Ok(MountOption::Dev),
+            #[cfg(unix)]
+            ("nodev", None) => Ok(MountOption::NoDev),
+            #[cfg(unix)]
+            ("suid", None) => Ok(MountOption::Suid),
+            #[cfg(unix)]
+            ("nosuid", None) => Ok(MountOption::NoSuid),
+            #[cfg(unix)]
+            ("ro", None) => Ok(MountOption::RO),
+            #[cfg(unix)]
+            ("rw", None) => Ok(MountOption::RW),
+            #[cfg(unix)]
+            ("exec", None) => Ok(MountOption::Exec),
+            #[cfg(unix)]
+            ("noexec", None) => Ok(MountOption::NoExec),
+            #[cfg(unix)]
+            ("atime", None) => Ok(MountOption::Atime),
+            #[cfg(unix)]
+            ("noatime", None) => Ok(MountOption::NoAtime),
+            #[cfg(unix)]
+            ("dirsync", None) => Ok(MountOption::DirSync),
+            #[cfg(unix)]
+            ("sync", None) => Ok(MountOption::Sync),
+            #[cfg(unix)]
+            ("async", None) => Ok(MountOption::Async),
+            #[cfg(windows)]
+            ("single_thread", None) => Ok(MountOption::SingleThread),
+            #[cfg(windows)]
+            ("flags", Some(value)) => {
+                let value = value
+                    .parse()
+                    .map_err(|e| format!("Invalid flags value: {}", e))?;
+                Ok(MountOption::Flags(value))
+            }
+            #[cfg(windows)]
+            ("flags", None) => Err("flags requires a value".to_string()),
+            #[cfg(windows)]
+            ("timeout", Some(value)) => {
+                let value = Duration::from_millis(
+                    value
+                        .parse()
+                        .map_err(|e| format!("Invalid timeout value: {}", e))?,
+                );
+                Ok(MountOption::Timeout(value))
+            }
+            #[cfg(windows)]
+            ("timeout", None) => Err("timeout requires a value".to_string()),
+            #[cfg(windows)]
+            ("allocation_unit_size", Some(value)) => {
+                let value = value
+                    .parse()
+                    .map_err(|e| format!("Invalid allocation_unit_size value: {}", e))?;
+                Ok(MountOption::AllocationUnitSize(value))
+            }
+            #[cfg(windows)]
+            ("allocation_unit_size", None) => {
+                Err("allocation_unit_size requires a value".to_string())
+            }
+            #[cfg(windows)]
+            ("sector_size", Some(value)) => {
+                let value = value
+                    .parse()
+                    .map_err(|e| format!("Invalid sector_size value: {}", e))?;
+                Ok(MountOption::SectorSize(value))
+            }
+            #[cfg(windows)]
+            ("sector_size", None) => Err("sector_size requires a value".to_string()),
+            _ => Err(format!("Unknown mount option: {}", s)),
+        }
     }
 }

@@ -1,7 +1,7 @@
 mod cli;
 mod remotefs_wrapper;
 
-use remotefs_fuse::{Mount, MountOption};
+use remotefs_fuse::Mount;
 
 fn main() -> anyhow::Result<()> {
     let args = argh::from_env::<cli::CliArgs>();
@@ -13,25 +13,29 @@ fn main() -> anyhow::Result<()> {
     // make options
     let mut options = vec![
         #[cfg(unix)]
-        MountOption::AllowRoot,
+        remotefs_fuse::MountOption::AllowRoot,
         #[cfg(unix)]
-        MountOption::RW,
+        remotefs_fuse::MountOption::RW,
         #[cfg(unix)]
-        MountOption::Exec,
+        remotefs_fuse::MountOption::Exec,
         #[cfg(unix)]
-        MountOption::Sync,
+        remotefs_fuse::MountOption::Sync,
         #[cfg(unix)]
-        MountOption::FSName(volume),
+        remotefs_fuse::MountOption::FSName(volume),
     ];
+    options.extend(args.option.clone());
 
+    #[cfg(unix)]
     if let Some(uid) = args.uid {
         log::info!("Default uid: {uid}");
         options.push(MountOption::Uid(uid));
     }
+    #[cfg(unix)]
     if let Some(gid) = args.gid {
         log::info!("Default gid: {gid}");
         options.push(MountOption::Gid(gid));
     }
+    #[cfg(unix)]
     if let Some(default_mode) = args.default_mode {
         log::info!("Default mode: {default_mode:o}");
         options.push(MountOption::DefaultMode(default_mode));

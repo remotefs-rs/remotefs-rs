@@ -15,6 +15,7 @@ mod webdav;
 use std::path::PathBuf;
 
 use argh::FromArgs;
+use remotefs_fuse::MountOption;
 
 #[cfg(feature = "aws-s3")]
 use self::aws_s3::AwsS3Args;
@@ -44,16 +45,24 @@ pub struct CliArgs {
     #[argh(option)]
     pub volume: String,
     /// uid to use for the mounted filesystem
+    #[cfg(unix)]
     #[argh(option)]
     pub uid: Option<u32>,
     /// gid to use for the mounted filesystem
     #[argh(option)]
+    #[cfg(unix)]
     pub gid: Option<u32>,
     /// default file permissions for those remote file protocols that don't support file permissions.
     ///
     /// this is a 3-digit octal number, e.g. 644
     #[argh(option, from_str_fn(from_octal))]
+    #[cfg(unix)]
     pub default_mode: Option<u32>,
+    /// mount options
+    ///
+    /// Mount options are specific to the underlying filesystem and are passed as key=value pairs.
+    #[argh(option, short = 'o')]
+    pub option: Vec<MountOption>,
     /// enable verbose logging.
     ///
     /// use multiple times to increase verbosity
@@ -63,6 +72,7 @@ pub struct CliArgs {
     remote: RemoteArgs,
 }
 
+#[cfg(unix)]
 fn from_octal(s: &str) -> Result<u32, String> {
     u32::from_str_radix(s, 8).map_err(|_| "Invalid octal number".to_string())
 }
