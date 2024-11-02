@@ -1,9 +1,7 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::SystemTime;
+use std::sync::{Arc, RwLock};
 
 use remotefs::File;
 use widestring::{U16Str, U16String};
@@ -16,18 +14,12 @@ pub struct StatHandle {
     pub stat: Arc<RwLock<Stat>>,
     pub alt_stream: RwLock<Option<Arc<RwLock<AltStream>>>>,
     pub delete_on_close: bool,
-    pub mtime_delayed: Mutex<Option<SystemTime>>,
-    pub atime_delayed: Mutex<Option<SystemTime>>,
-    pub ctime_enabled: AtomicBool,
-    pub mtime_enabled: AtomicBool,
-    pub atime_enabled: AtomicBool,
 }
 
 #[derive(Debug)]
 pub struct Stat {
     pub file: File,
     pub sec_desc: SecurityDescriptor,
-    pub handle_count: u32,
     pub delete_pending: bool,
     pub delete_on_close: bool,
     pub alt_streams: HashMap<EntryName, Arc<RwLock<AltStream>>>,
@@ -38,7 +30,6 @@ impl Stat {
         Self {
             file,
             sec_desc,
-            handle_count: 0,
             delete_pending: false,
             delete_on_close: false,
             alt_streams: HashMap::new(),
