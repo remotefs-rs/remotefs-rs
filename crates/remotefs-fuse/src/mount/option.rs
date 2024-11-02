@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use std::time::Duration;
 
 /// Mount options for mounting a FUSE filesystem
 ///
@@ -293,7 +292,7 @@ impl FromStr for MountOption {
             ("flags", None) => Err("flags requires a value".to_string()),
             #[cfg(windows)]
             ("timeout", Some(value)) => {
-                let value = Duration::from_millis(
+                let value = std::time::Duration::from_millis(
                     value
                         .parse()
                         .map_err(|e| format!("Invalid timeout value: {}", e))?,
@@ -437,7 +436,7 @@ mod test {
         #[cfg(windows)]
         assert_eq!(
             MountOption::from_str("timeout=1000").unwrap(),
-            MountOption::Timeout(Duration::from_millis(1000))
+            MountOption::Timeout(std::time::Duration::from_millis(1000))
         );
         #[cfg(windows)]
         assert_eq!(
