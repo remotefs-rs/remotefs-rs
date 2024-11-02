@@ -326,3 +326,128 @@ impl FromStr for MountOption {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn test_should_convert_str_to_option() {
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("uid=1000").unwrap(),
+            MountOption::Uid(1000)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("gid=1000").unwrap(),
+            MountOption::Gid(1000)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("default_mode=0755").unwrap(),
+            MountOption::DefaultMode(0o755)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("fsname=foo").unwrap(),
+            MountOption::FSName("foo".to_string())
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("subtype=foo").unwrap(),
+            MountOption::Subtype("foo".to_string())
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("custom=foo").unwrap(),
+            MountOption::Custom("foo".to_string())
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("allow_other").unwrap(),
+            MountOption::AllowOther
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("allow_root").unwrap(),
+            MountOption::AllowRoot
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("auto_unmount").unwrap(),
+            MountOption::AutoUnmount
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("default_permissions").unwrap(),
+            MountOption::DefaultPermissions
+        );
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("dev").unwrap(), MountOption::Dev);
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("nodev").unwrap(), MountOption::NoDev);
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("suid").unwrap(), MountOption::Suid);
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("nosuid").unwrap(),
+            MountOption::NoSuid
+        );
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("ro").unwrap(), MountOption::RO);
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("rw").unwrap(), MountOption::RW);
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("exec").unwrap(), MountOption::Exec);
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("noexec").unwrap(),
+            MountOption::NoExec
+        );
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("atime").unwrap(), MountOption::Atime);
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("noatime").unwrap(),
+            MountOption::NoAtime
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            MountOption::from_str("dirsync").unwrap(),
+            MountOption::DirSync
+        );
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("sync").unwrap(), MountOption::Sync);
+        #[cfg(unix)]
+        assert_eq!(MountOption::from_str("async").unwrap(), MountOption::Async);
+        #[cfg(windows)]
+        assert_eq!(
+            MountOption::from_str("single_thread").unwrap(),
+            MountOption::SingleThread
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            MountOption::from_str("flags=1").unwrap(),
+            MountOption::Flags(1)
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            MountOption::from_str("timeout=1000").unwrap(),
+            MountOption::Timeout(Duration::from_millis(1000))
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            MountOption::from_str("allocation_unit_size=4096").unwrap(),
+            MountOption::AllocationUnitSize(4096)
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            MountOption::from_str("sector_size=512").unwrap(),
+            MountOption::SectorSize(512)
+        );
+    }
+}

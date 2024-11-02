@@ -119,7 +119,7 @@ where
             return Ok(stat);
         }
 
-        let path_info = self.path_info(file_name);
+        let path_info = Self::path_info(file_name);
 
         let file = self.remote(|remote| remote.stat(&path_info.path))?;
 
@@ -137,7 +137,7 @@ where
     }
 
     /// Get the path information for a given `file_name`.
-    fn path_info(&self, file_name: &U16CStr) -> PathInfo {
+    fn path_info(file_name: &U16CStr) -> PathInfo {
         let p = PathBuf::from(file_name.to_string_lossy());
         let parent = p
             .parent()
@@ -708,7 +708,7 @@ where
         } else if create_disposition == FILE_OPEN || create_disposition == FILE_OPEN_IF {
             if create_options & FILE_NON_DIRECTORY_FILE > 0 {
                 debug!("create file: {file_name:?}");
-                let path_info = self.path_info(file_name);
+                let path_info = Self::path_info(file_name);
                 if let Err(err) = self.write(
                     &File {
                         path: path_info.path,
@@ -744,7 +744,7 @@ where
                 // create directory
                 debug!("create directory: {file_name:?}");
                 let stat = {
-                    let path_info = self.path_info(file_name);
+                    let path_info = Self::path_info(file_name);
 
                     if let Err(err) = self
                         .remote(|remote| remote.create_dir(&path_info.path, UnixPex::from(0o755)))
@@ -1297,7 +1297,7 @@ where
     ) -> OperationResult<()> {
         info!("move_file({file_name:?}, {new_file_name:?}, {replace_if_existing:?}, {context:?})");
 
-        let dest = self.path_info(new_file_name);
+        let dest = Self::path_info(new_file_name);
         // check if destination exists
         if !replace_if_existing
             && self
