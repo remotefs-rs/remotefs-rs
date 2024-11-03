@@ -370,31 +370,22 @@ where
     }
 
     /// Find files at path with the optional pattern.
-    fn find_files<F>(&self, ctx: &File, pattern: Option<&U16CStr>, fill: F) -> OperationResult<()>
+    fn find_files<F>(
+        &self,
+        ctx: &File,
+        pattern: Option<&U16CStr>,
+        mut fill: F,
+    ) -> OperationResult<()>
     where
         F: FnMut(&FindData) -> FillDataResult,
     {
         if ctx.is_file() {
             return Err(STATUS_NOT_A_DIRECTORY);
         }
-        self.find_files_acc(ctx.path(), pattern, fill)?;
-
-        Ok(())
-    }
-
-    fn find_files_acc<F>(
-        &self,
-        p: &Path,
-        pattern: Option<&U16CStr>,
-        mut acc: F,
-    ) -> OperationResult<F>
-    where
-        F: FnMut(&FindData) -> FillDataResult,
-    {
-        debug!("find_files_acc({p:?}, {pattern:?})");
+        debug!("find_files({ctx:?}, {pattern:?})");
 
         // list directory
-        let entries = match self.remote(|remote| remote.list_dir(p)) {
+        let entries = match self.remote(|remote| remote.list_dir(ctx.path())) {
             Ok(entries) => entries,
             Err(err) => {
                 error!("list_dir failed: {err}");
@@ -403,7 +394,6 @@ where
         };
 
         // iter children and fill data
-        let mut dirs = Vec::with_capacity(entries.len());
         for child in entries {
             // push entry
             let file_name = Self::file_name(child.path());
@@ -411,20 +401,11 @@ where
                 .map(|pattern| dokan::is_name_in_expression(pattern, &file_name, false))
                 .unwrap_or(true)
             {
-                (acc)(&Self::find_data(&child)).or_else(Self::ignore_name_too_long)?;
-            }
-
-            if child.is_dir() {
-                dirs.push(child);
+                (fill)(&Self::find_data(&child)).or_else(Self::ignore_name_too_long)?;
             }
         }
 
-        // iter dirs
-        for dir in dirs {
-            acc = self.find_files_acc(dir.path(), pattern, acc)?;
-        }
-
-        Ok(acc)
+        Ok(())
     }
 
     fn find_data(file: &File) -> FindData {
