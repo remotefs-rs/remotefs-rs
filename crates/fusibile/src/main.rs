@@ -28,17 +28,17 @@ fn main() -> anyhow::Result<()> {
     #[cfg(unix)]
     if let Some(uid) = args.uid {
         log::info!("Default uid: {uid}");
-        options.push(MountOption::Uid(uid));
+        options.push(remotefs_fuse::MountOption::Uid(uid));
     }
     #[cfg(unix)]
     if let Some(gid) = args.gid {
         log::info!("Default gid: {gid}");
-        options.push(MountOption::Gid(gid));
+        options.push(remotefs_fuse::MountOption::Gid(gid));
     }
     #[cfg(unix)]
     if let Some(default_mode) = args.default_mode {
         log::info!("Default mode: {default_mode:o}");
-        options.push(MountOption::DefaultMode(default_mode));
+        options.push(remotefs_fuse::MountOption::DefaultMode(default_mode));
     }
 
     log::info!("Mounting remote fs at {}", mount_path.display());
