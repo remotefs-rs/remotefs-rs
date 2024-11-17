@@ -54,7 +54,7 @@ mod inode;
 #[cfg(test)]
 mod test;
 
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -112,6 +112,14 @@ impl Write for WriteHandle {
         Ok(())
     }
 }
+
+impl Seek for WriteHandle {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.data.seek(pos)
+    }
+}
+
+impl WriteAndSeek for WriteHandle {}
 
 impl MemoryFs {
     /// Create a new instance of the [`MemoryFs`] with the provided [`FsTree`].
@@ -578,9 +586,11 @@ impl RemoteFs for MemoryFs {
             mode: WriteMode::Append,
         };
 
-        let stream = Box::new(handle) as Box<dyn Write + Send>;
+        let stream = Box::new(handle) as Box<dyn WriteAndSeek + Send>;
 
-        Ok(WriteStream::from(stream))
+        Ok(WriteStream {
+            stream: StreamWriter::WriteAndSeek(stream),
+        })
     }
 
     fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream> {
@@ -618,9 +628,11 @@ impl RemoteFs for MemoryFs {
             mode: WriteMode::Create,
         };
 
-        let stream = Box::new(handle) as Box<dyn Write + Send>;
+        let stream = Box::new(handle) as Box<dyn WriteAndSeek + Send>;
 
-        Ok(WriteStream::from(stream))
+        Ok(WriteStream {
+            stream: StreamWriter::WriteAndSeek(stream),
+        })
     }
 
     fn open(&mut self, path: &Path) -> RemoteResult<ReadStream> {

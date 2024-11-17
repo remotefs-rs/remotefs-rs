@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-memory"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 edition = "2021"
 license = "MIT"
