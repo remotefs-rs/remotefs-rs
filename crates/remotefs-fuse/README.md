@@ -137,7 +137,7 @@ mount.run().expect("Failed to run filesystem event loop");
 
 ## CLI Tool
 
-remotefs-fuse comes with a CLI tool **remotefs-fuse-cli** to mount remote file systems with FUSE.
+remotefs-fuse comes with a CLI tool **remotefs-fuse-cli** to mount remote file systems with FUSE or Dokany.
 
 ```sh
 cargo install remotefs-fuse-cli

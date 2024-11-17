@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use path_slash::PathBufExt;
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs};
 use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
@@ -68,6 +67,8 @@ fn make_file_at(remote: &mut MemoryFs, path: &Path, content: &[u8]) {
 ///
 /// All the stems in the path will be created if they do not exist.
 fn make_dir_at(remote: &mut MemoryFs, path: &Path) {
+    use path_slash::PathBufExt;
+
     let mut abs_path = Path::new("/").to_path_buf();
     for stem in path.iter() {
         abs_path.push(stem);

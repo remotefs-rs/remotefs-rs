@@ -68,7 +68,7 @@
 //!     remotefs_fuse::MountOption::FSName(volume),
 //! ];
 //!
-//! let remote = todo!();
+//! let remote = MyRemoteFileSystem::new();
 //! let mount_path = std::path::PathBuf::from("/mnt/remote");
 //! let mut mount = Mount::mount(remote, &mount_path, &options).expect("Failed to mount");
 //! let mut umount = mount.unmounter();
@@ -79,7 +79,16 @@
 //! })?;
 //!
 //! mount.run().expect("Failed to run filesystem event loop");
+//!
 //! ```
+//!
+//! > To mount on a Windows system **specify a drive letter** (e.g. `Z`) instead of a path.
+//!
+//! ## Project stability
+//!
+//! Please consider this is an early-stage project and I haven't heavily tested it, in particular on Windows systems.
+//!
+//! I suggest you to first test it on test filesystems to see whether the library behaves correctly with your system.
 //!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
