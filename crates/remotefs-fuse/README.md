@@ -6,7 +6,7 @@
 
 <p align="center">~ A FUSE Driver for remotefs-rs ~</p>
 
-<p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
+<p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso</a></p>
 <p align="center">Current version: 0.1.0</p>
 
 <p align="center">
@@ -162,6 +162,8 @@ All the features are enabled by default; so if you want to build it with only ce
 remotefs-fuse-cli -o opt1 -o opt2=abc --to /mnt/to --volume <volume-name> <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
 ```
 
+On Windows the mountpoint can be specified simply using the drive letter `--to M` will mount the FS to `M:\`
+
 where protocol options are
 
 - aws-s3
@@ -210,6 +212,8 @@ Mount options can be viewed in the docs at <https://docs.rs/remotefs-fuse/latest
 
 ## UID and GID override
 
+> ❗ This doesn't apply to Windows.
+
 The possibility to override UID and GID is used because sometimes this scenario can happen:
 
 1. my UID is `1000`
@@ -221,7 +225,11 @@ That's why I've added `Uid` and `Gid` into the `MountOption` variant.
 
 Setting the `Uid` option to `1002` you'll be able to operate on the File system as it should.
 
-> ❗ This doesn't apply to Windows.
+## Project stability
+
+Please consider this is an early-stage project and I haven't heavily tested it, in particular the Windows version.
+
+I suggest you to first test it on test filesystems to see whether the library behaves correctly with your system.
 
 ## Changelog ⏳
 

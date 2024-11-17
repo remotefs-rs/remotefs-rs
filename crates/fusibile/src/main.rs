@@ -44,6 +44,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("Mounting remote fs at {}", mount_path.display());
 
     // create the mount point if it does not exist
+    #[cfg(unix)]
     if !mount_path.exists() {
         log::info!("creating mount point at {}", mount_path.display());
         std::fs::create_dir_all(&mount_path)?;

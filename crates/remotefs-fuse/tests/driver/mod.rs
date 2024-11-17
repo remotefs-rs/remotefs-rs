@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use path_slash::PathBufExt;
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs};
 use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
@@ -8,6 +9,7 @@ pub fn mounted_file_path() -> &'static Path {
     Path::new("/tmp/mounted.txt")
 }
 
+#[cfg(unix)]
 pub fn setup_driver() -> MemoryFs {
     let gid = nix::unistd::getgid().as_raw();
     let uid = nix::unistd::getuid().as_raw();
@@ -20,6 +22,22 @@ pub fn setup_driver() -> MemoryFs {
     let mut fs = MemoryFs::new(tree)
         .with_get_gid(|| nix::unistd::getgid().as_raw())
         .with_get_uid(|| nix::unistd::getuid().as_raw());
+
+    fs.connect().expect("Failed to connect to fs");
+
+    make_file_at(&mut fs, mounted_file_path(), b"Hello, world!");
+
+    fs
+}
+
+#[cfg(windows)]
+pub fn setup_driver() -> MemoryFs {
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(0, 0, UnixPex::from(0o755)),
+    ));
+
+    let mut fs = MemoryFs::new(tree);
 
     fs.connect().expect("Failed to connect to fs");
 
@@ -53,6 +71,8 @@ fn make_dir_at(remote: &mut MemoryFs, path: &Path) {
     let mut abs_path = Path::new("/").to_path_buf();
     for stem in path.iter() {
         abs_path.push(stem);
+        // convert to slash
+        let abs_path = PathBuf::from(abs_path.to_slash_lossy().to_string());
         println!("Creating directory: {abs_path:?}");
         match remote.create_dir(&abs_path, UnixPex::from(0o755)) {
             Ok(_)

@@ -11,8 +11,8 @@ use std::time::UNIX_EPOCH;
 
 use dashmap::mapref::one::Ref;
 use dokan::{
-    CreateFileInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataError, FillDataResult,
-    FindData, FindStreamData, OperationInfo, OperationResult, VolumeInfo,
+    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataError,
+    FillDataResult, FindData, FindStreamData, OperationInfo, OperationResult, VolumeInfo,
 };
 use dokan_sys::win32::{
     FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_MAXIMUM_DISPOSITION,
@@ -20,6 +20,7 @@ use dokan_sys::win32::{
     FILE_SUPERSEDE,
 };
 use entry::{EntryName, StatHandle};
+use path_slash::PathBufExt;
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 use widestring::{U16CStr, U16CString, U16Str, U16String};
@@ -144,8 +145,12 @@ where
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("/"));
 
+        // convert to `/` path
+        let slash_path = PathBuf::from(p.to_slash_lossy().to_string());
+        debug!("PathInfo: '{p:?}' -> '{slash_path:?}'");
+
         PathInfo {
-            path: p,
+            path: slash_path,
             parent,
             file_name: file_name.to_ucstring(),
         }
@@ -379,10 +384,10 @@ where
     where
         F: FnMut(&FindData) -> FillDataResult,
     {
+        debug!("find_files({ctx:?}, {pattern:?})");
         if ctx.is_file() {
             return Err(STATUS_NOT_A_DIRECTORY);
         }
-        debug!("find_files({ctx:?}, {pattern:?})");
 
         // list directory
         let entries = match self.remote(|remote| remote.list_dir(ctx.path())) {
@@ -401,21 +406,21 @@ where
                 .map(|pattern| dokan::is_name_in_expression(pattern, &file_name, false))
                 .unwrap_or(true)
             {
-                (fill)(&Self::find_data(&child)).or_else(Self::ignore_name_too_long)?;
+                (fill)(&Self::find_data(&child, file_name)).or_else(Self::ignore_name_too_long)?;
             }
         }
 
         Ok(())
     }
 
-    fn find_data(file: &File) -> FindData {
+    fn find_data(file: &File, file_name: U16CString) -> FindData {
         FindData {
             attributes: Self::attributes_from_file(file),
             creation_time: file.metadata().created.unwrap_or(UNIX_EPOCH),
             last_access_time: file.metadata().accessed.unwrap_or(UNIX_EPOCH),
             last_write_time: file.metadata().modified.unwrap_or(UNIX_EPOCH),
             file_size: file.metadata().size,
-            file_name: Self::file_name(file.path()),
+            file_name,
         }
     }
 
@@ -447,6 +452,18 @@ where
     where
         F: FnOnce(&mut AltStream) -> OperationResult<U>,
     {
+        // check if alt stream is requested; must contain ':" in the name
+        let use_alt_stream = match context.stat.read() {
+            Ok(stat) => stat.file.path.to_string_lossy().contains(':'),
+            Err(_) => {
+                error!("mutex poisoned");
+                return Some(Err(STATUS_INVALID_DEVICE_REQUEST));
+            }
+        };
+        if !use_alt_stream {
+            return None;
+        }
+
         let alt_stream = match context.alt_stream.read() {
             Err(_) => {
                 error!("mutex poisoned");
@@ -528,7 +545,8 @@ where
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
-        info!("create_file({file_name:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})");
+        let file_name_path = Self::path_info(file_name).path;
+        info!("create_file({file_name_path:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})");
 
         let stat = self.stat(file_name).ok();
 
@@ -569,7 +587,7 @@ where
                 error!("delete on close: {file_name:?}");
                 return Err(STATUS_CANNOT_DELETE);
             }
-            std::mem::drop(read);
+            drop(read);
 
             let stream_name = EntryName(file_name.to_ustring());
             let ret = {
@@ -600,15 +618,18 @@ where
                                 return Err(STATUS_ACCESS_DENIED);
                             }
                         }
-                        FILE_CREATE => return Err(ntstatus::STATUS_OBJECT_NAME_COLLISION),
+                        FILE_CREATE => {
+                            error!("alt stream already exists: {file_name:?}");
+                            return Err(ntstatus::STATUS_OBJECT_NAME_COLLISION);
+                        }
                         _ => (),
                     }
                     Some((stream, false))
                 } else {
-                    if create_disposition == FILE_OPEN || create_disposition == FILE_OVERWRITE {
-                        error!("alt stream not found: {file_name:?}");
-                        return Err(STATUS_OBJECT_NAME_NOT_FOUND);
-                    }
+                    //if create_disposition == FILE_OPEN || create_disposition == FILE_OVERWRITE {
+                    //    error!("alt stream not found: {file_name:?}");
+                    //    return Err(STATUS_OBJECT_NAME_NOT_FOUND);
+                    //}
                     if is_readonly {
                         error!("file {file_name:?} is readonly");
                         return Err(STATUS_ACCESS_DENIED);
@@ -637,6 +658,8 @@ where
                 .ok()
                 .map(|r| r.file.is_file())
                 .unwrap_or_default();
+
+            // check if file or directory
             match is_file {
                 true => {
                     if create_options & FILE_DIRECTORY_FILE > 0 {
@@ -650,7 +673,10 @@ where
                                 return Err(STATUS_ACCESS_DENIED);
                             }
                         }
-                        FILE_CREATE => return Err(STATUS_OBJECT_NAME_COLLISION),
+                        FILE_CREATE => {
+                            error!("file already exists: {file_name:?}");
+                            return Err(STATUS_OBJECT_NAME_COLLISION);
+                        }
                         _ => (),
                     }
                     debug!("open file: {file_name:?}");
@@ -664,9 +690,11 @@ where
                         is_dir: false,
                         new_file_created: false,
                     })
-                }
+                } // end is file
                 false => {
+                    // is directory
                     if create_options & FILE_NON_DIRECTORY_FILE > 0 {
+                        error!("file is a directory: {file_name:?}");
                         return Err(STATUS_FILE_IS_A_DIRECTORY);
                     }
                     match create_disposition {
@@ -683,13 +711,23 @@ where
                                 new_file_created: false,
                             })
                         }
-                        FILE_CREATE => Err(STATUS_OBJECT_NAME_COLLISION),
-                        _ => Err(STATUS_INVALID_PARAMETER),
+                        FILE_CREATE => {
+                            error!("directory already exists: {file_name:?}");
+                            Err(STATUS_OBJECT_NAME_COLLISION)
+                        }
+                        _ => {
+                            error!("invalid create disposition: {create_disposition}");
+                            Err(STATUS_INVALID_PARAMETER)
+                        }
                     }
                 }
             }
-        } else if create_disposition == FILE_OPEN || create_disposition == FILE_OPEN_IF {
+        }
+        // END IF FILE EXISTS
+        else if create_disposition == FILE_CREATE || create_disposition == FILE_OPEN_IF {
+            // FILE DOES NOT EXIST
             if create_options & FILE_NON_DIRECTORY_FILE > 0 {
+                // create file
                 debug!("create file: {file_name:?}");
                 let path_info = Self::path_info(file_name);
                 if let Err(err) = self.write(
@@ -725,9 +763,9 @@ where
                 })
             } else {
                 // create directory
-                debug!("create directory: {file_name:?}");
                 let stat = {
                     let path_info = Self::path_info(file_name);
+                    debug!("create directory: {}", path_info.path.display());
 
                     if let Err(err) = self
                         .remote(|remote| remote.create_dir(&path_info.path, UnixPex::from(0o755)))
@@ -756,7 +794,11 @@ where
                     new_file_created: true,
                 })
             }
+        } else if create_disposition == FILE_OPEN {
+            error!("tried to open non existing file: {file_name:?}");
+            Err(STATUS_OBJECT_NAME_NOT_FOUND)
         } else {
+            error!("invalid create disposition: {create_disposition}");
             Err(STATUS_INVALID_PARAMETER)
         }
     }
@@ -798,13 +840,29 @@ where
                 .unwrap_or_default()
                 .unwrap_or_default();
 
+        if alt_stream_delete {
+            let mut alt_stream = match context.alt_stream.write() {
+                Ok(alt_stream) => alt_stream,
+                Err(_) => {
+                    error!("mutex poisoned");
+                    return;
+                }
+            };
+            alt_stream.take();
+            return;
+        }
+
         if context.delete_on_close
             || stat.delete_on_close
             || stat.delete_pending
             || info.delete_on_close()
-            || alt_stream_delete
         {
-            debug!("removing file: {file_name:?}");
+            info!("removing file: {}; delete_on_close: {}; stat.delete_on_close: {}; delete_pending: {}",
+                 stat.file.path().display(),
+                context.delete_on_close,
+                 stat.delete_on_close,
+                  stat.delete_pending
+            );
             if let Err(err) = self.remote(|remote| {
                 if stat.file.is_dir() {
                     remote.remove_dir(&stat.file.path)
@@ -913,6 +971,7 @@ where
 
         // check alt stream
         if let Some(res) = Self::try_alt_stream(context, |alt_stream| {
+            debug!("write alt stream: {file_name:?}");
             let offset = if info.write_to_eof() {
                 alt_stream.data.len()
             } else {
@@ -930,8 +989,10 @@ where
         }
 
         if info.write_to_eof() {
+            debug!("append file: {file_name:?}");
             self.append(&file, buffer)
         } else {
+            debug!("write file: {file_name:?}");
             self.write(&file, buffer, offset as u64)
         }
         .map_err(|err| {
@@ -1015,6 +1076,7 @@ where
             Ok(stream) => stream.clone(),
         };
         if alt_stream.is_some() {
+            error!("alt stream found");
             return Err(STATUS_INVALID_DEVICE_REQUEST);
         }
         drop(alt_stream);
@@ -1054,6 +1116,7 @@ where
     ) -> OperationResult<()> {
         info!("find_files_with_pattern({file_name:?}, {pattern:?}, {context:?})");
 
+        /*
         let alt_stream = match context.alt_stream.read() {
             Err(_) => {
                 error!("mutex poisoned");
@@ -1062,9 +1125,11 @@ where
             Ok(stream) => stream.clone(),
         };
         if alt_stream.is_some() {
+            error!("alt stream found");
             return Err(STATUS_INVALID_DEVICE_REQUEST);
         }
         drop(alt_stream);
+         */
 
         let file = match context.stat.read() {
             Err(_) => {
@@ -1330,7 +1395,10 @@ where
 
             Ok(())
         })
-        .unwrap_or(Err(STATUS_NOT_IMPLEMENTED))
+        .unwrap_or({
+            debug!("cant set end of file: not implemented");
+            Ok(())
+        })
     }
 
     /// Sets allocation size of the file.
@@ -1355,7 +1423,10 @@ where
 
             Ok(())
         })
-        .unwrap_or(Err(STATUS_NOT_IMPLEMENTED))
+        .unwrap_or({
+            debug!("cant set allocation size: not implemented");
+            Ok(())
+        })
     }
 
     /// Gets security information of a file.
@@ -1485,6 +1556,43 @@ where
             max_component_length: 255,
             fs_flags: FILE_CASE_SENSITIVE_SEARCH | FILE_CASE_PRESERVED_NAMES,
             fs_name: U16CString::from_str("DOKANY").expect("failed to create U16CString"),
+        })
+    }
+
+    fn lock_file(
+        &'h self,
+        _file_name: &U16CStr,
+        _offset: i64,
+        _length: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        error!("lock_file not implemented");
+        Err(STATUS_NOT_IMPLEMENTED)
+    }
+
+    fn unlock_file(
+        &'h self,
+        _file_name: &U16CStr,
+        _offset: i64,
+        _length: i64,
+        _info: &OperationInfo<'c, 'h, Self>,
+        _context: &'c Self::Context,
+    ) -> OperationResult<()> {
+        error!("unlock_file not implemented");
+        Err(STATUS_NOT_IMPLEMENTED)
+    }
+
+    fn get_disk_free_space(
+        &'h self,
+        _info: &OperationInfo<'c, 'h, Self>,
+    ) -> OperationResult<DiskSpaceInfo> {
+        const DEFAULT_SIZE: u64 = 1024 * 1024 * 1024 * 128; // 128GB
+        info!("get_disk_free_space()");
+        Ok(DiskSpaceInfo {
+            free_byte_count: DEFAULT_SIZE,
+            byte_count: DEFAULT_SIZE,
+            available_byte_count: DEFAULT_SIZE,
         })
     }
 }
