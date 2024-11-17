@@ -66,6 +66,7 @@ fn make_file_at(remote: &mut MemoryFs, path: &Path, content: &[u8]) {
 /// Make directory on the remote fs at `path`
 ///
 /// All the stems in the path will be created if they do not exist.
+#[cfg(windows)]
 fn make_dir_at(remote: &mut MemoryFs, path: &Path) {
     use path_slash::PathBufExt;
 
@@ -74,6 +75,26 @@ fn make_dir_at(remote: &mut MemoryFs, path: &Path) {
         abs_path.push(stem);
         // convert to slash
         let abs_path = PathBuf::from(abs_path.to_slash_lossy().to_string());
+        println!("Creating directory: {abs_path:?}");
+        match remote.create_dir(&abs_path, UnixPex::from(0o755)) {
+            Ok(_)
+            | Err(RemoteError {
+                kind: RemoteErrorType::DirectoryAlreadyExists,
+                ..
+            }) => {}
+            Err(err) => panic!("Failed to create directory: {err}"),
+        }
+    }
+}
+
+/// Make directory on the remote fs at `path`
+///
+/// All the stems in the path will be created if they do not exist.
+#[cfg(unix)]
+fn make_dir_at(remote: &mut MemoryFs, path: &Path) {
+    let mut abs_path = Path::new("/").to_path_buf();
+    for stem in path.iter() {
+        abs_path.push(stem);
         println!("Creating directory: {abs_path:?}");
         match remote.create_dir(&abs_path, UnixPex::from(0o755)) {
             Ok(_)
