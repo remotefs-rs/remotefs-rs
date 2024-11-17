@@ -23,7 +23,6 @@ remotefs = "0.3"
 seahash = "4"
 tempfile = "^3"
 
-
 [target.'cfg(unix)'.dependencies]
 fuser = "0.15"
 libc = "^0.2"
