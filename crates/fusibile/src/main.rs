@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     // setup signal handler
     ctrlc::set_handler(move || {
         log::info!("Received SIGINT, unmounting filesystem");
-        umount.umount().expect("Failed to unmount");
+        umount.unmount().expect("Failed to unmount");
     })?;
 
     log::info!("Running filesystem event loop");

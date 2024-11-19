@@ -26,7 +26,7 @@ where
 {
     /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
     ///
-    /// You can specify the mount options using the `options` parameter.
+    /// You can specify the mount options using the `options` parameter as an array of [`MountOption`].
     #[allow(clippy::self_named_constructors)]
     #[cfg(unix)]
     pub fn mount(
@@ -49,7 +49,7 @@ where
 
     /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
     ///
-    /// You can specify the mount options using the `options` parameter.
+    /// You can specify the mount options using the `options` parameter as an array of [`MountOption`].
     #[cfg(windows)]
     #[allow(clippy::self_named_constructors)]
     pub fn mount(
@@ -93,9 +93,9 @@ where
 
     /// Get a handle to unmount the filesystem.
     ///
-    /// To umount see [`Umount::umount`].
-    pub fn unmounter(&mut self) -> Umount {
-        Umount {
+    /// To umount see [`Unmount::unmount`].
+    pub fn unmounter(&mut self) -> Unmount {
+        Unmount {
             #[cfg(unix)]
             umount: self.session.unmount_callable(),
             #[cfg(windows)]
@@ -105,16 +105,16 @@ where
 }
 
 /// A thread-safe handle to unmount the filesystem.
-pub struct Umount {
+pub struct Unmount {
     #[cfg(unix)]
     umount: fuser::SessionUnmounter,
     #[cfg(windows)]
     mountpoint: widestring::U16CString,
 }
 
-impl Umount {
+impl Unmount {
     /// Unmount the filesystem.
-    pub fn umount(&mut self) -> Result<(), std::io::Error> {
+    pub fn unmount(&mut self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
         self.umount.unmount()?;
 

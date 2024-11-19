@@ -4,12 +4,12 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use remotefs_fuse::{Mount, MountOption, Umount};
+use remotefs_fuse::{Mount, MountOption, Unmount};
 use tempfile::TempDir;
 
 use crate::driver::mounted_file_path;
 
-pub type UmountLock = Arc<Mutex<Option<Umount>>>;
+pub type UmountLock = Arc<Mutex<Option<Unmount>>>;
 
 /// Mounts the filesystem in a separate thread.
 ///
@@ -60,7 +60,7 @@ fn umount(umount: UmountLock) {
         .unwrap()
         .as_mut()
         .unwrap()
-        .umount()
+        .unmount()
         .expect("Failed to unmount");
 }
 

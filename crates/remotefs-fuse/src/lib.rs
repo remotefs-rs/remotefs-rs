@@ -75,7 +75,7 @@
 //!
 //! // setup signal handler
 //! ctrlc::set_handler(move || {
-//!     umount.umount().expect("Failed to unmount");
+//!     umount.unmount().expect("Failed to unmount");
 //! })?;
 //!
 //! mount.run().expect("Failed to run filesystem event loop");
@@ -105,4 +105,4 @@ extern crate log;
 mod driver;
 mod mount;
 
-pub use self::mount::{Mount, MountOption, Umount};
+pub use self::mount::{Mount, MountOption, Unmount};

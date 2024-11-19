@@ -98,7 +98,7 @@ let mut umount = mount.unmounter();
 
 // setup signal handler
 ctrlc::set_handler(move || {
-    umount.umount().expect("Failed to unmount");
+    umount.unmount().expect("Failed to unmount");
 })?;
 
 mount.run().expect("Failed to run filesystem event loop");
