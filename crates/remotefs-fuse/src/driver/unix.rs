@@ -50,7 +50,7 @@ where
     FileAttr {
         ino: Driver::<T>::inode(value.path()),
         size: value.metadata().size,
-        blocks: (value.metadata().size + BLOCK_SIZE as u64 - 1) / BLOCK_SIZE as u64,
+        blocks: value.metadata().size.div_ceil(BLOCK_SIZE as u64),
         atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
         mtime: value.metadata().modified.unwrap_or(UNIX_EPOCH),
         ctime: value.metadata().created.unwrap_or(UNIX_EPOCH),
