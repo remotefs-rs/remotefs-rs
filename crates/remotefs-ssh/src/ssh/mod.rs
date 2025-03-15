@@ -9,6 +9,8 @@ use std::time::Duration;
 // -- modules
 mod commons;
 mod config;
+#[cfg(test)]
+mod container;
 mod scp;
 mod sftp;
 mod stream;

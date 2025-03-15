@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SSH client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.5.0 (26/10/2024)</p>
+<p align="center">Current version: 0.6.0 (15/03/2025)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -82,7 +82,7 @@ First of all, add `remotefs-ssh` to your project dependencies:
 
 ```toml
 remotefs = "0.3"
-remotefs-ssh = "^0.5"
+remotefs-ssh = "^0.6"
 ```
 
 these features are supported:

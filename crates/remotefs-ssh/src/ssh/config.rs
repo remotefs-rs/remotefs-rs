@@ -160,21 +160,21 @@ mod test {
 
     #[test]
     fn should_init_config_from_file() {
-        let config_file = ssh_mock::create_ssh_config();
+        let config_file = ssh_mock::create_ssh_config(22);
         let opts = SshOpts::new("sftp").config_file(config_file.path(), ParseRule::STRICT);
         let config = Config::try_from(&opts).ok().unwrap();
         assert_eq!(config.connection_attempts, 3);
         assert_eq!(config.connection_timeout, Duration::from_secs(60));
         assert_eq!(config.host.as_str(), "sftp");
         assert_eq!(config.resolved_host.as_str(), "127.0.0.1");
-        assert_eq!(config.address.as_str(), "127.0.0.1:10022");
+        assert_eq!(config.address.as_str(), "127.0.0.1:22");
         assert_eq!(config.username.as_str(), "sftp");
         assert_ne!(config.params, HostParams::default());
     }
 
     #[test]
     fn should_init_config_from_file_with_override() {
-        let config_file = ssh_mock::create_ssh_config();
+        let config_file = ssh_mock::create_ssh_config(22);
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::STRICT)
             .connection_timeout(Duration::from_secs(10))

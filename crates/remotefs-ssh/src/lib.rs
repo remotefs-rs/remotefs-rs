@@ -11,7 +11,7 @@
 //!
 //! ```toml
 //! remotefs = "^0.3"
-//! remotefs-ssh = "^0.5"
+//! remotefs-ssh = "^0.6"
 //! ```
 //!
 //! these features are supported:

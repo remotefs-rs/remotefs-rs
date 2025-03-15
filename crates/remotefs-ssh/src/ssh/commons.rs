@@ -11,8 +11,8 @@ use std::time::Duration;
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use ssh2::{MethodType as SshMethodType, Session};
 
-use super::config::Config;
 use super::SshOpts;
+use super::config::Config;
 use crate::SshAgentIdentity;
 
 // -- connect
@@ -30,7 +30,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
             return Err(RemoteError::new_ex(
                 RemoteErrorType::BadAddress,
                 err.to_string(),
-            ))
+            ));
         }
     };
     let mut stream = None;
@@ -312,7 +312,7 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Remote
             return Err(RemoteError::new_ex(
                 RemoteErrorType::ProtocolError,
                 format!("Could not open channel: {err}"),
-            ))
+            ));
         }
     };
     // Execute command
@@ -364,7 +364,7 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
                 return Err(RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     "Failed to get command exit code",
-                ))
+                ));
             }
         };
         debug!(r#"Command output: "{}"; exit code: {}"#, actual_output, rc);
@@ -383,18 +383,21 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
 #[cfg(test)]
 mod test {
 
-    #[cfg(feature = "with-containers")]
     use ssh2_config::ParseRule;
 
     use super::*;
-    #[cfg(feature = "with-containers")]
     use crate::mock::ssh as ssh_mock;
 
     #[test]
-    #[cfg(feature = "with-containers")]
+
     fn should_connect_to_ssh_server_auth_user_password() {
+        use crate::ssh::container::OpensshServer;
+
+        let container = OpensshServer::start();
+        let port = container.port();
+
         crate::mock::logger();
-        let config_file = ssh_mock::create_ssh_config();
+        let config_file = ssh_mock::create_ssh_config(port);
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .password("password");
@@ -404,13 +407,20 @@ mod test {
         }
         let session = connect(&opts).unwrap();
         assert!(session.authenticated());
+
+        drop(container);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
+
     fn should_connect_to_ssh_server_auth_key() {
+        use crate::ssh::container::OpensshServer;
+
+        let container = OpensshServer::start();
+        let port = container.port();
+
         crate::mock::logger();
-        let config_file = ssh_mock::create_ssh_config();
+        let config_file = ssh_mock::create_ssh_config(port);
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()));
@@ -419,11 +429,14 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
+
     fn should_perform_shell_command_on_server() {
         crate::mock::logger();
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+
         let opts = SshOpts::new("127.0.0.1")
-            .port(10022)
+            .port(port)
             .username("sftp")
             .password("password");
         let mut session = connect(&opts).unwrap();
@@ -433,11 +446,14 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
+
     fn should_perform_shell_command_on_server_and_return_exit_code() {
         crate::mock::logger();
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+
         let opts = SshOpts::new("127.0.0.1")
-            .port(10022)
+            .port(port)
             .username("sftp")
             .password("password");
         let mut session = connect(&opts).unwrap();
@@ -459,11 +475,14 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
+
     fn should_fail_authentication() {
         crate::mock::logger();
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+
         let opts = SshOpts::new("127.0.0.1")
-            .port(10022)
+            .port(port)
             .username("sftp")
             .password("ippopotamo");
         assert!(connect(&opts).is_err());

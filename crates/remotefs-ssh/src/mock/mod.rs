@@ -6,5 +6,15 @@ pub mod ssh;
 // -- logger
 
 pub fn logger() {
-    let _ = env_logger::builder().is_test(true).try_init();
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    INIT.call_once(|| {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Trace)
+            .is_test(true)
+            .format_line_number(true)
+            .try_init();
+    });
 }

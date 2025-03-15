@@ -8,15 +8,15 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use lazy_regex::{Lazy, Regex};
+use remotefs::File;
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     UnixPexClass, Welcome, WriteStream,
 };
-use remotefs::File;
 // -- export
 pub use ssh2::Session as SshSession;
 
-use super::{commons, SshOpts};
+use super::{SshOpts, commons};
 use crate::utils::{fmt as fmt_utils, parser as parser_utils, path as path_utils};
 
 /// NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
@@ -351,7 +351,7 @@ impl RemoteFs for ScpFs {
                         return Err(RemoteError::new_ex(
                             RemoteErrorType::StatFailed,
                             "Path has no parent",
-                        ))
+                        ));
                     }
                 };
                 match self.parse_ls_output(parent.as_path(), line.as_str().trim()) {
@@ -601,9 +601,7 @@ impl RemoteFs for ScpFs {
             .as_secs();
         trace!(
             "Creating file with mode {:o}, accessed: {}, modified: {}",
-            mode,
-            accessed,
-            modified
+            mode, accessed, modified
         );
         match self.session.as_mut().unwrap().scp_send(
             path.as_path(),
@@ -642,17 +640,14 @@ impl RemoteFs for ScpFs {
 #[cfg(test)]
 mod test {
 
-    #[cfg(feature = "with-containers")]
     use std::io::Cursor;
 
     use pretty_assertions::assert_eq;
-    #[cfg(feature = "with-containers")]
-    use serial_test::serial;
-    #[cfg(feature = "with-containers")]
     use ssh2_config::ParseRule;
 
     use super::*;
     use crate::mock::ssh as ssh_mock;
+    use crate::ssh::container::OpensshServer;
 
     #[test]
     fn should_init_scp_fs() {
@@ -668,28 +663,33 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_append_to_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_err());
+        assert!(
+            client
+                .append_file(p, &Metadata::default(), Box::new(reader))
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_change_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         let pwd = client.pwd().ok().unwrap();
         assert!(client.change_dir(Path::new("/tmp")).is_ok());
         assert!(client.change_dir(pwd.as_path()).is_ok());
@@ -697,41 +697,50 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_change_directory_relative() {
         crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client
-            .create_dir(
-                Path::new("should_change_directory_relative"),
-                UnixPex::from(0o755)
-            )
-            .is_ok());
-        assert!(client
-            .change_dir(Path::new("should_change_directory_relative/"))
-            .is_ok());
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
+        assert!(
+            client
+                .create_dir(
+                    Path::new("should_change_directory_relative"),
+                    UnixPex::from(0o755)
+                )
+                .is_ok()
+        );
+        assert!(
+            client
+                .change_dir(Path::new("should_change_directory_relative/"))
+                .is_ok()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_change_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client
-            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-            .is_err());
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
+        assert!(
+            client
+                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_copy_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -746,11 +755,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_copy_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -763,30 +773,36 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_create_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // create directory
-        assert!(client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .is_ok()
+        );
         let p = PathBuf::from(format!("{}/mydir", client.pwd().unwrap().display()));
         assert!(client.exists(&p).unwrap());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_create_directory_cause_already_exists() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // create directory
-        assert!(client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .is_ok()
+        );
         assert_eq!(
             client
                 .create_dir(Path::new("mydir"), UnixPex::from(0o755))
@@ -799,27 +815,31 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_create_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // create directory
-        assert!(client
-            .create_dir(
-                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                UnixPex::from(0o755)
-            )
-            .is_err());
+        assert!(
+            client
+                .create_dir(
+                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                    UnixPex::from(0o755)
+                )
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_create_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -839,11 +859,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_create_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
         let file_data = "test data\n";
@@ -855,11 +876,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_exec_command() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         assert_eq!(
             client.exec("echo 5").ok().unwrap(),
@@ -869,11 +891,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_tell_whether_file_exists() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -893,11 +916,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_list_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let wrkdir = client.pwd().ok().unwrap();
         let p = Path::new("a.txt");
@@ -925,22 +949,24 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_list_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         assert!(client.list_dir(Path::new("/tmp/auhhfh/hfhjfhf/")).is_err());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_move_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -957,11 +983,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_move_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -972,18 +999,21 @@ mod test {
         // Verify size
         let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
         assert!(client.mov(p, dest).is_err());
-        assert!(client
-            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-            .is_err());
+        assert!(
+            client
+                .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_open_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -997,41 +1027,48 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_open_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client
-            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-            .is_err());
+        assert!(
+            client
+                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_print_working_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         assert!(client.pwd().is_ok());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_remove_dir_all() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Create file
         let mut file_path = dir_path.clone();
         file_path.push(Path::new("a.txt"));
@@ -1039,55 +1076,66 @@ mod test {
         let reader = Cursor::new(file_data.as_bytes());
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
-        assert!(client
-            .create_file(file_path.as_path(), &metadata, Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(file_path.as_path(), &metadata, Box::new(reader))
+                .is_ok()
+        );
         // Remove dir
         assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_remove_dir_all() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Remove dir
-        assert!(client
-            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-            .is_err());
+        assert!(
+            client
+                .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_remove_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         assert!(client.remove_dir(dir_path.as_path()).is_ok());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_remove_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Create file
         let mut file_path = dir_path.clone();
         file_path.push(Path::new("a.txt"));
@@ -1095,20 +1143,23 @@ mod test {
         let reader = Cursor::new(file_data.as_bytes());
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
-        assert!(client
-            .create_file(file_path.as_path(), &metadata, Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(file_path.as_path(), &metadata, Box::new(reader))
+                .is_ok()
+        );
         // Remove dir
         assert!(client.remove_dir(dir_path.as_path()).is_err());
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_remove_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -1121,11 +1172,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_setstat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1134,22 +1186,24 @@ mod test {
         metadata.size = file_data.len() as u64;
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
 
-        assert!(client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: Some(SystemTime::UNIX_EPOCH),
-                    created: None,
-                    file_type: FileType::File,
-                    gid: Some(1000),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: Some(SystemTime::UNIX_EPOCH),
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1000),
-                }
-            )
-            .is_ok());
+        assert!(
+            client
+                .setstat(
+                    p,
+                    Metadata {
+                        accessed: Some(SystemTime::UNIX_EPOCH),
+                        created: None,
+                        file_type: FileType::File,
+                        gid: Some(1000),
+                        mode: Some(UnixPex::from(0o755)),
+                        modified: Some(SystemTime::UNIX_EPOCH),
+                        size: 7,
+                        symlink: None,
+                        uid: Some(1000),
+                    }
+                )
+                .is_ok()
+        );
         let entry = client.stat(p).ok().unwrap();
         let stat = entry.metadata();
         assert_eq!(stat.accessed, None);
@@ -1162,38 +1216,42 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_setstat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("bbbbb/cccc/a.sh");
-        assert!(client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: None,
-                    created: None,
-                    file_type: FileType::File,
-                    gid: Some(1),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: None,
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1),
-                }
-            )
-            .is_err());
+        assert!(
+            client
+                .setstat(
+                    p,
+                    Metadata {
+                        accessed: None,
+                        created: None,
+                        file_type: FileType::File,
+                        gid: Some(1),
+                        mode: Some(UnixPex::from(0o755)),
+                        modified: None,
+                        size: 7,
+                        symlink: None,
+                        uid: Some(1),
+                    }
+                )
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_stat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1219,11 +1277,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_stat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         assert!(client.stat(p).is_err());
@@ -1231,11 +1290,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_make_symlink() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1250,11 +1310,12 @@ mod test {
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_make_symlink() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let TestCtx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1265,9 +1326,11 @@ mod test {
         let symlink = Path::new("b.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(symlink, &metadata, Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(symlink, &metadata, Box::new(reader))
+                .is_ok()
+        );
         assert!(client.symlink(symlink, p).is_err());
         assert!(client.remove_file(symlink).is_ok());
         assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
@@ -1339,26 +1402,32 @@ mod test {
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o755_u32);
         assert!(entry.metadata.symlink.is_none());
         // Short metadata
-        assert!(client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "drwxr-xr-x 1 root root   512 giu 13 21:11",
-            )
-            .is_err());
+        assert!(
+            client
+                .parse_ls_output(
+                    PathBuf::from("/tmp").as_path(),
+                    "drwxr-xr-x 1 root root   512 giu 13 21:11",
+                )
+                .is_err()
+        );
         // Special file
-        assert!(client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "crwxr-xr-x 1 root root   512 giu 13 21:11 ttyS1",
-            )
-            .is_err());
+        assert!(
+            client
+                .parse_ls_output(
+                    PathBuf::from("/tmp").as_path(),
+                    "crwxr-xr-x 1 root root   512 giu 13 21:11 ttyS1",
+                )
+                .is_err()
+        );
         // Bad pex
-        assert!(client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "-rwxr-xr 1 root root   512 giu 13 21:11 ttyS1",
-            )
-            .is_err());
+        assert!(
+            client
+                .parse_ls_output(
+                    PathBuf::from("/tmp").as_path(),
+                    "-rwxr-xr 1 root root   512 giu 13 21:11 ttyS1",
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -1386,64 +1455,84 @@ mod test {
     #[test]
     fn test_should_parse_special_permissions_ls_output() {
         let client = ScpFs::new(SshOpts::new("localhost"));
-        assert!(client
-            .parse_ls_output(
-                Path::new("/tmp"),
-                "-rw-rwSrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-            )
-            .is_ok());
-        assert!(client
-            .parse_ls_output(
-                Path::new("/tmp"),
-                "-rw-rwsrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-            )
-            .is_ok());
+        assert!(
+            client
+                .parse_ls_output(
+                    Path::new("/tmp"),
+                    "-rw-rwSrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+                )
+                .is_ok()
+        );
+        assert!(
+            client
+                .parse_ls_output(
+                    Path::new("/tmp"),
+                    "-rw-rwsrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+                )
+                .is_ok()
+        );
 
-        assert!(client
-            .parse_ls_output(
-                Path::new("/tmp"),
-                "-rw-rwtrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-            )
-            .is_ok());
+        assert!(
+            client
+                .parse_ls_output(
+                    Path::new("/tmp"),
+                    "-rw-rwtrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+                )
+                .is_ok()
+        );
 
-        assert!(client
-            .parse_ls_output(
-                Path::new("/tmp"),
-                "-rw-rwTrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-            )
-            .is_ok());
+        assert!(
+            client
+                .parse_ls_output(
+                    Path::new("/tmp"),
+                    "-rw-rwTrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
+                )
+                .is_ok()
+        );
     }
 
     #[test]
     fn should_return_errors_on_uninitialized_client() {
         let mut client = ScpFs::new(SshOpts::new("localhost"));
         assert!(client.change_dir(Path::new("/tmp")).is_err());
-        assert!(client
-            .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
-            .is_err());
+        assert!(
+            client
+                .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
+                .is_err()
+        );
         assert!(client.exec("echo 5").is_err());
         assert!(client.disconnect().is_err());
         assert!(client.list_dir(Path::new("/tmp")).is_err());
-        assert!(client
-            .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
-            .is_err());
+        assert!(
+            client
+                .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
+                .is_err()
+        );
         assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
         assert!(client.pwd().is_err());
         assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
-        assert!(client
-            .mov(Path::new("/nowhere"), Path::new("/culonia"))
-            .is_err());
+        assert!(
+            client
+                .mov(Path::new("/nowhere"), Path::new("/culonia"))
+                .is_err()
+        );
         assert!(client.stat(Path::new("/tmp")).is_err());
-        assert!(client
-            .setstat(Path::new("/tmp"), Metadata::default())
-            .is_err());
+        assert!(
+            client
+                .setstat(Path::new("/tmp"), Metadata::default())
+                .is_err()
+        );
         assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
-        assert!(client
-            .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
-            .is_err());
-        assert!(client
-            .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
-            .is_err());
+        assert!(
+            client
+                .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .is_err()
+        );
+        assert!(
+            client
+                .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .is_err()
+        );
     }
 
     fn is_send<T: Send>(_send: T) {}
@@ -1469,11 +1558,19 @@ mod test {
 
     // -- test utils
 
-    #[cfg(feature = "with-containers")]
-    fn setup_client() -> ScpFs {
+    struct TestCtx {
+        client: ScpFs,
+        #[allow(dead_code)]
+        container: OpensshServer,
+    }
+
+    fn setup_client() -> TestCtx {
+        let container = OpensshServer::start();
+        let port = container.port();
+
         use crate::SshAgentIdentity;
 
-        let config_file = ssh_mock::create_ssh_config();
+        let config_file = ssh_mock::create_ssh_config(port);
         let mut client = ScpFs::new(
             SshOpts::new("scp")
                 .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
@@ -1483,15 +1580,17 @@ mod test {
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
-        assert!(client
-            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Change directory
         assert!(client.change_dir(tempdir.as_path()).is_ok());
-        client
+
+        TestCtx { client, container }
     }
 
-    #[cfg(feature = "with-containers")]
     fn finalize_client(mut client: ScpFs) {
         // Get working directory
         let wrkdir = client.pwd().ok().unwrap();
@@ -1500,11 +1599,10 @@ mod test {
         assert!(client.disconnect().is_ok());
     }
 
-    #[cfg(feature = "with-containers")]
     fn generate_tempdir() -> String {
-        use rand::distributions::Alphanumeric;
-        use rand::{thread_rng, Rng};
-        let mut rng = thread_rng();
+        use rand::distr::Alphanumeric;
+        use rand::{Rng, rng};
+        let mut rng = rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
             .map(char::from)

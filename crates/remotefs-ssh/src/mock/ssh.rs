@@ -16,9 +16,10 @@ pub struct MockSshKeyStorage {
 impl Default for MockSshKeyStorage {
     fn default() -> Self {
         let mut key = NamedTempFile::new().expect("Failed to create tempfile");
-        assert!(writeln!(
-            key,
-            r"-----BEGIN OPENSSH PRIVATE KEY-----
+        assert!(
+            writeln!(
+                key,
+                r"-----BEGIN OPENSSH PRIVATE KEY-----
 b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn
 NhAAAAAwEAAQAAAQEAxKyYUMRCNPlb4ZV1VMofrzApu2l3wgP4Ot9wBvHsw/+RMpcHIbQK
 9iQqAVp8Z+M1fJyPXTKjoJtIzuCLF6Sjo0KI7/tFTh+yPnA5QYNLZOIRZb8skumL4gwHww
@@ -45,8 +46,9 @@ ruVXgkd7RJFbsIiD4dDcF4VCjwWHfTK21EOgJUA5pN6TNvAAAAgQDbcJWRx8Uyhkj2+srb
 TNKCN34QCWkyuYRHGhcNc0quEDayPw5QWGXlP4BzjfRUcPxY9cCXLe5wDLYsX33HwOAc59
 RorU9FCmS/654wAAABFyb290QDhjNTBmZDRjMzQ1YQECAw==
 -----END OPENSSH PRIVATE KEY-----"
-        )
-        .is_ok());
+            )
+            .is_ok()
+        );
         Self { key }
     }
 }
@@ -64,9 +66,10 @@ impl SshKeyStorage for MockSshKeyStorage {
 // -- config file
 
 /// Create ssh config file
-pub fn create_ssh_config() -> NamedTempFile {
+pub fn create_ssh_config(port: u16) -> NamedTempFile {
     let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
-    let config = r##"
+    let config = format!(
+        r##"
 # ssh config
 Compression yes
 ConnectionAttempts  3
@@ -77,13 +80,14 @@ MACs                hmac-sha2-512,hmac-sha2-256,hmac-ripemd160
 # Hosts
 Host sftp
     HostName    127.0.0.1
-    Port        10022
+    Port        {port}
     User        sftp
 Host scp
     HostName    127.0.0.1
-    Port        10222
+    Port        {port}
     User        sftp
-"##;
+"##
+    );
     temp.write_all(config.as_bytes()).unwrap();
     temp
 }
