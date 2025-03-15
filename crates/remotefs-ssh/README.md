@@ -21,7 +21,7 @@
   /></a>
   <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ssh.svg"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ssh.svg?style=badge&icon=github"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-ssh"
@@ -45,16 +45,6 @@
     ><img
       src="https://github.com/remotefs-rs/remotefs-rs-ssh/workflows/Linux/badge.svg"
       alt="Linux CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/actions"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-ssh/workflows/MacOS/badge.svg"
-      alt="MacOS CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/actions"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-ssh/workflows/Windows/badge.svg"
-      alt="Windows CI"
   /></a>
   <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-ssh"
     ><img
