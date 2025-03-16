@@ -12,7 +12,7 @@ use aws_config::meta::region::RegionProviderChain;
 pub use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{Builder as S3ClientBuilder, Credentials, ProvideCredentials};
 use aws_sdk_s3::primitives::{ByteStream, SdkBody};
-use aws_sdk_s3::types::Object;
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Object};
 #[cfg(target_os = "windows")]
 use path_slash::PathExt as _;
 use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
@@ -21,6 +21,8 @@ use tokio::runtime::Runtime;
 
 use super::object::S3Object;
 use crate::utils::path as path_utils;
+
+const MIN_MULTIPART_UPLOAD_SIZE: usize = 5 * 1024 * 1024; // 5MB
 
 /// Aws s3 file system client
 pub struct AwsS3Fs {
@@ -576,8 +578,35 @@ impl RemoteFs for AwsS3Fs {
 
         // we write 4096 bytes at a time
         debug!("Query PUT for key '{}'", key);
-        let mut buf = vec![0; 4096];
+        let mut buf = vec![0; MIN_MULTIPART_UPLOAD_SIZE];
         let mut offset = 0;
+        let mut part_number = 1;
+
+        // create multipart upload
+        let fut = self
+            .client
+            .as_ref()
+            .unwrap()
+            .create_multipart_upload()
+            .bucket(self.bucket_name.as_str())
+            .key(key.as_str())
+            .send();
+
+        let upload = self.runtime.block_on(fut).map_err(|e| {
+            error!("Could not init multipart upload: {e:?}",);
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not init multipart upload: {}", e),
+            )
+        })?;
+        let upload_id = upload.upload_id().ok_or(RemoteError::new_ex(
+            RemoteErrorType::ProtocolError,
+            "no multipart id",
+        ))?;
+        debug!("starting multipart upload with upload id {upload_id}");
+
+        let mut upload_parts: Vec<aws_sdk_s3::types::CompletedPart> = Vec::new();
+
         loop {
             let buflen = reader.read(&mut buf).map_err(|e| {
                 RemoteError::new_ex(
@@ -590,7 +619,7 @@ impl RemoteFs for AwsS3Fs {
             }
 
             let bytestream = ByteStream::new(SdkBody::from(&buf[..buflen]));
-            debug!("sending PUT OBJECT for {key} at offset {offset} for {buflen} bytes");
+            debug!("sending part {part_number} for {key} at offset {offset} for {buflen} bytes");
 
             let buflen = buflen as i64;
 
@@ -598,23 +627,59 @@ impl RemoteFs for AwsS3Fs {
                 .client
                 .as_ref()
                 .unwrap()
-                .put_object()
+                .upload_part()
                 .bucket(self.bucket_name.as_str())
                 .key(key.as_str())
-                .content_length(buflen)
-                .write_offset_bytes(offset)
+                .upload_id(upload_id)
                 .body(bytestream)
+                .part_number(part_number)
                 .send();
 
-            self.runtime.block_on(fut).map_err(|e| {
+            let upload_part_res = self.runtime.block_on(fut).map_err(|e| {
+                error!("Could not put file: {e:?}",);
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     format!("Could not put file: {}", e),
                 )
             })?;
 
+            upload_parts.push(
+                CompletedPart::builder()
+                    .e_tag(upload_part_res.e_tag.unwrap_or_default())
+                    .part_number(part_number)
+                    .build(),
+            );
+
+            debug!("written {buflen} bytes at offset {offset} for {key}");
+
             offset += buflen;
+            part_number += 1;
         }
+
+        // complete multipart
+        let completed_multipart_upload: CompletedMultipartUpload =
+            CompletedMultipartUpload::builder()
+                .set_parts(Some(upload_parts))
+                .build();
+
+        let fut = self
+            .client
+            .as_ref()
+            .unwrap()
+            .complete_multipart_upload()
+            .bucket(self.bucket_name.as_str())
+            .key(key.as_str())
+            .upload_id(upload_id)
+            .multipart_upload(completed_multipart_upload)
+            .send();
+
+        self.runtime.block_on(fut).map_err(|e| {
+            error!("Could not complete multipart upload: {e:?}",);
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not complete multipart upload: {}", e),
+            )
+        })?;
 
         Ok(offset as u64)
     }
@@ -1062,6 +1127,30 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    fn should_write_big_data() {
+        crate::mock::logger();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
+        // Create file
+        let p = Path::new("a.txt");
+        let file_data = vec![1; MIN_MULTIPART_UPLOAD_SIZE * 2];
+        let reader = Cursor::new(file_data);
+        let mut metadata = Metadata::default();
+        metadata.size = (MIN_MULTIPART_UPLOAD_SIZE * 2) as u64;
+        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
+        // Verify size
+        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
+        assert_eq!(
+            client.open_file(p, buffer).ok().unwrap(),
+            (MIN_MULTIPART_UPLOAD_SIZE * 2) as u64
+        );
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     fn should_not_open_file() {
         crate::mock::logger();
         let Ctx {
@@ -1375,16 +1464,9 @@ mod test {
 
     #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
     fn setup_client() -> Ctx {
-        // Gather s3 environment args
-        let bucket = env!("AWS_S3_BUCKET");
-        let region = env!("AWS_S3_REGION");
-        let access_key = env!("AWS_S3_ACCESS_KEY");
-        let secret_key = env!("AWS_S3_SECRET_KEY");
         // Get transfer
-        let mut client = AwsS3Fs::new(bucket)
-            .region(region)
-            .access_key(access_key)
-            .secret_access_key(secret_key);
+        let bucket = env!("AWS_S3_BUCKET");
+        let mut client = AwsS3Fs::new(bucket, &Arc::new(Runtime::new().unwrap()));
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
