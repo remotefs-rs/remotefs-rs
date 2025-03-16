@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs Aws S3 client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.4.0 (16/03/2025)</p>
+<p align="center">Current version: 0.4.1 (16/03/2025)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
