@@ -2,44 +2,21 @@
 //!
 //! Aws s3 client for remotefs
 
-/**
- * MIT License
- *
- * remotefs - Copyright (c) 2021 Christian Visintin
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */
-// -- mod
-use super::object::S3Object;
-
-use crate::utils::path as path_utils;
-use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
-use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-
-use s3::creds::Credentials;
-use s3::serde_types::Object;
-use s3::Region;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+#[cfg(target_os = "windows")]
+use path_slash::PathExt as _;
+use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
+use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 pub use s3::Bucket;
+use s3::Region;
+use s3::creds::Credentials;
+use s3::serde_types::Object;
+
+use super::object::S3Object;
+use crate::utils::path as path_utils;
 
 /// Aws s3 file system client
 pub struct AwsS3Fs {
@@ -238,7 +215,7 @@ impl AwsS3Fs {
         };
         // NOTE: windows only: resolve paths
         #[cfg(target_family = "windows")]
-        let p: PathBuf = PathBuf::from(path_slash::PathExt::to_slash_lossy(p.as_path()).as_str());
+        let p: PathBuf = PathBuf::from(p.to_slash_lossy().to_string());
         // Fmt
         match is_dir {
             true => {
@@ -580,17 +557,17 @@ impl RemoteFs for AwsS3Fs {
 #[cfg(test)]
 mod test {
 
-    use super::*;
-
-    use pretty_assertions::assert_eq;
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    use serial_test::serial;
     #[cfg(feature = "with-s3-ci")]
     use std::env;
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use std::io::Cursor;
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use std::time::SystemTime;
+
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    use crate::mock::container::Minio;
 
     #[test]
     fn should_init_s3() {
@@ -696,27 +673,33 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_append_to_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_err());
+        assert!(
+            client
+                .append_file(p, &Metadata::default(), Box::new(reader))
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_change_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         let pwd = client.pwd().ok().unwrap();
         assert!(client.change_dir(Path::new("/")).is_ok());
         assert!(client.change_dir(pwd.as_path()).is_ok());
@@ -725,22 +708,28 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_change_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client
-            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-            .is_err());
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
+        assert!(
+            client
+                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_copy_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -754,27 +743,35 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_create_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // create directory
-        assert!(client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .is_ok()
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_create_directory_cause_already_exists() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // create directory
-        assert!(client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .is_ok()
+        );
         assert_eq!(
             client
                 .create_dir(Path::new("mydir"), UnixPex::from(0o755))
@@ -788,26 +785,32 @@ mod test {
 
     #[test]
     #[cfg(feature = "with-s3-ci")]
-    #[serial]
     fn should_not_create_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // create directory
-        assert!(client
-            .create_dir(
-                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                UnixPex::from(0o755)
-            )
-            .is_err());
+        assert!(
+            client
+                .create_dir(
+                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                    UnixPex::from(0o755)
+                )
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_create_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -828,20 +831,24 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_exec_command() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         assert!(client.exec("echo 5").is_err());
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_tell_whether_file_exists() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -861,10 +868,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_list_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let wrkdir = client.pwd().ok().unwrap();
         let p = Path::new("a.txt");
@@ -893,10 +902,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_move_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -911,10 +922,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_open_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -930,40 +943,50 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_open_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client
-            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-            .is_err());
+        assert!(
+            client
+                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_print_working_directory() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         assert!(client.pwd().is_ok());
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_remove_dir_all() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Create file
         let mut file_path = dir_path.clone();
         file_path.push(Path::new("a.txt"));
@@ -971,9 +994,11 @@ mod test {
         let reader = Cursor::new(file_data.as_bytes());
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
-        assert!(client
-            .create_file(file_path.as_path(), &metadata, Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(file_path.as_path(), &metadata, Box::new(reader))
+                .is_ok()
+        );
         // Remove dir
         assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
         finalize_client(client);
@@ -981,26 +1006,32 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_remove_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         assert!(client.remove_dir(dir_path.as_path()).is_ok());
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_remove_dir() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Remove dir
         assert!(client.remove_dir(Path::new("test/")).is_err());
         finalize_client(client);
@@ -1008,10 +1039,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_remove_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.txt");
         let file_data = "test data\n";
@@ -1025,10 +1058,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_setstat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1036,31 +1071,35 @@ mod test {
         let mut metadata = Metadata::default();
         metadata.size = file_data.len() as u64;
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: Some(SystemTime::UNIX_EPOCH),
-                    created: Some(SystemTime::UNIX_EPOCH),
-                    gid: Some(1000),
-                    file_type: remotefs::fs::FileType::File,
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: Some(SystemTime::UNIX_EPOCH),
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1000),
-                }
-            )
-            .is_err());
+        assert!(
+            client
+                .setstat(
+                    p,
+                    Metadata {
+                        accessed: Some(SystemTime::UNIX_EPOCH),
+                        created: Some(SystemTime::UNIX_EPOCH),
+                        gid: Some(1000),
+                        file_type: remotefs::fs::FileType::File,
+                        mode: Some(UnixPex::from(0o755)),
+                        modified: Some(SystemTime::UNIX_EPOCH),
+                        size: 7,
+                        symlink: None,
+                        uid: Some(1000),
+                    }
+                )
+                .is_err()
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_stat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1080,10 +1119,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_stat_file() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         assert!(client.stat(p).is_err());
@@ -1092,10 +1133,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_make_symlink() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1110,10 +1153,12 @@ mod test {
 
     #[test]
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    #[serial]
     fn should_not_make_symlink() {
         crate::mock::logger();
-        let mut client = setup_client();
+        let Ctx {
+            mut client,
+            container: _container,
+        } = setup_client();
         // Create file
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
@@ -1124,9 +1169,11 @@ mod test {
         let symlink = Path::new("b.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(symlink, &metadata, Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(symlink, &metadata, Box::new(reader))
+                .is_ok()
+        );
         assert!(client.symlink(symlink, p).is_err());
         assert!(client.remove_file(symlink).is_ok());
         assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
@@ -1137,32 +1184,44 @@ mod test {
     fn should_return_errors_on_uninitialized_client() {
         let mut client = AwsS3Fs::new("aws-s3-test").region("eu-central-1");
         assert!(client.change_dir(Path::new("/tmp")).is_err());
-        assert!(client
-            .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
-            .is_err());
+        assert!(
+            client
+                .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
+                .is_err()
+        );
         assert!(client.exec("echo 5").is_err());
         assert!(client.disconnect().is_err());
         assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
         assert!(client.list_dir(Path::new("/tmp")).is_err());
-        assert!(client
-            .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
-            .is_err());
+        assert!(
+            client
+                .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
+                .is_err()
+        );
         assert!(client.pwd().is_err());
         assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
-        assert!(client
-            .mov(Path::new("/nowhere"), Path::new("/culonia"))
-            .is_err());
+        assert!(
+            client
+                .mov(Path::new("/nowhere"), Path::new("/culonia"))
+                .is_err()
+        );
         assert!(client.stat(Path::new("/tmp")).is_err());
-        assert!(client
-            .setstat(Path::new("/tmp"), Metadata::default())
-            .is_err());
+        assert!(
+            client
+                .setstat(Path::new("/tmp"), Metadata::default())
+                .is_err()
+        );
         assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
-        assert!(client
-            .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
-            .is_err());
-        assert!(client
-            .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
-            .is_err());
+        assert!(
+            client
+                .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .is_err()
+        );
+        assert!(
+            client
+                .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .is_err()
+        );
     }
 
     fn is_send<T: Send>(_send: T) {}
@@ -1185,8 +1244,17 @@ mod test {
 
     // -- test utils
 
+    #[allow(dead_code)]
+    struct Ctx {
+        client: AwsS3Fs,
+        #[cfg(feature = "with-containers")]
+        container: Minio,
+        #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
+        container: (),
+    }
+
     #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
-    fn setup_client() -> AwsS3Fs {
+    fn setup_client() -> Ctx {
         // Gather s3 environment args
         let bucket = env!("AWS_S3_BUCKET");
         let region = env!("AWS_S3_REGION");
@@ -1200,44 +1268,59 @@ mod test {
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
-        assert!(client
-            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Change directory
         let err = client.change_dir(tempdir.as_path());
         if err.is_err() {
             println!("Error: {:?}", err);
         }
         assert!(client.change_dir(tempdir.as_path()).is_ok());
-        client
+        Ctx {
+            client,
+            container: (),
+        }
     }
 
     #[cfg(feature = "with-containers")]
-    fn setup_client() -> AwsS3Fs {
+    fn setup_client() -> Ctx {
+        let minio = Minio::start();
+        let port = minio.port();
+
         // Get transfer
         let mut client = AwsS3Fs::new("github-ci")
-            .endpoint("http://localhost:9000")
+            .endpoint(format!("http://localhost:{port}"))
             .access_key("minioadmin")
             .secret_access_key("minioadmin")
             .new_path_style(true);
         // Create bucket manually
-        assert!(Bucket::create_with_path_style(
-            "github-ci",
-            client.init_region().ok().unwrap(),
-            client.load_credentials().ok().unwrap(),
-            s3::bucket_ops::BucketConfiguration::private()
-        )
-        .is_ok());
+        assert!(
+            Bucket::create_with_path_style(
+                "github-ci",
+                client.init_region().ok().unwrap(),
+                client.load_credentials().ok().unwrap(),
+                s3::bucket_ops::BucketConfiguration::private()
+            )
+            .is_ok()
+        );
         // connect
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
-        assert!(client
-            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Change directory
         assert!(client.change_dir(tempdir.as_path()).is_ok());
-        client
+        Ctx {
+            client,
+            container: minio,
+        }
     }
 
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
@@ -1251,8 +1334,9 @@ mod test {
 
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     fn generate_tempdir() -> String {
-        use rand::{distributions::Alphanumeric, thread_rng, Rng};
-        let mut rng = thread_rng();
+        use rand::distr::Alphanumeric;
+        use rand::{Rng, rng};
+        let mut rng = rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
             .map(char::from)
