@@ -4,23 +4,28 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::sync::Arc;
 
+use aws_config::Region;
+use aws_config::default_provider::credentials::DefaultCredentialsChain;
+use aws_config::meta::region::RegionProviderChain;
+pub use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::config::{Builder as S3ClientBuilder, Credentials, ProvideCredentials};
+use aws_sdk_s3::primitives::{ByteStream, SdkBody};
+use aws_sdk_s3::types::Object;
 #[cfg(target_os = "windows")]
 use path_slash::PathExt as _;
 use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-pub use s3::Bucket;
-use s3::Region;
-use s3::creds::Credentials;
-use s3::serde_types::Object;
+use tokio::runtime::Runtime;
 
 use super::object::S3Object;
 use crate::utils::path as path_utils;
 
 /// Aws s3 file system client
 pub struct AwsS3Fs {
-    bucket: Option<Bucket>,
+    client: Option<S3Client>,
+    runtime: Arc<Runtime>,
     wrkdir: PathBuf,
     // -- options
     bucket_name: String,
@@ -37,11 +42,39 @@ pub struct AwsS3Fs {
     new_path_style: bool,
 }
 
+#[derive(Debug)]
+pub enum RemoteFsCredentials {
+    Default(DefaultCredentialsChain),
+    User(Credentials),
+}
+
+impl ProvideCredentials for RemoteFsCredentials {
+    fn fallback_on_interrupt(&self) -> Option<Credentials> {
+        match self {
+            Self::Default(c) => c.fallback_on_interrupt(),
+            Self::User(c) => c.fallback_on_interrupt(),
+        }
+    }
+
+    fn provide_credentials<'a>(
+        &'a self,
+    ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+    where
+        Self: 'a,
+    {
+        match self {
+            Self::Default(c) => c.provide_credentials(),
+            Self::User(c) => c.provide_credentials(),
+        }
+    }
+}
+
 impl AwsS3Fs {
     /// Initialize a new `AwsS3Fs`
-    pub fn new<S: AsRef<str>>(bucket: S) -> Self {
+    pub fn new<S: AsRef<str>>(bucket: S, runtime: &Arc<Runtime>) -> Self {
         Self {
-            bucket: None,
+            client: None,
+            runtime: runtime.clone(),
             wrkdir: PathBuf::from("/"),
             bucket_name: bucket.as_ref().to_string(),
             region: None,
@@ -110,9 +143,9 @@ impl AwsS3Fs {
 
     // -- get ref
 
-    /// Get a reference to the `Bucket` struct
-    pub fn bucket(&self) -> Option<&Bucket> {
-        self.bucket.as_ref()
+    /// Get a reference to the underlying aws sdk [`S3Client`] struct
+    pub fn client(&self) -> Option<&S3Client> {
+        self.client.as_ref()
     }
 
     // -- private
@@ -151,22 +184,34 @@ impl AwsS3Fs {
         key: String,
         only_direct_children: bool,
     ) -> RemoteResult<Vec<S3Object>> {
-        let results = self.bucket.as_ref().unwrap().list(key.clone(), None);
+        let fut = self
+            .client
+            .as_ref()
+            .unwrap()
+            .list_objects_v2()
+            .bucket(self.bucket_name.as_str())
+            .prefix(key.as_str())
+            .send();
+        let results = self.runtime.block_on(fut);
         match results {
             Ok(entries) => {
-                let mut objects: Vec<S3Object> = Vec::new();
-                entries.iter().for_each(|x| {
-                    x.contents
-                        .iter()
-                        .filter(|x| {
-                            if only_direct_children {
-                                Self::list_object_should_be_kept(x, key.as_str())
-                            } else {
-                                true
-                            }
-                        })
-                        .for_each(|x| objects.push(S3Object::from(x)))
-                });
+                let Some(contents) = entries.contents else {
+                    debug!("No objects found at key {key}",);
+                    return Ok(vec![]);
+                };
+
+                let objects: Vec<S3Object> = contents
+                    .into_iter()
+                    .filter(|object| {
+                        if only_direct_children {
+                            Self::list_object_should_be_kept(object, key.as_str())
+                        } else {
+                            true
+                        }
+                    })
+                    .map(S3Object::from)
+                    .collect();
+
                 debug!("Found objects: {:?}", objects);
                 Ok(objects)
             }
@@ -179,7 +224,7 @@ impl AwsS3Fs {
     ///
     /// 1. is not a direct child of provided dir
     fn list_object_should_be_kept(obj: &Object, dir: &str) -> bool {
-        Self::is_direct_child(obj.key.as_str(), dir)
+        Self::is_direct_child(obj.key.as_deref().unwrap_or_default(), dir)
     }
 
     /// Checks whether Object's key is direct child of `parent` path.
@@ -247,61 +292,59 @@ impl AwsS3Fs {
     }
 
     /// Load credentials for current session
-    fn load_credentials(&self) -> RemoteResult<Credentials> {
+    fn load_credentials(&self, region: RegionProviderChain) -> RemoteResult<RemoteFsCredentials> {
         if self.is_anonymous() {
-            Credentials::anonymous().map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::AuthenticationFailed,
-                    format!("Could not load anonymous credentials: {}", e),
-                )
-            })
+            Ok(RemoteFsCredentials::Default(self.runtime.block_on(
+                DefaultCredentialsChain::builder().region(region).build(),
+            )))
         } else {
-            Credentials::new(
-                self.access_key.as_deref(),
-                self.secret_key.as_deref(),
-                self.security_token.as_deref(),
-                self.session_token.as_deref(),
-                self.profile.as_deref(),
-            )
-            .map_err(|e| {
-                RemoteError::new_ex(
+            let Some(access_key) = self.access_key.as_ref() else {
+                return Err(RemoteError::new_ex(
                     RemoteErrorType::AuthenticationFailed,
-                    format!("Could not load s3 credentials: {}", e),
-                )
-            })
+                    "Access key not set",
+                ));
+            };
+            let Some(secret_key) = self.secret_key.as_ref() else {
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    "Secret key not set",
+                ));
+            };
+
+            Ok(RemoteFsCredentials::User(Credentials::new(
+                access_key,
+                secret_key,
+                self.session_token.clone(),
+                None,
+                "default",
+            )))
         }
     }
 
     /// Initialize region to be used from connection parameters
-    fn init_region(&self) -> RemoteResult<Region> {
-        match self.endpoint.as_deref() {
-            Some(endpoint) => Ok(Region::Custom {
-                region: self.region.as_deref().unwrap_or("").to_string(),
-                endpoint: endpoint.to_string(),
-            }),
-            None => Region::from_str(self.region.as_deref().unwrap_or("")).map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::AuthenticationFailed,
-                    format!("Could not parse s3 region: {}", e),
-                )
-            }),
-        }
+    fn init_region(&self) -> RemoteResult<RegionProviderChain> {
+        Ok(
+            RegionProviderChain::first_try(self.region.as_ref().cloned().map(Region::new))
+                .or_default_provider()
+                .or_else(Region::new("us-west-2")),
+        )
     }
 
     /// Make bucket based on current options
-    fn make_bucket(&self, region: Region, credentials: Credentials) -> RemoteResult<Bucket> {
-        (if self.new_path_style {
-            Bucket::new(self.bucket_name.as_str(), region, credentials)
-                .map(|bucket| bucket.with_path_style())
-        } else {
-            Bucket::new(self.bucket_name.as_str(), region, credentials)
-        })
-        .map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::AuthenticationFailed,
-                format!("Could not connect to bucket {}: {}", self.bucket_name, e),
-            )
-        })
+    fn make_client(
+        &self,
+        region: Option<Region>,
+        credentials: impl ProvideCredentials + 'static,
+    ) -> S3Client {
+        let mut builder = S3ClientBuilder::new()
+            .credentials_provider(credentials)
+            .behavior_version_latest()
+            .region(region);
+        builder.set_force_path_style(Some(self.new_path_style));
+
+        builder.set_endpoint_url(self.endpoint.clone());
+
+        S3Client::from_conf(builder.build())
     }
 }
 
@@ -309,26 +352,27 @@ impl RemoteFs for AwsS3Fs {
     fn connect(&mut self) -> RemoteResult<Welcome> {
         // Load credentials
         debug!("Loading credentials... (profile {:?})", self.profile);
-        let credentials = self.load_credentials()?;
+        let region_provider = self.init_region()?;
+        let region = self.runtime.block_on(region_provider.region());
+        let credentials = self.load_credentials(region_provider)?;
         // Parse region
         trace!(
             "Parsing region: {}; endpoint: {}",
             self.region.as_deref().unwrap_or("NULL"),
             self.endpoint.as_deref().unwrap_or("NULL")
         );
-        let region = self.init_region()?;
         debug!(
             "Credentials loaded! Connecting to bucket {}...",
             self.bucket_name
         );
-        self.bucket = Some(self.make_bucket(region, credentials)?);
+        self.client = Some(self.make_client(region, credentials));
         info!("Connection successfully established to s3 bucket");
         Ok(Welcome::default())
     }
 
     fn disconnect(&mut self) -> RemoteResult<()> {
         info!("Disconnecting from S3 bucket...");
-        match self.bucket.take() {
+        match self.client.take() {
             Some(bucket) => {
                 drop(bucket);
                 Ok(())
@@ -338,7 +382,7 @@ impl RemoteFs for AwsS3Fs {
     }
 
     fn is_connected(&mut self) -> bool {
-        self.bucket.is_some()
+        self.client.is_some()
     }
 
     fn pwd(&mut self) -> RemoteResult<PathBuf> {
@@ -409,17 +453,24 @@ impl RemoteFs for AwsS3Fs {
         self.check_connection()?;
         let path = Self::fmt_path(self.resolve(path).as_path(), true);
         debug!("Removing object {}...", path);
-        self.bucket
+        let fut = self
+            .client
             .as_ref()
             .unwrap()
-            .delete_object(path)
-            .map(|_| ())
+            .delete_object()
+            .bucket(self.bucket_name.as_str())
+            .key(path.as_str())
+            .send();
+
+        self.runtime
+            .block_on(fut)
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     format!("Could not remove file: {}", e),
                 )
             })
+            .map(|_| ())
     }
 
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
@@ -430,17 +481,21 @@ impl RemoteFs for AwsS3Fs {
         println!("{}", self.resolve(path).as_path().display());
         let path = Self::fmt_path(self.resolve(path).as_path(), true);
         debug!("Removing object {}...", path);
-        self.bucket
+        let fut = self
+            .client
             .as_ref()
             .unwrap()
-            .delete_object(path)
-            .map(|_| ())
-            .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not remove directory: {}", e),
-                )
-            })
+            .delete_object()
+            .bucket(self.bucket_name.as_str())
+            .key(path.as_str())
+            .send();
+
+        self.runtime.block_on(fut).map(|_| ()).map_err(|e| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not remove directory: {}", e),
+            )
+        })
     }
 
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
@@ -464,17 +519,21 @@ impl RemoteFs for AwsS3Fs {
             error!("Directory {} already exists", dir);
             return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
         }
-        self.bucket
+        let fut = self
+            .client
             .as_ref()
             .unwrap()
-            .put_object(dir.as_str(), &[])
-            .map(|_| ())
-            .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::FileCreateDenied,
-                    format!("Could not make directory: {}", e),
-                )
-            })
+            .put_object()
+            .bucket(self.bucket_name.as_str())
+            .key(dir.as_str())
+            .send();
+
+        self.runtime.block_on(fut).map(|_| ()).map_err(|e| {
+            RemoteError::new_ex(
+                RemoteErrorType::FileCreateDenied,
+                format!("Could not make directory: {}", e),
+            )
+        })
     }
 
     fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
@@ -508,24 +567,56 @@ impl RemoteFs for AwsS3Fs {
     fn create_file(
         &mut self,
         path: &Path,
-        metadata: &Metadata,
+        _metadata: &Metadata,
         mut reader: Box<dyn Read + Send>,
     ) -> RemoteResult<u64> {
         self.check_connection()?;
         let src = self.resolve(path);
         let key = Self::fmt_path(src.as_path(), false);
+
+        // we write 4096 bytes at a time
         debug!("Query PUT for key '{}'", key);
-        self.bucket
-            .as_ref()
-            .unwrap()
-            .put_object_stream(&mut reader, key.as_str())
-            .map_err(|e| {
+        let mut buf = vec![0; 4096];
+        let mut offset = 0;
+        loop {
+            let buflen = reader.read(&mut buf).map_err(|e| {
+                RemoteError::new_ex(
+                    RemoteErrorType::IoError,
+                    format!("Could not read file: {}", e),
+                )
+            })?;
+            if buflen == 0 {
+                break;
+            }
+
+            let bytestream = ByteStream::new(SdkBody::from(&buf[..buflen]));
+            debug!("sending PUT OBJECT for {key} at offset {offset} for {buflen} bytes");
+
+            let buflen = buflen as i64;
+
+            let fut = self
+                .client
+                .as_ref()
+                .unwrap()
+                .put_object()
+                .bucket(self.bucket_name.as_str())
+                .key(key.as_str())
+                .content_length(buflen)
+                .write_offset_bytes(offset)
+                .body(bytestream)
+                .send();
+
+            self.runtime.block_on(fut).map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     format!("Could not put file: {}", e),
                 )
-            })
-            .map(|_| metadata.size)
+            })?;
+
+            offset += buflen;
+        }
+
+        Ok(offset as u64)
     }
 
     fn open_file(
@@ -540,17 +631,45 @@ impl RemoteFs for AwsS3Fs {
         let src = self.resolve(src);
         let key = Self::fmt_path(src.as_path(), false);
         info!("Query GET for key '{}'", key);
-        self.bucket
+
+        let fut = self
+            .client
             .as_ref()
             .unwrap()
-            .get_object_to_writer(key.as_str(), &mut dest)
+            .get_object()
+            .bucket(self.bucket_name.as_str())
+            .key(key)
+            .send();
+
+        let mut data = self
+            .runtime
+            .block_on(fut)
             .map_err(|e| {
                 RemoteError::new_ex(
                     RemoteErrorType::ProtocolError,
                     format!("Could not get file: {}", e),
                 )
-            })
-            .map(|_| 0)
+            })?
+            .body;
+
+        let mut n = 0;
+
+        while let Some(bytes) = self.runtime.block_on(data.try_next()).map_err(|e| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not get file: {}", e),
+            )
+        })? {
+            dest.write_all(&bytes).map_err(|e| {
+                RemoteError::new_ex(
+                    RemoteErrorType::IoError,
+                    format!("Could not write file: {}", e),
+                )
+            })?;
+            n += bytes.len() as u64;
+        }
+
+        Ok(n)
     }
 }
 
@@ -571,26 +690,26 @@ mod test {
 
     #[test]
     fn should_init_s3() {
-        let s3 = AwsS3Fs::new("aws-s3-test");
+        let s3 = AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap()));
         assert_eq!(s3.wrkdir.as_path(), Path::new("/"));
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
         assert!(s3.region.is_none());
         assert!(s3.endpoint.is_none());
         assert_eq!(s3.is_anonymous(), true);
         assert_eq!(s3.new_path_style, false);
-        assert!(s3.bucket.is_none());
+        assert!(s3.client.is_none());
         assert!(s3.access_key.is_none());
         assert!(s3.profile.is_none());
         assert!(s3.secret_key.is_none());
         assert!(s3.security_token.is_none());
         assert!(s3.session_token.is_none());
         assert!(s3.secret_key.is_none());
-        assert!(s3.bucket.is_none());
+        assert!(s3.client.is_none());
     }
 
     #[test]
     fn should_init_s3_with_options() {
-        let s3 = AwsS3Fs::new("aws-s3-test")
+        let s3 = AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap()))
             .region("eu-central-1")
             .access_key("AKIA0000")
             .profile("default")
@@ -634,7 +753,7 @@ mod test {
 
     #[test]
     fn s3_resolve() {
-        let mut s3 = AwsS3Fs::new("aws-s3-test");
+        let mut s3 = AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap()));
         s3.wrkdir = PathBuf::from("/tmp");
         // Absolute
         assert_eq!(
@@ -937,7 +1056,7 @@ mod test {
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 0);
+        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
         finalize_client(client);
     }
 
@@ -1182,7 +1301,8 @@ mod test {
 
     #[test]
     fn should_return_errors_on_uninitialized_client() {
-        let mut client = AwsS3Fs::new("aws-s3-test").region("eu-central-1");
+        let mut client =
+            AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap())).region("eu-central-1");
         assert!(client.change_dir(Path::new("/tmp")).is_err());
         assert!(
             client
@@ -1230,14 +1350,14 @@ mod test {
 
     #[test]
     fn test_should_be_sync() {
-        let client = AwsS3Fs::new("bucket");
+        let client = AwsS3Fs::new("bucket", &Arc::new(Runtime::new().unwrap()));
 
         is_sync(client);
     }
 
     #[test]
     fn test_should_be_send() {
-        let client = AwsS3Fs::new("bucket");
+        let client = AwsS3Fs::new("bucket", &Arc::new(Runtime::new().unwrap()));
 
         is_send(client);
     }
@@ -1291,23 +1411,27 @@ mod test {
         let port = minio.port();
 
         // Get transfer
-        let mut client = AwsS3Fs::new("github-ci")
+        let runtime = Arc::new(Runtime::new().expect("Could not create runtime"));
+        let mut client = AwsS3Fs::new("github-ci", &runtime)
             .endpoint(format!("http://localhost:{port}"))
             .access_key("minioadmin")
             .secret_access_key("minioadmin")
             .new_path_style(true);
-        // Create bucket manually
-        assert!(
-            Bucket::create_with_path_style(
-                "github-ci",
-                client.init_region().ok().unwrap(),
-                client.load_credentials().ok().unwrap(),
-                s3::bucket_ops::BucketConfiguration::private()
-            )
-            .is_ok()
-        );
+
         // connect
         assert!(client.connect().is_ok());
+
+        // Create bucket manually
+        let fut = client
+            .client()
+            .unwrap()
+            .create_bucket()
+            .bucket("github-ci")
+            .send();
+        let res = runtime.block_on(fut);
+
+        assert!(res.is_ok());
+
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
         assert!(

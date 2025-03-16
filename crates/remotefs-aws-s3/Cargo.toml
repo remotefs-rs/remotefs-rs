@@ -15,13 +15,13 @@ rust-version = "1.85.0"
 version = "0.4.0"
 
 [dependencies]
-chrono = "^0.4"
+aws-config = "1"
+aws-credential-types = "1"
+aws-sdk-s3 = "1"
 log = "^0.4"
 remotefs = "^0.3"
-rust-s3 = { version = "^0.34.0-rc4", default-features = false, features = [
-  "sync",
-] }
 thiserror = "2"
+tokio = { version = "1", features = ["fs", "rt"] }
 
 [dev-dependencies]
 env_logger = "^0.11"
@@ -31,11 +31,7 @@ tempfile = "^3"
 testcontainers = { version = "0.23", features = ["blocking"] }
 
 [features]
-default = ["find", "native-tls"]
-# TLS
-native-tls = ["rust-s3/sync-native-tls"]
-native-tls-vendored = ["rust-s3/sync-native-tls-vendored"]
-rustls = ["rust-s3/sync-rustls-tls"]
+default = ["find"]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]

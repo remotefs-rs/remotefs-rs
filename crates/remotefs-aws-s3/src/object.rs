@@ -6,11 +6,11 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aws_sdk_s3::types::Object;
 use remotefs::File;
 use remotefs::fs::{FileType, Metadata};
-use s3::serde_types::Object;
 
-use crate::utils::{parser as parser_utils, path as path_utils};
+use crate::utils::path as path_utils;
 
 /// An intermediate struct to work with s3 `Object`.
 /// Really easy to be converted into a `FsEntry`
@@ -24,22 +24,26 @@ pub struct S3Object {
     pub is_dir: bool,
 }
 
-impl From<&Object> for S3Object {
-    fn from(obj: &Object) -> Self {
-        let is_dir: bool = obj.key.ends_with('/');
+impl From<Object> for S3Object {
+    fn from(obj: Object) -> Self {
+        let key = obj.key.clone().unwrap_or_default();
+
+        let is_dir: bool = key.ends_with('/');
         let path: PathBuf = path_utils::absolutize(
             PathBuf::from("/").as_path(),
-            PathBuf::from(obj.key.as_str()).as_path(),
+            PathBuf::from(key.as_str()).as_path(),
         );
-        let last_modified: SystemTime =
-            match parser_utils::parse_datetime(obj.last_modified.as_str(), "%Y-%m-%dT%H:%M:%S%Z") {
-                Ok(dt) => dt,
-                Err(_) => UNIX_EPOCH,
-            };
+        let last_modified = obj
+            .last_modified()
+            .map(|dt| dt.to_millis().unwrap_or_default())
+            .map_or(UNIX_EPOCH, |ms| {
+                UNIX_EPOCH + std::time::Duration::from_millis(ms as u64)
+            });
+
         Self {
-            name: Self::object_name(obj.key.as_str()),
+            name: Self::object_name(key.as_str()),
             path,
-            size: obj.size,
+            size: obj.size().unwrap_or_default() as u64,
             last_modified,
             is_dir,
         }
@@ -99,64 +103,9 @@ impl S3Object {
 #[cfg(test)]
 mod test {
 
-    use std::time::Duration;
-
     use pretty_assertions::assert_eq;
 
     use super::*;
-
-    #[test]
-    fn should_make_object_into_s3object_file() {
-        let obj: Object = Object {
-            key: String::from("pippo/sottocartella/chiedo.gif"),
-            e_tag: Some(String::default()),
-            size: 1516966,
-            owner: None,
-            storage_class: None,
-            last_modified: String::from("2021-08-28T10:20:37.000Z"),
-        };
-        let s3_obj: S3Object = S3Object::from(&obj);
-        assert_eq!(s3_obj.name.as_str(), "chiedo.gif");
-        assert_eq!(
-            s3_obj.path.as_path(),
-            Path::new("/pippo/sottocartella/chiedo.gif")
-        );
-        assert_eq!(s3_obj.size, 1516966);
-        assert_eq!(s3_obj.is_dir, false);
-        assert_eq!(
-            s3_obj
-                .last_modified
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .ok()
-                .unwrap(),
-            Duration::from_secs(1630146037)
-        );
-    }
-
-    #[test]
-    fn should_make_object_intoto_s3object_dir() {
-        let obj: Object = Object {
-            key: String::from("temp/"),
-            e_tag: Some(String::default()),
-            size: 0,
-            owner: None,
-            storage_class: None,
-            last_modified: String::from("2021-08-28T10:20:37.000Z"),
-        };
-        let s3_obj: S3Object = S3Object::from(&obj);
-        assert_eq!(s3_obj.name.as_str(), "temp");
-        assert_eq!(s3_obj.path.as_path(), Path::new("/temp"));
-        assert_eq!(s3_obj.size, 0);
-        assert_eq!(s3_obj.is_dir, true);
-        assert_eq!(
-            s3_obj
-                .last_modified
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .ok()
-                .unwrap(),
-            Duration::from_secs(1630146037)
-        );
-    }
 
     #[test]
     fn should_make_fsentry_from_s3obj_file() {

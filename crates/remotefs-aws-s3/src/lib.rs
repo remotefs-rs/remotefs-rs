@@ -10,8 +10,8 @@
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.3.0"
-//! remotefs-aws-s3 = "^0.3.0"
+//! remotefs = "^0.3"
+//! remotefs-aws-s3 = "^0.4"
 //! ```
 //!
 //! these features are supported:
@@ -27,7 +27,7 @@
 //! use remotefs_aws_s3::AwsS3Fs;
 //! use std::path::Path;
 //!
-//! let mut client = AwsS3Fs::new("test-bucket")
+//! let mut client = AwsS3Fs::new("test-bucket", &Arc::new(tokio::runtime::Runtime::new().unwrap()))
 //!     .region("eu-west-1")
 //!     .profile("default")
 //!     .access_key("AKIAxxxxxxxxxxxx")
@@ -49,7 +49,7 @@
 //! use remotefs_aws_s3::AwsS3Fs;
 //! use std::path::Path;
 //!
-//! let mut client = AwsS3Fs::new("test-bucket")
+//! let mut client = AwsS3Fs::new("test-bucket", &Arc::new(tokio::runtime::Runtime::new().unwrap()))
 //!     .endpoint("http://localhost:9000")
 //!     .new_path_style(true) // required for MinIO
 //!     .access_key("minioadmin")
