@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs Aws S3 client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.3.1 (07/10/2024)</p>
+<p align="center">Current version: 0.4.0 (16/03/2025)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -81,8 +81,8 @@ remotefs-aws-s3 is a client implementation for [remotefs](https://github.com/rem
 First of all, add `remotefs-aws-s3` to your project dependencies:
 
 ```toml
-remotefs = "0.3.0"
-remotefs-aws-s3 = "^0.3.0"
+remotefs = "0.3"
+remotefs-aws-s3 = "^0.4"
 ```
 
 these features are supported:
