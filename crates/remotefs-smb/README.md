@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.3.0 (30/09/2024)</p>
+<p align="center">Current version: 0.3.1 (20/03/2025)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -89,6 +89,7 @@ these features are supported:
 
 - `find`: enable `find()` method on client (*enabled by default*)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
+- `vendored`: build pavao with **vendored libsmbclient**
 
 ### Install dependencies (UNIX based only)
 
