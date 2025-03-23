@@ -186,6 +186,8 @@ impl AwsS3Fs {
         key: String,
         only_direct_children: bool,
     ) -> RemoteResult<Vec<S3Object>> {
+        debug!("query objects with prefix: '{key}'");
+
         let fut = self
             .client
             .as_ref()
@@ -453,8 +455,8 @@ impl RemoteFs for AwsS3Fs {
 
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
         self.check_connection()?;
-        let path = Self::fmt_path(self.resolve(path).as_path(), true);
-        debug!("Removing object {}...", path);
+        let path = Self::fmt_path(self.resolve(path).as_path(), false);
+        debug!("Removing object '{}'", path);
         let fut = self
             .client
             .as_ref()
@@ -1261,6 +1263,8 @@ mod test {
         metadata.size = file_data.len() as u64;
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         assert!(client.remove_file(p).is_ok());
+        // stat
+        assert!(client.stat(p).is_err());
         finalize_client(client);
     }
 
