@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
-use ssh2_config::{HostParams, ParseRule, SshConfig};
+use ssh2_config::{DefaultAlgorithms, HostParams, ParseRule, SshConfig};
 
 use super::SshOpts;
 
@@ -117,7 +117,7 @@ impl TryFrom<&SshOpts> for Config {
             let params = Self::parse(p, opts.host.as_str(), opts.parse_rules)?;
             Ok(Self::from_params(params, opts))
         } else {
-            let params = HostParams::default();
+            let params = HostParams::new(&DefaultAlgorithms::default());
             Ok(Self::from_params(params, opts))
         }
     }
@@ -140,7 +140,10 @@ mod test {
         assert_eq!(config.address.as_str(), "192.168.1.1:22");
         assert_eq!(config.host.as_str(), "192.168.1.1");
         assert!(config.username.is_empty());
-        assert_eq!(config.params, HostParams::default());
+        assert_eq!(
+            config.params,
+            HostParams::new(&DefaultAlgorithms::default())
+        );
     }
 
     #[test]
@@ -155,7 +158,10 @@ mod test {
         assert_eq!(config.host.as_str(), "192.168.1.1");
         assert_eq!(config.address.as_str(), "192.168.1.1:2222");
         assert_eq!(config.username.as_str(), "omar");
-        assert_eq!(config.params, HostParams::default());
+        assert_eq!(
+            config.params,
+            HostParams::new(&DefaultAlgorithms::default())
+        );
     }
 
     #[test]
@@ -169,7 +175,10 @@ mod test {
         assert_eq!(config.resolved_host.as_str(), "127.0.0.1");
         assert_eq!(config.address.as_str(), "127.0.0.1:22");
         assert_eq!(config.username.as_str(), "sftp");
-        assert_ne!(config.params, HostParams::default());
+        assert_ne!(
+            config.params,
+            HostParams::new(&DefaultAlgorithms::default())
+        );
     }
 
     #[test]
@@ -187,6 +196,9 @@ mod test {
         assert_eq!(config.resolved_host.as_str(), "127.0.0.1");
         assert_eq!(config.address.as_str(), "127.0.0.1:22");
         assert_eq!(config.username.as_str(), "omar");
-        assert_ne!(config.params, HostParams::default());
+        assert_ne!(
+            config.params,
+            HostParams::new(&DefaultAlgorithms::default())
+        );
     }
 }

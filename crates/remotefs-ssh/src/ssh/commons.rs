@@ -144,46 +144,47 @@ fn set_algo_prefs(session: &mut Session, opts: &SshOpts, config: &Config) -> Rem
         trace!("compression: {}", compress);
         session.set_compress(compress);
     }
-    if let Some(algos) = params.kex_algorithms.as_deref() {
-        let algos = algos.join(",");
-        trace!("Configuring KEX algorithms: {}", algos);
-        if let Err(err) = session.method_pref(SshMethodType::Kex, algos.as_str()) {
-            error!("Could not set KEX algorithms: {}", err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
+
+    // kex
+    let algos = params.kex_algorithms.algorithms().join(",");
+    trace!("Configuring KEX algorithms: {}", algos);
+    if let Err(err) = session.method_pref(SshMethodType::Kex, algos.as_str()) {
+        error!("Could not set KEX algorithms: {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
-    if let Some(algos) = params.host_key_algorithms.as_deref() {
-        let algos = algos.join(",");
-        trace!("Configuring HostKey algorithms: {}", algos);
-        if let Err(err) = session.method_pref(SshMethodType::HostKey, algos.as_str()) {
-            error!("Could not set host key algorithms: {}", err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
+
+    // HostKey
+    let algos = params.host_key_algorithms.algorithms().join(",");
+    trace!("Configuring HostKey algorithms: {}", algos);
+    if let Err(err) = session.method_pref(SshMethodType::HostKey, algos.as_str()) {
+        error!("Could not set host key algorithms: {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
-    if let Some(algos) = params.ciphers.as_deref() {
-        let algos = algos.join(",");
-        trace!("Configuring Crypt algorithms: {}", algos);
-        if let Err(err) = session.method_pref(SshMethodType::CryptCs, algos.as_str()) {
-            error!("Could not set crypt algorithms (client-server): {}", err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
-        if let Err(err) = session.method_pref(SshMethodType::CryptSc, algos.as_str()) {
-            error!("Could not set crypt algorithms (server-client): {}", err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
+
+    // ciphers
+    let algos = params.ciphers.algorithms().join(",");
+    trace!("Configuring Crypt algorithms: {}", algos);
+    if let Err(err) = session.method_pref(SshMethodType::CryptCs, algos.as_str()) {
+        error!("Could not set crypt algorithms (client-server): {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
-    if let Some(algos) = params.mac.as_deref() {
-        let algos = algos.join(",");
-        trace!("Configuring MAC algorithms: {}", algos);
-        if let Err(err) = session.method_pref(SshMethodType::MacCs, algos.as_str()) {
-            error!("Could not set MAC algorithms (client-server): {}", err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
-        if let Err(err) = session.method_pref(SshMethodType::MacSc, algos.as_str()) {
-            error!("Could not set MAC algorithms (server-client): {}", err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
+    if let Err(err) = session.method_pref(SshMethodType::CryptSc, algos.as_str()) {
+        error!("Could not set crypt algorithms (server-client): {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
+
+    // MAC
+    let algos = params.mac.algorithms().join(",");
+    trace!("Configuring MAC algorithms: {}", algos);
+    if let Err(err) = session.method_pref(SshMethodType::MacCs, algos.as_str()) {
+        error!("Could not set MAC algorithms (client-server): {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+    }
+    if let Err(err) = session.method_pref(SshMethodType::MacSc, algos.as_str()) {
+        error!("Could not set MAC algorithms (server-client): {}", err);
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+    }
+
     // -- configure algos from opts
     for method in opts.methods.iter() {
         let algos = method.prefs();
