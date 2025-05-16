@@ -21,7 +21,7 @@ use crate::utils::{fmt as fmt_utils, parser as parser_utils, path as path_utils}
 
 /// NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
 static LS_RE: Lazy<Regex> = lazy_regex!(
-    r#"^([\-ld])([\-rwxsStT]{9})\s+(\d+)\s+(.+)\s+(.+)\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(.+)$"#
+    r#"^(?<sym_dir>[\-ld])(?<pex>[\-rwxsStT]{9})(?<sec_ctx>\.|\+|\@)?\s+(?<n_links>\d+)\s+(?<uid>.+)\s+(?<gid>.+)\s+(?<size>\d+)\s+(?<date_time>\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(?<name>.+)$"#
 );
 
 /// SCP "filesystem" client
@@ -72,20 +72,21 @@ impl ScpFs {
                 }
                 // Collect metadata
                 // Get if is directory and if is symlink
-                let (is_dir, is_symlink): (bool, bool) = match metadata.get(1).unwrap().as_str() {
+
+                let (is_dir, is_symlink): (bool, bool) = match &metadata["sym_dir"] {
                     "-" => (false, false),
                     "l" => (false, true),
                     "d" => (true, false),
                     _ => return Err(()), // Ignore special files
                 };
                 // Check string length (unix pex)
-                if metadata.get(2).unwrap().as_str().len() < 9 {
+                if metadata["pex"].len() < 9 {
                     return Err(());
                 }
 
                 let pex = |range: Range<usize>| {
                     let mut count: u8 = 0;
-                    for (i, c) in metadata.get(2).unwrap().as_str()[range].chars().enumerate() {
+                    for (i, c) in metadata["pex"][range].chars().enumerate() {
                         match c {
                             '-' => {}
                             _ => {
@@ -110,7 +111,7 @@ impl ScpFs {
 
                 // Parse modified and convert to SystemTime
                 let modified: SystemTime = match parser_utils::parse_lstime(
-                    metadata.get(7).unwrap().as_str(),
+                    &metadata["date_time"],
                     "%b %d %Y",
                     "%b %d %H:%M",
                 ) {
@@ -118,26 +119,15 @@ impl ScpFs {
                     Err(_) => SystemTime::UNIX_EPOCH,
                 };
                 // Get uid
-                let uid: Option<u32> = match metadata.get(4).unwrap().as_str().parse::<u32>() {
-                    Ok(uid) => Some(uid),
-                    Err(_) => None,
-                };
+                let uid: Option<u32> = metadata["uid"].parse::<u32>().ok();
                 // Get gid
-                let gid: Option<u32> = match metadata.get(5).unwrap().as_str().parse::<u32>() {
-                    Ok(gid) => Some(gid),
-                    Err(_) => None,
-                };
+                let gid: Option<u32> = metadata["gid"].parse::<u32>().ok();
                 // Get filesize
-                let size = metadata
-                    .get(6)
-                    .unwrap()
-                    .as_str()
-                    .parse::<u64>()
-                    .unwrap_or(0);
+                let size = metadata["size"].parse::<u64>().unwrap_or(0);
                 // Get link and name
                 let (file_name, symlink): (String, Option<PathBuf>) = match is_symlink {
-                    true => self.get_name_and_link(metadata.get(8).unwrap().as_str()),
-                    false => (String::from(metadata.get(8).unwrap().as_str()), None),
+                    true => self.get_name_and_link(&metadata["name"]),
+                    false => (String::from(&metadata["name"]), None),
                 };
                 // Sanitize file name
                 let file_name = PathBuf::from(&file_name)
@@ -146,7 +136,6 @@ impl ScpFs {
                     .unwrap_or(file_name);
                 // Check if file_name is '.' or '..'
                 if file_name.as_str() == "." || file_name.as_str() == ".." {
-                    debug!("File name is {}; ignoring entry", file_name);
                     return Err(());
                 }
                 // Re-check if is directory
