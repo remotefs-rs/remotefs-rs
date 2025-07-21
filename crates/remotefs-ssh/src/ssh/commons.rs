@@ -15,6 +15,13 @@ use super::SshOpts;
 use super::config::Config;
 use crate::SshAgentIdentity;
 
+/// Authentication method
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Authentication {
+    RsaKey(PathBuf),
+    Password(String),
+}
+
 // -- connect
 
 /// Establish connection with remote server and in case of success, return the generated [`Session`]
@@ -96,30 +103,44 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
 
     // Authenticate with password or key
     if !session.authenticated() {
-        match opts.key_storage.as_ref().and_then(|x| {
+        let mut methods = vec![];
+        // first try with ssh agent
+        if let Some(rsa_key) = opts.key_storage.as_ref().and_then(|x| {
             x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
                 .or(x.resolve(
                     ssh_config.resolved_host.as_str(),
                     ssh_config.username.as_str(),
                 ))
         }) {
-            Some(rsa_key) => {
-                session_auth_with_rsakey(
-                    &mut session,
-                    &ssh_config.username,
-                    rsa_key.as_path(),
-                    opts.password.as_deref(),
-                    ssh_config.params.identity_file.as_deref(),
-                )?;
-            }
-            None => {
-                session_auth_with_password(
-                    &mut session,
-                    &ssh_config.username,
-                    opts.password.as_deref(),
-                )?;
+            methods.push(Authentication::RsaKey(rsa_key.clone()));
+        }
+        // then try with password
+        if let Some(password) = opts.password.as_ref() {
+            methods.push(Authentication::Password(password.clone()));
+        }
+
+        // try with methods
+        let mut last_err = None;
+        for auth_method in methods {
+            match session_auth(&mut session, opts, &ssh_config, auth_method) {
+                Ok(_) => {
+                    info!("Authenticated successfully");
+                    return Ok(session);
+                }
+                Err(err) => {
+                    error!("Authentication failed: {err}",);
+                    last_err = Some(err);
+                }
             }
         }
+
+        return Err(match last_err {
+            Some(err) => err,
+            None => RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                "no authentication method provided",
+            ),
+        });
     }
     // Return session
     Ok(session)
@@ -282,15 +303,36 @@ fn session_auth_with_rsakey(
     ))
 }
 
+/// Authenticate on session with the provided [`Authentication`] method.
+fn session_auth(
+    session: &mut Session,
+    opts: &SshOpts,
+    ssh_config: &Config,
+    authentication: Authentication,
+) -> RemoteResult<()> {
+    match authentication {
+        Authentication::RsaKey(private_key) => session_auth_with_rsakey(
+            session,
+            &ssh_config.username,
+            private_key.as_path(),
+            opts.password.as_deref(),
+            ssh_config.params.identity_file.as_deref(),
+        ),
+        Authentication::Password(password) => {
+            session_auth_with_password(session, &ssh_config.username, &password)
+        }
+    }
+}
+
 /// Authenticate on session with username and password
 fn session_auth_with_password(
     session: &mut Session,
     username: &str,
-    password: Option<&str>,
+    password: &str,
 ) -> RemoteResult<()> {
     // Username / password
     debug!("Authenticating with username '{}' and password", username);
-    if let Err(err) = session.userauth_password(username, password.unwrap_or("")) {
+    if let Err(err) = session.userauth_password(username, password) {
         error!("Authentication failed: {}", err);
         Err(RemoteError::new_ex(
             RemoteErrorType::AuthenticationFailed,

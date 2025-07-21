@@ -386,7 +386,7 @@ impl RemoteFs for SftpFs {
             .unwrap()
             .rename(src.as_path(), dest.as_path(), Some(RenameFlags::OVERWRITE))
             .map_err(|e| {
-                error!("Move failed: {}", e);
+                error!("Move failed: {e}",);
                 RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
             })
     }
@@ -415,7 +415,7 @@ impl RemoteFs for SftpFs {
             .map(SftpWriteStream::from)
             .map(WriteStream::from)
             .map_err(|e| {
-                error!("Append failed: {}", e);
+                error!("Append failed: {e}",);
                 RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
             })
         } else {
@@ -437,7 +437,7 @@ impl RemoteFs for SftpFs {
             .map(SftpWriteStream::from)
             .map(WriteStream::from)
             .map_err(|e| {
-                error!("Create failed: {}", e);
+                error!("Create failed: {e}",);
                 RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
             })
         } else {
@@ -460,7 +460,7 @@ impl RemoteFs for SftpFs {
             .map(SftpReadStream::from)
             .map(ReadStream::from)
             .map_err(|e| {
-                error!("Open failed: {}", e);
+                error!("Open failed: {e}",);
                 RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
             })
     }
@@ -481,20 +481,20 @@ impl RemoteFs for SftpFs {
             while bytes < transfer_size {
                 let mut buffer: [u8; 65535] = [0; 65535];
                 let bytes_read = reader.read(&mut buffer).map_err(|e| {
-                    error!("Failed to read from file: {}", e);
+                    error!("Failed to read from file: {e}",);
                     RemoteError::new_ex(RemoteErrorType::IoError, e)
                 })?;
                 let mut delta = 0;
                 while delta < bytes_read {
                     delta += stream.write(&buffer[delta..bytes_read]).map_err(|e| {
-                        error!("Failed to write to stream: {}", e);
+                        error!("Failed to write to stream: {e}",);
                         RemoteError::new_ex(RemoteErrorType::IoError, e)
                     })?;
                 }
                 bytes += bytes_read;
             }
             self.on_written(stream)?;
-            trace!("Written {} bytes to destination", bytes);
+            trace!("Written {bytes} bytes to destination",);
             Ok(bytes as u64)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -515,20 +515,20 @@ impl RemoteFs for SftpFs {
             while bytes < transfer_size {
                 let mut buffer: [u8; 65535] = [0; 65535];
                 let bytes_read = reader.read(&mut buffer).map_err(|e| {
-                    error!("Failed to read from file: {}", e);
+                    error!("Failed to read from file: {e}",);
                     RemoteError::new_ex(RemoteErrorType::IoError, e)
                 })?;
                 let mut delta = 0;
                 while delta < bytes_read {
                     delta += stream.write(&buffer[delta..bytes_read]).map_err(|e| {
-                        error!("Failed to write to stream: {}", e);
+                        error!("Failed to write to stream: {e}",);
                         RemoteError::new_ex(RemoteErrorType::IoError, e)
                     })?;
                 }
                 bytes += bytes_read;
             }
             self.on_written(stream)?;
-            trace!("Written {} bytes to destination", bytes);
+            trace!("Written {bytes} bytes to destination",);
             Ok(bytes as u64)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -544,20 +544,20 @@ impl RemoteFs for SftpFs {
             while bytes < transfer_size {
                 let mut buffer: [u8; 65535] = [0; 65535];
                 let bytes_read = stream.read(&mut buffer).map_err(|e| {
-                    error!("Failed to read from stream: {}", e);
+                    error!("Failed to read from stream: {e}");
                     RemoteError::new_ex(RemoteErrorType::IoError, e)
                 })?;
                 let mut delta = 0;
                 while delta < bytes_read {
                     delta += dest.write(&buffer[delta..bytes_read]).map_err(|e| {
-                        error!("Failed to write to file: {}", e);
+                        error!("Failed to write to file: {e}",);
                         RemoteError::new_ex(RemoteErrorType::IoError, e)
                     })?;
                 }
                 bytes += bytes_read;
             }
             self.on_read(stream)?;
-            trace!("Copied {} bytes to destination", bytes);
+            trace!("Copied {bytes} bytes to destination",);
             Ok(bytes as u64)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
