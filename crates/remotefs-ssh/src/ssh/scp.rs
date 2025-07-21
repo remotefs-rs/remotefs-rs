@@ -60,7 +60,7 @@ impl ScpFs {
     /// Parse a line of `ls -l` output and tokenize the output into a `FsFile`
     fn parse_ls_output(&self, path: &Path, line: &str) -> Result<File, ()> {
         // Prepare list regex
-        trace!("Parsing LS line: '{}'", line);
+        trace!("Parsing LS line: '{line}'");
         // Apply regex to result
         match LS_RE.captures(line) {
             // String matches regex
@@ -554,7 +554,7 @@ impl RemoteFs for ScpFs {
 
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
         self.check_connection()?;
-        debug!(r#"Executing command "{}""#, cmd);
+        debug!(r#"Executing command "{cmd}""#);
         commons::perform_shell_cmd_at_with_rc(
             self.session.as_mut().unwrap(),
             cmd,
@@ -588,10 +588,7 @@ impl RemoteFs for ScpFs {
             .ok()
             .unwrap_or(Duration::ZERO)
             .as_secs();
-        trace!(
-            "Creating file with mode {:o}, accessed: {}, modified: {}",
-            mode, accessed, modified
-        );
+        trace!("Creating file with mode {mode:o}, accessed: {accessed}, modified: {modified}");
         match self.session.as_mut().unwrap().scp_send(
             path.as_path(),
             mode,
@@ -600,7 +597,7 @@ impl RemoteFs for ScpFs {
         ) {
             Ok(channel) => Ok(WriteStream::from(Box::new(channel) as Box<dyn Write + Send>)),
             Err(err) => {
-                error!("Failed to create file: {}", err);
+                error!("Failed to create file: {err}");
                 Err(RemoteError::new_ex(RemoteErrorType::FileCreateDenied, err))
             }
         }
@@ -619,7 +616,7 @@ impl RemoteFs for ScpFs {
         match self.session.as_mut().unwrap().scp_recv(path.as_path()) {
             Ok((channel, _)) => Ok(ReadStream::from(Box::new(channel) as Box<dyn Read + Send>)),
             Err(err) => {
-                error!("Failed to open file: {}", err);
+                error!("Failed to open file: {err}");
                 Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err))
             }
         }
@@ -924,7 +921,7 @@ mod test {
             .list_dir(wrkdir.as_path())
             .ok()
             .unwrap()
-            .get(0)
+            .first()
             .unwrap()
             .clone();
         assert_eq!(file.name().as_str(), "a.txt");
@@ -1597,6 +1594,6 @@ mod test {
             .map(char::from)
             .take(8)
             .collect();
-        format!("/tmp/temp_{}", name)
+        format!("/tmp/temp_{name}")
     }
 }

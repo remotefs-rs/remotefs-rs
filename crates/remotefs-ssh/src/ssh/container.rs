@@ -50,7 +50,7 @@ pub struct OpensshServer {
 impl OpensshServer {
     pub fn start() -> Self {
         use testcontainers::runners::SyncRunner;
-        let container = OpensshServerImage::default()
+        let container = OpensshServerImage
             .start()
             .expect("Failed to start container");
 

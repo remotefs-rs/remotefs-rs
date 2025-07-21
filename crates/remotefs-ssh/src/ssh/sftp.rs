@@ -64,7 +64,7 @@ impl SftpFs {
             None => "/".to_string(),
             Some(name) => name.to_string_lossy().to_string(),
         };
-        debug!("Found file {}", name);
+        debug!("Found file {name}");
         // parse metadata
         let uid = metadata.uid;
         let gid = metadata.gid;
@@ -150,7 +150,7 @@ impl RemoteFs for SftpFs {
         let sftp = match session.sftp() {
             Ok(s) => s,
             Err(err) => {
-                error!("Could not get sftp client: {}", err);
+                error!("Could not get sftp client: {err}");
                 return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
             }
         };
@@ -242,7 +242,7 @@ impl RemoteFs for SftpFs {
             sftp.stat(path.as_path())
                 .map(|x| self.make_fsentry(path.as_path(), &x))
                 .map_err(|e| {
-                    error!("Stat failed: {}", e);
+                    error!("Stat failed: {e}");
                     RemoteError::new_ex(RemoteErrorType::NoSuchFileOrDirectory, e)
                 })
         } else {
@@ -257,7 +257,7 @@ impl RemoteFs for SftpFs {
             sftp.setstat(path.as_path(), Self::metadata_to_filestat(metadata))
                 .map(|_| ())
                 .map_err(|e| {
-                    error!("Setstat failed: {}", e);
+                    error!("Setstat failed: {e}");
                     RemoteError::new_ex(RemoteErrorType::StatFailed, e)
                 })
         } else {
@@ -281,7 +281,7 @@ impl RemoteFs for SftpFs {
             let path = path_utils::absolutize(self.wrkdir.as_path(), path);
             debug!("Remove file {}", path.display());
             sftp.unlink(path.as_path()).map_err(|e| {
-                error!("Remove failed: {}", e);
+                error!("Remove failed: {e}");
                 RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
             })
         } else {
@@ -294,7 +294,7 @@ impl RemoteFs for SftpFs {
             let path = path_utils::absolutize(self.wrkdir.as_path(), path);
             debug!("Remove dir {}", path.display());
             sftp.rmdir(path.as_path()).map_err(|e| {
-                error!("Remove failed: {}", e);
+                error!("Remove failed: {e}");
                 RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
             })
         } else {
@@ -320,7 +320,7 @@ impl RemoteFs for SftpFs {
             .unwrap()
             .mkdir(path.as_path(), u32::from(mode) as i32)
             .map_err(|e| {
-                error!("Create dir failed: {}", e);
+                error!("Create dir failed: {e}");
                 RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
             })
     }
@@ -343,7 +343,7 @@ impl RemoteFs for SftpFs {
             .unwrap()
             .symlink(target, path.as_path())
             .map_err(|e| {
-                error!("Symlink failed: {}", e);
+                error!("Symlink failed: {e}");
                 RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
             })
     }
@@ -393,7 +393,7 @@ impl RemoteFs for SftpFs {
 
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
         self.check_connection()?;
-        debug!(r#"Executing command "{}""#, cmd);
+        debug!(r#"Executing command "{cmd}""#);
         commons::perform_shell_cmd_at_with_rc(
             self.session.as_mut().unwrap(),
             cmd,
@@ -875,7 +875,7 @@ mod test {
             .list_dir(wrkdir.as_path())
             .ok()
             .unwrap()
-            .get(0)
+            .first()
             .unwrap()
             .clone();
         assert_eq!(file.name().as_str(), "a.txt");
@@ -1404,6 +1404,6 @@ mod test {
             .map(char::from)
             .take(8)
             .collect();
-        format!("/tmp/temp_{}", name)
+        format!("/tmp/temp_{name}")
     }
 }

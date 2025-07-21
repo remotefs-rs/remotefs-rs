@@ -49,7 +49,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
                 ssh_config.connection_timeout.as_secs()
             );
             if let Ok(tcp_stream) = tcp_connect(socket_addr, ssh_config.connection_timeout) {
-                debug!("Connection established with address {}", socket_addr);
+                debug!("Connection established with address {socket_addr}");
                 stream = Some(tcp_stream);
                 break;
             }
@@ -74,7 +74,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     let mut session = match Session::new() {
         Ok(s) => s,
         Err(err) => {
-            error!("Could not create session: {}", err);
+            error!("Could not create session: {err}");
             return Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, err));
         }
     };
@@ -84,7 +84,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
     set_algo_prefs(&mut session, opts, &ssh_config)?;
     // Open connection and initialize handshake
     if let Err(err) = session.handshake() {
-        error!("SSH handshake failed: {}", err);
+        error!("SSH handshake failed: {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
 
@@ -96,7 +96,7 @@ pub fn connect(opts: &SshOpts) -> RemoteResult<Session> {
                 return Ok(session);
             }
             Err(err) => {
-                error!("Could not authenticate with ssh agent: {}", err);
+                error!("Could not authenticate with ssh agent: {err}");
             }
         }
     }
@@ -162,47 +162,47 @@ fn set_algo_prefs(session: &mut Session, opts: &SshOpts, config: &Config) -> Rem
     let params = &config.params;
     trace!("Configuring algorithm preferences...");
     if let Some(compress) = params.compression {
-        trace!("compression: {}", compress);
+        trace!("compression: {compress}");
         session.set_compress(compress);
     }
 
     // kex
     let algos = params.kex_algorithms.algorithms().join(",");
-    trace!("Configuring KEX algorithms: {}", algos);
+    trace!("Configuring KEX algorithms: {algos}");
     if let Err(err) = session.method_pref(SshMethodType::Kex, algos.as_str()) {
-        error!("Could not set KEX algorithms: {}", err);
+        error!("Could not set KEX algorithms: {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
 
     // HostKey
     let algos = params.host_key_algorithms.algorithms().join(",");
-    trace!("Configuring HostKey algorithms: {}", algos);
+    trace!("Configuring HostKey algorithms: {algos}");
     if let Err(err) = session.method_pref(SshMethodType::HostKey, algos.as_str()) {
-        error!("Could not set host key algorithms: {}", err);
+        error!("Could not set host key algorithms: {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
 
     // ciphers
     let algos = params.ciphers.algorithms().join(",");
-    trace!("Configuring Crypt algorithms: {}", algos);
+    trace!("Configuring Crypt algorithms: {algos}");
     if let Err(err) = session.method_pref(SshMethodType::CryptCs, algos.as_str()) {
-        error!("Could not set crypt algorithms (client-server): {}", err);
+        error!("Could not set crypt algorithms (client-server): {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
     if let Err(err) = session.method_pref(SshMethodType::CryptSc, algos.as_str()) {
-        error!("Could not set crypt algorithms (server-client): {}", err);
+        error!("Could not set crypt algorithms (server-client): {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
 
     // MAC
     let algos = params.mac.algorithms().join(",");
-    trace!("Configuring MAC algorithms: {}", algos);
+    trace!("Configuring MAC algorithms: {algos}");
     if let Err(err) = session.method_pref(SshMethodType::MacCs, algos.as_str()) {
-        error!("Could not set MAC algorithms (client-server): {}", err);
+        error!("Could not set MAC algorithms (client-server): {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
     if let Err(err) = session.method_pref(SshMethodType::MacSc, algos.as_str()) {
-        error!("Could not set MAC algorithms (server-client): {}", err);
+        error!("Could not set MAC algorithms (server-client): {err}");
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
 
@@ -278,7 +278,7 @@ fn session_auth_with_rsakey(
     password: Option<&str>,
     identity_file: Option<&[PathBuf]>,
 ) -> RemoteResult<()> {
-    debug!("Authenticating with username '{}' and RSA key", username);
+    debug!("Authenticating with username '{username}' and RSA key");
     let mut keys = vec![private_key];
     if let Some(identity_file) = identity_file {
         let other_keys: Vec<&Path> = identity_file.iter().map(|x| x.as_path()).collect();
@@ -293,7 +293,7 @@ fn session_auth_with_rsakey(
                 return Ok(());
             }
             Err(err) => {
-                error!("Authentication failed: {}", err);
+                error!("Authentication failed: {err}");
             }
         }
     }
@@ -331,9 +331,9 @@ fn session_auth_with_password(
     password: &str,
 ) -> RemoteResult<()> {
     // Username / password
-    debug!("Authenticating with username '{}' and password", username);
+    debug!("Authenticating with username '{username}' and password");
     if let Err(err) = session.userauth_password(username, password) {
-        error!("Authentication failed: {}", err);
+        error!("Authentication failed: {err}");
         Err(RemoteError::new_ex(
             RemoteErrorType::AuthenticationFailed,
             err,
@@ -371,7 +371,7 @@ pub fn perform_shell_cmd<S: AsRef<str>>(session: &mut Session, cmd: S) -> Remote
         Ok(_) => {
             // Wait close
             let _ = channel.wait_close();
-            trace!("Command output: {}", output);
+            trace!("Command output: {output}");
             Ok(output)
         }
         Err(err) => Err(RemoteError::new_ex(
@@ -397,9 +397,9 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
 ) -> RemoteResult<(u32, String)> {
     let output = perform_shell_cmd(session, format!("{}; echo $?", cmd.as_ref()))?;
     if let Some(index) = output.trim().rfind('\n') {
-        trace!("Read from stdout: '{}'", output);
+        trace!("Read from stdout: '{output}'");
         let actual_output = (output[0..index + 1]).to_string();
-        trace!("Actual output '{}'", actual_output);
+        trace!("Actual output '{actual_output}'");
         trace!("Parsing return code '{}'", output[index..].trim());
         let rc = match u32::from_str(output[index..].trim()).ok() {
             Some(val) => val,
@@ -410,7 +410,7 @@ pub fn perform_shell_cmd_with_rc<S: AsRef<str>>(
                 ));
             }
         };
-        debug!(r#"Command output: "{}"; exit code: {}"#, actual_output, rc);
+        debug!(r#"Command output: "{actual_output}"; exit code: {rc}"#);
         Ok((rc, actual_output))
     } else {
         match u32::from_str(output.trim()).ok() {
@@ -446,7 +446,7 @@ mod test {
             .password("password");
 
         if let Err(err) = connect(&opts) {
-            panic!("Could not connect to server: {}", err);
+            panic!("Could not connect to server: {err}");
         }
         let session = connect(&opts).unwrap();
         assert!(session.authenticated());
