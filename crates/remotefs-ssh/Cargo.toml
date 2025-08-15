@@ -10,7 +10,7 @@ license = "MIT"
 name = "remotefs-ssh"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-ssh"
-version = "0.6.3"
+version = "0.6.4"
 rust-version = "1.85.1"
 
 [dependencies]
@@ -18,7 +18,7 @@ chrono = "^0.4"
 lazy-regex = "3"
 log = "^0.4"
 remotefs = "^0.3"
-ssh2-config = "^0.5"
+ssh2-config = "^0.6"
 ssh2 = "^0.9"
 
 [dev-dependencies]
@@ -26,7 +26,7 @@ env_logger = "^0.11"
 pretty_assertions = "^1"
 rand = "^0.9"
 tempfile = "^3"
-testcontainers = { version = "0.24", features = ["blocking"] }
+testcontainers = { version = "0.25", features = ["blocking"] }
 
 [features]
 default = ["find"]
