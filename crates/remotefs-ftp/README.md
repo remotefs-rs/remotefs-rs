@@ -48,11 +48,6 @@
   /></a>
   <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-ftp/workflows/MacOS/badge.svg"
-      alt="MacOS CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/actions"
-    ><img
       src="https://github.com/remotefs-rs/remotefs-rs-ftp/workflows/Windows/badge.svg"
       alt="Windows CI"
   /></a>
