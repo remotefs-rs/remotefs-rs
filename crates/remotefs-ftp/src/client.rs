@@ -10,7 +10,9 @@ use remotefs::fs::{
     UnixPexClass, Welcome, WriteStream,
 };
 use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use suppaftp::FtpResult;
 #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
 pub use suppaftp::FtpStream;
 #[cfg(feature = "native-tls")]
@@ -31,6 +33,11 @@ use suppaftp::{
     types::{FileType as SuppaFtpFileType, Mode, Response},
 };
 
+/// A function that creates a new stream for the data connection in passive mode.
+///
+/// It takes a [`SocketAddr`] and returns a [`TcpStream`].
+pub type PassiveStreamBuilder = dyn Fn(SocketAddr) -> FtpResult<TcpStream> + Send + Sync;
+
 /// Ftp file system client
 pub struct FtpFs {
     /// Client
@@ -41,6 +48,8 @@ pub struct FtpFs {
     /// Username to login as; default: `anonymous`
     username: String,
     password: Option<String>,
+    /// passive stream builder
+    passive_stream_builder: Option<Box<PassiveStreamBuilder>>,
     /// Client mode; default: `Mode::Passive`
     mode: Mode,
     #[cfg(any(feature = "native-tls", feature = "rustls"))]
@@ -64,6 +73,7 @@ impl FtpFs {
             username: String::from("anonymous"),
             password: None,
             mode: Mode::Passive,
+            passive_stream_builder: None,
             #[cfg(any(feature = "native-tls", feature = "rustls"))]
             secure: false,
             #[cfg(feature = "native-tls")]
@@ -111,6 +121,18 @@ impl FtpFs {
     #[cfg(feature = "rustls")]
     pub fn secure(mut self) -> Self {
         self.secure = true;
+        self
+    }
+
+    /// Set a custom [`PassiveStreamBuilder`] for passive mode.
+    ///
+    /// The stream builder is a function that takes a `SocketAddr` and returns a `TcpStream` and it's used
+    /// to create the [`TcpStream`] for the data connection in passive mode.
+    pub fn passive_stream_builder<F>(mut self, builder: F) -> Self
+    where
+        F: Fn(SocketAddr) -> FtpResult<TcpStream> + Send + Sync + 'static,
+    {
+        self.passive_stream_builder = Some(Box::new(builder));
         self
     }
 
@@ -241,6 +263,13 @@ impl RemoteFs for FtpFs {
                 error!("Failed to connect to remote server: {}", e);
                 RemoteError::new_ex(RemoteErrorType::ConnectionError, e)
             })?;
+
+        // if provided, set passive stream builder
+        if let Some(builder) = self.passive_stream_builder.take() {
+            debug!("Setting up a custom passive stream builder");
+            stream = stream.passive_stream_builder(builder);
+        };
+
         // If secure, connect TLS
         #[cfg(any(feature = "native-tls", feature = "rustls"))]
         if self.secure {
@@ -526,13 +555,13 @@ impl RemoteFs for FtpFs {
 #[cfg(test)]
 mod test {
 
+    use crate::test_container::SyncPureFtpRunner;
+
     use super::*;
 
     use pretty_assertions::assert_eq;
-    #[cfg(feature = "with-containers")]
-    use serial_test::serial;
-    #[cfg(feature = "with-containers")]
-    use std::io::Cursor;
+
+    use std::{io::Cursor, sync::Arc};
 
     #[test]
     fn should_initialize_ftp_filesystem() {
@@ -597,577 +626,479 @@ mod test {
     }
 
     #[test]
-    #[ignore]
-    #[cfg(feature = "native-tls")]
-    fn should_connect_with_ftps() {
-        let mut client = FtpFs::new("test.rebex.net", 21)
-            .username("demo")
-            .password("password")
-            .secure(false, false)
-            .passive_mode();
-        assert!(client.connect().is_ok());
-        assert!(client.disconnect().is_ok());
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_append_to_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert_eq!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .ok()
-                .unwrap(),
-            10
-        );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert_eq!(
-            client
-                .append_file(p, &Metadata::default(), Box::new(reader))
-                .ok()
-                .unwrap(),
-            14
-        );
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert_eq!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .ok()
+                    .unwrap(),
+                10
+            );
+            // Verify size
+            assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
+            // Append to file
+            let file_data = "Hello, world!\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert_eq!(
+                client
+                    .append_file(p, &Metadata::default(), Box::new(reader))
+                    .ok()
+                    .unwrap(),
+                14
+            );
+            assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_append_to_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .append_file(p, &Metadata::default(), Box::new(reader))
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
+            // Append to file
+            let file_data = "Hello, world!\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .append_file(p, &Metadata::default(), Box::new(reader))
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_change_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        let pwd = client.pwd().ok().unwrap();
-        assert!(client.change_dir(Path::new("/")).is_ok());
-        assert!(client.change_dir(pwd.as_path()).is_ok());
-        finalize_client(client);
+        with_client(|client| {
+            let pwd = client.pwd().ok().unwrap();
+            assert!(client.change_dir(Path::new("/")).is_ok());
+            assert!(client.change_dir(pwd.as_path()).is_ok());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_change_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        assert!(
-            client
-                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            assert!(
+                client
+                    .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_copy_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client.copy(Path::new("a.txt"), Path::new("b.txt")).is_err());
-        finalize_client(client);
+        with_client(|client| {
+            assert!(client.copy(Path::new("a.txt"), Path::new("b.txt")).is_err());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_create_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // create directory
+            assert!(
+                client
+                    .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                    .is_ok()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_create_directory_cause_already_exists() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        assert_eq!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .err()
-                .unwrap()
-                .kind,
-            RemoteErrorType::DirectoryAlreadyExists
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // create directory
+            assert!(
+                client
+                    .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                    .is_ok()
+            );
+            assert_eq!(
+                client
+                    .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                    .err()
+                    .unwrap()
+                    .kind,
+                RemoteErrorType::DirectoryAlreadyExists
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_create_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(
-                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                    UnixPex::from(0o755)
-                )
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // create directory
+            assert!(
+                client
+                    .create_dir(
+                        Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                        UnixPex::from(0o755)
+                    )
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_create_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert_eq!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .ok()
-                .unwrap(),
-            10
-        );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert_eq!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .ok()
+                    .unwrap(),
+                10
+            );
+            // Verify size
+            assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_create_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_exec_command() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        assert!(client.exec("echo 5").is_err());
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            assert!(client.exec("echo 5").is_err());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_tell_whether_file_exists() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Verify size
-        assert_eq!(client.exists(p).ok().unwrap(), true);
-        assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
-        assert_eq!(
-            client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
-            false
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Verify size
+            assert_eq!(client.exists(p).ok().unwrap(), true);
+            assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
+            assert_eq!(
+                client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
+                false
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_list_dir() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let wrkdir = client.pwd().ok().unwrap();
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Verify size
-        let file = client
-            .list_dir(wrkdir.as_path())
-            .ok()
-            .unwrap()
-            .get(0)
-            .unwrap()
-            .clone();
-        assert_eq!(file.name().as_str(), "a.txt");
-        let mut expected_path = wrkdir;
-        expected_path.push(p);
-        assert_eq!(file.path.as_path(), expected_path.as_path());
-        assert_eq!(file.extension().as_deref().unwrap(), "txt");
-        assert!(file.is_file());
-        assert_eq!(file.metadata.size, 10);
-        assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let wrkdir = client.pwd().ok().unwrap();
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Verify size
+            let file = client
+                .list_dir(wrkdir.as_path())
+                .ok()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .clone();
+            assert_eq!(file.name().as_str(), "a.txt");
+            let mut expected_path = wrkdir;
+            expected_path.push(p);
+            assert_eq!(file.path.as_path(), expected_path.as_path());
+            assert_eq!(file.extension().as_deref().unwrap(), "txt");
+            assert!(file.is_file());
+            assert_eq!(file.metadata.size, 10);
+            assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_move_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Verify size
-        let dest = Path::new("b.txt");
-        assert!(client.mov(p, dest).is_ok());
-        assert_eq!(client.exists(p).ok().unwrap(), false);
-        assert_eq!(client.exists(dest).ok().unwrap(), true);
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Verify size
+            let dest = Path::new("b.txt");
+            assert!(client.mov(p, dest).is_ok());
+            assert_eq!(client.exists(p).ok().unwrap(), false);
+            assert_eq!(client.exists(dest).ok().unwrap(), true);
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_move_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Verify size
-        let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
-        assert!(client.mov(p, dest).is_err());
-        assert!(
-            client
-                .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Verify size
+            let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
+            assert!(client.mov(p, dest).is_err());
+            assert!(
+                client
+                    .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_open_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client.open_file(p, buffer).is_ok());
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Verify size
+            let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
+            assert!(client.open_file(p, buffer).is_ok());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_open_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(
-            client
-                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Verify size
+            let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
+            assert!(
+                client
+                    .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_print_working_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client.pwd().is_ok());
-        finalize_client(client);
+        with_client(|client| {
+            assert!(client.pwd().is_ok());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_remove_dir_all() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Remove dir
-        assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-        finalize_client(client);
+        with_client(|client| {
+            // Create dir
+            let mut dir_path = client.pwd().ok().unwrap();
+            dir_path.push(Path::new("test/"));
+            assert!(
+                client
+                    .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                    .is_ok()
+            );
+            // Create file
+            let mut file_path = dir_path.clone();
+            file_path.push(Path::new("a.txt"));
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Remove dir
+            assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_remove_dir_all() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Remove dir
-        assert!(
-            client
-                .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Remove dir
+            assert!(
+                client
+                    .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_remove_dir() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        assert!(client.remove_dir(dir_path.as_path()).is_ok());
-        finalize_client(client);
+        with_client(|client| {
+            // Create dir
+            let mut dir_path = client.pwd().ok().unwrap();
+            dir_path.push(Path::new("test/"));
+            assert!(
+                client
+                    .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                    .is_ok()
+            );
+            assert!(client.remove_dir(dir_path.as_path()).is_ok());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_remove_dir() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        // Remove dir
-        assert!(client.remove_dir(dir_path.as_path()).is_err());
-        finalize_client(client);
+        with_client(|client| {
+            // Create dir
+            let mut dir_path = client.pwd().ok().unwrap();
+            dir_path.push(Path::new("test/"));
+            assert!(
+                client
+                    .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                    .is_ok()
+            );
+            // Create file
+            let mut file_path = dir_path.clone();
+            file_path.push(Path::new("a.txt"));
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // Remove dir
+            assert!(client.remove_dir(dir_path.as_path()).is_err());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_remove_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        assert!(client.remove_file(p).is_ok());
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            assert!(client.remove_file(p).is_ok());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_setstat_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        assert!(
-            client
-                .setstat(
-                    p,
-                    Metadata {
-                        accessed: None,
-                        created: None,
-                        gid: Some(1),
-                        file_type: FileType::File,
-                        mode: Some(UnixPex::from(0o755)),
-                        modified: None,
-                        size: 7,
-                        symlink: None,
-                        uid: Some(1),
-                    }
-                )
-                .is_err()
-        );
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.sh");
+            assert!(
+                client
+                    .setstat(
+                        p,
+                        Metadata {
+                            accessed: None,
+                            created: None,
+                            gid: Some(1),
+                            file_type: FileType::File,
+                            mode: Some(UnixPex::from(0o755)),
+                            modified: None,
+                            size: 7,
+                            symlink: None,
+                            uid: Some(1),
+                        }
+                    )
+                    .is_err()
+            );
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_stat_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
-        let entry = client.stat(p).ok().unwrap();
-        assert_eq!(entry.name(), "a.sh");
-        let mut expected_path = client.pwd().ok().unwrap();
-        expected_path.push("a.sh");
-        assert_eq!(entry.path(), expected_path.as_path());
-        let meta = entry.metadata();
-        assert_eq!(meta.mode.unwrap(), UnixPex::from(0o644));
-        assert_eq!(meta.size, 7);
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.sh");
+            let file_data = "echo 5\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            let entry = client.stat(p).ok().unwrap();
+            assert_eq!(entry.name(), "a.sh");
+            let mut expected_path = client.pwd().ok().unwrap();
+            expected_path.push("a.sh");
+            assert_eq!(entry.path(), expected_path.as_path());
+            let meta = entry.metadata();
+            assert_eq!(meta.mode.unwrap(), UnixPex::from(0o644));
+            assert_eq!(meta.size, 7);
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_stat_root() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("/");
-        let entry = client.stat(p).ok().unwrap();
-        assert_eq!(entry.name(), "/");
-        assert_eq!(entry.path(), Path::new("/"));
-        assert!(entry.is_dir());
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("/");
+            let entry = client.stat(p).ok().unwrap();
+            assert_eq!(entry.name(), "/");
+            assert_eq!(entry.path(), Path::new("/"));
+            assert!(entry.is_dir());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_stat_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        assert!(client.stat(p).is_err());
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.sh");
+            assert!(client.stat(p).is_err());
+        });
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
     fn should_not_make_symlink() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let symlink = Path::new("b.sh");
-        assert!(client.symlink(symlink, p).is_err());
-        finalize_client(client);
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.sh");
+            let symlink = Path::new("b.sh");
+            assert!(client.symlink(symlink, p).is_err());
+        });
     }
 
     #[test]
     fn should_return_not_connected_error() {
-        crate::mock::logger();
         let mut client = FtpFs::new("127.0.0.1", 21);
         assert!(client.change_dir(Path::new("/tmp")).is_err());
         assert!(
@@ -1234,42 +1165,68 @@ mod test {
 
     // -- test utils
 
-    #[cfg(feature = "with-containers")]
-    fn setup_client() -> FtpFs {
-        let mut client = FtpFs::new("127.0.0.1", 10021)
+    fn generate_tempdir() -> String {
+        use rand::{Rng, distr::Alphanumeric, rng};
+        let mut rng = rng();
+        let name: String = std::iter::repeat(())
+            .map(|()| rng.sample(Alphanumeric))
+            .map(char::from)
+            .take(8)
+            .collect();
+        format!("temp_{}", name)
+    }
+
+    fn with_client<F>(f: F)
+    where
+        F: FnOnce(&mut FtpFs),
+    {
+        crate::log_init();
+        let container = Arc::new(SyncPureFtpRunner::start());
+        let port = container.get_ftp_port();
+
+        // init stream with mapper
+        let mut stream: FtpFs = setup_client("localhost", port, &container);
+
+        f(&mut stream);
+        finalize_client(stream);
+
+        drop(container);
+    }
+
+    fn setup_client(hostname: &str, port: u16, container: &Arc<SyncPureFtpRunner>) -> FtpFs {
+        let container_t = container.clone();
+
+        let mut client = FtpFs::new(hostname, port)
             .username("test")
-            .password("test");
+            .password("test")
+            .passive_stream_builder(move |addr| {
+                let mut addr = addr.clone();
+                let port = addr.port();
+                let mapped = container_t.get_mapped_port(port);
+
+                addr.set_port(mapped);
+
+                info!("mapped port {port} to {mapped} for PASV");
+
+                // open stream to this address instead
+                TcpStream::connect(addr).map_err(FtpError::ConnectionError)
+            });
+
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
-        assert!(
-            client
-                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
+        assert!(client.create_dir(&tempdir, UnixPex::from(0o755)).is_ok());
         // Change directory
-        assert!(client.change_dir(tempdir.as_path()).is_ok());
+        assert!(client.change_dir(&tempdir).is_ok());
+
         client
     }
 
-    #[cfg(feature = "with-containers")]
     fn finalize_client(mut client: FtpFs) {
         // Get working directory
         let wrkdir = client.pwd().ok().unwrap();
         // Remove directory
         assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
         assert!(client.disconnect().is_ok());
-    }
-
-    #[cfg(feature = "with-containers")]
-    fn generate_tempdir() -> String {
-        use rand::{Rng, distributions::Alphanumeric, thread_rng};
-        let mut rng = thread_rng();
-        let name: String = std::iter::repeat(())
-            .map(|()| rng.sample(Alphanumeric))
-            .map(char::from)
-            .take(8)
-            .collect();
-        format!("/temp_{}", name)
     }
 }

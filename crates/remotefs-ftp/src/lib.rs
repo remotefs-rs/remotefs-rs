@@ -60,6 +60,21 @@ pub use client::FtpFs;
 
 // -- utils
 pub(crate) mod utils;
-// -- mock
+
+// test containers
 #[cfg(test)]
-pub(crate) mod mock;
+mod test_container;
+
+#[cfg(test)]
+pub fn log_init() {
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    INIT.call_once(|| {
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Trace)
+            .is_test(true)
+            .try_init();
+    });
+}

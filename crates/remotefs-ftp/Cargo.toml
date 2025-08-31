@@ -24,8 +24,8 @@ webpki-roots = { version = "1", optional = true }
 env_logger = "^0.11"
 pretty_assertions = "1"
 rand = "^0.9"
-serial_test = "^3"
 tempfile = "^3"
+testcontainers = { version = "0.25", features = ["blocking"] }
 
 [features]
 default = ["find"]
@@ -36,9 +36,6 @@ rustls = ["suppaftp/rustls", "dep:rustls-pki-types", "dep:webpki-roots"]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
-# tests
-github-actions = []
-with-containers = ["native-tls"]
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
