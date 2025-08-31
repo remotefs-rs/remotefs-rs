@@ -184,7 +184,8 @@ impl FtpFs {
     /// While on POSIX does nothing
     #[cfg(target_os = "windows")]
     fn resolve(p: &Path) -> PathBuf {
-        PathBuf::from(path_slash::PathExt::to_slash_lossy(p).as_str())
+        use path_slash::PathExt as _;
+        PathBuf::from(p.to_slash_lossy().to_string())
     }
 
     #[cfg(target_family = "unix")]
