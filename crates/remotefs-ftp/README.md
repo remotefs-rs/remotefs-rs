@@ -10,8 +10,8 @@
 
 <p align="center">~ Remotefs FTP client ~</p>
 
-<p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.2 (18/10/2024)</p>
+<p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso_dev</a></p>
+<p align="center">Current version: 0.3.0 (31/08/2025)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -82,17 +82,16 @@ First of all, add `remotefs-ftp` to your project dependencies:
 
 ```toml
 remotefs = "0.3"
-remotefs-ftp = "^0.2"
+remotefs-ftp = "^0.3"
 ```
 
 these features are supported:
 
 - `find`: enable `find()` method on client (*enabled by default*)
 - `native-tls`: enable FTPS support using native-tls as backend
+- `native-tls-vendored`: enable static link for native-tls
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 - `rustls`: enable FTPS support using rustls as backend
-- `secure`: backward compatible alias for `native-tls`
-- `vendored`: enable static link for native-tls
 
 ---
 

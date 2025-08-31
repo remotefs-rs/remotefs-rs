@@ -4,17 +4,13 @@
 
 use crate::utils::path as path_utils;
 
+use remotefs::File;
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     UnixPexClass, Welcome, WriteStream,
 };
-use remotefs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(feature = "native-tls")]
-use suppaftp::native_tls::TlsConnector as NativeTlsConnector;
-#[cfg(feature = "rustls")]
-use suppaftp::rustls::ClientConfig;
 #[cfg(not(any(feature = "native-tls", feature = "rustls")))]
 pub use suppaftp::FtpStream;
 #[cfg(feature = "native-tls")]
@@ -25,10 +21,14 @@ pub use suppaftp::NativeTlsFtpStream as FtpStream;
 use suppaftp::RustlsConnector as TlsConnector;
 #[cfg(feature = "rustls")]
 pub use suppaftp::RustlsFtpStream as FtpStream;
+#[cfg(feature = "native-tls")]
+use suppaftp::native_tls::TlsConnector as NativeTlsConnector;
+#[cfg(feature = "rustls")]
+use suppaftp::rustls::ClientConfig;
 use suppaftp::{
+    FtpError, Status,
     list::{File as FtpFile, PosixPexQuery},
     types::{FileType as SuppaFtpFileType, Mode, Response},
-    FtpError, Status,
 };
 
 /// Ftp file system client
@@ -652,9 +652,11 @@ mod test {
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_err());
+        assert!(
+            client
+                .append_file(p, &Metadata::default(), Box::new(reader))
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -676,9 +678,11 @@ mod test {
     fn should_not_change_directory() {
         crate::mock::logger();
         let mut client = setup_client();
-        assert!(client
-            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-            .is_err());
+        assert!(
+            client
+                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -699,9 +703,11 @@ mod test {
         crate::mock::logger();
         let mut client = setup_client();
         // create directory
-        assert!(client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .is_ok()
+        );
         finalize_client(client);
     }
 
@@ -712,9 +718,11 @@ mod test {
         crate::mock::logger();
         let mut client = setup_client();
         // create directory
-        assert!(client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+                .is_ok()
+        );
         assert_eq!(
             client
                 .create_dir(Path::new("mydir"), UnixPex::from(0o755))
@@ -733,12 +741,14 @@ mod test {
         crate::mock::logger();
         let mut client = setup_client();
         // create directory
-        assert!(client
-            .create_dir(
-                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                UnixPex::from(0o755)
-            )
-            .is_err());
+        assert!(
+            client
+                .create_dir(
+                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                    UnixPex::from(0o755)
+                )
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -774,9 +784,11 @@ mod test {
         let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_err());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -801,9 +813,11 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Verify size
         assert_eq!(client.exists(p).ok().unwrap(), true);
         assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
@@ -825,9 +839,11 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Verify size
         let file = client
             .list_dir(wrkdir.as_path())
@@ -857,9 +873,11 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Verify size
         let dest = Path::new("b.txt");
         assert!(client.mov(p, dest).is_ok());
@@ -878,15 +896,19 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Verify size
         let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
         assert!(client.mov(p, dest).is_err());
-        assert!(client
-            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-            .is_err());
+        assert!(
+            client
+                .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -900,9 +922,11 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
         assert!(client.open_file(p, buffer).is_ok());
@@ -917,9 +941,11 @@ mod test {
         let mut client = setup_client();
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client
-            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-            .is_err());
+        assert!(
+            client
+                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -942,17 +968,21 @@ mod test {
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Create file
         let mut file_path = dir_path.clone();
         file_path.push(Path::new("a.txt"));
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Remove dir
         assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
         finalize_client(client);
@@ -965,9 +995,11 @@ mod test {
         crate::mock::logger();
         let mut client = setup_client();
         // Remove dir
-        assert!(client
-            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-            .is_err());
+        assert!(
+            client
+                .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -980,9 +1012,11 @@ mod test {
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         assert!(client.remove_dir(dir_path.as_path()).is_ok());
         finalize_client(client);
     }
@@ -996,17 +1030,21 @@ mod test {
         // Create dir
         let mut dir_path = client.pwd().ok().unwrap();
         dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Create file
         let mut file_path = dir_path.clone();
         file_path.push(Path::new("a.txt"));
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         // Remove dir
         assert!(client.remove_dir(dir_path.as_path()).is_err());
         finalize_client(client);
@@ -1022,9 +1060,11 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         assert!(client.remove_file(p).is_ok());
         finalize_client(client);
     }
@@ -1037,22 +1077,24 @@ mod test {
         let mut client = setup_client();
         // Create file
         let p = Path::new("a.sh");
-        assert!(client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: None,
-                    created: None,
-                    gid: Some(1),
-                    file_type: FileType::File,
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: None,
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1),
-                }
-            )
-            .is_err());
+        assert!(
+            client
+                .setstat(
+                    p,
+                    Metadata {
+                        accessed: None,
+                        created: None,
+                        gid: Some(1),
+                        file_type: FileType::File,
+                        mode: Some(UnixPex::from(0o755)),
+                        modified: None,
+                        size: 7,
+                        symlink: None,
+                        uid: Some(1),
+                    }
+                )
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -1066,9 +1108,11 @@ mod test {
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        assert!(
+            client
+                .create_file(p, &Metadata::default(), Box::new(reader))
+                .is_ok()
+        );
         let entry = client.stat(p).ok().unwrap();
         assert_eq!(entry.name(), "a.sh");
         let mut expected_path = client.pwd().ok().unwrap();
@@ -1125,32 +1169,44 @@ mod test {
         crate::mock::logger();
         let mut client = FtpFs::new("127.0.0.1", 21);
         assert!(client.change_dir(Path::new("/tmp")).is_err());
-        assert!(client
-            .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
-            .is_err());
+        assert!(
+            client
+                .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
+                .is_err()
+        );
         assert!(client.exec("echo 5").is_err());
         assert!(client.disconnect().is_err());
         assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
         assert!(client.list_dir(Path::new("/tmp")).is_err());
-        assert!(client
-            .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
-            .is_err());
+        assert!(
+            client
+                .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
+                .is_err()
+        );
         assert!(client.pwd().is_err());
         assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
-        assert!(client
-            .mov(Path::new("/nowhere"), Path::new("/culonia"))
-            .is_err());
+        assert!(
+            client
+                .mov(Path::new("/nowhere"), Path::new("/culonia"))
+                .is_err()
+        );
         assert!(client.stat(Path::new("/tmp")).is_err());
-        assert!(client
-            .setstat(Path::new("/tmp"), Metadata::default())
-            .is_err());
+        assert!(
+            client
+                .setstat(Path::new("/tmp"), Metadata::default())
+                .is_err()
+        );
         assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
-        assert!(client
-            .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
-            .is_err());
-        assert!(client
-            .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
-            .is_err());
+        assert!(
+            client
+                .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .is_err()
+        );
+        assert!(
+            client
+                .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .is_err()
+        );
     }
 
     fn is_send<T: Send>(_send: T) {}
@@ -1185,9 +1241,11 @@ mod test {
         assert!(client.connect().is_ok());
         // Create wrkdir
         let tempdir = PathBuf::from(generate_tempdir());
-        assert!(client
-            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-            .is_ok());
+        assert!(
+            client
+                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
+                .is_ok()
+        );
         // Change directory
         assert!(client.change_dir(tempdir.as_path()).is_ok());
         client
@@ -1204,7 +1262,7 @@ mod test {
 
     #[cfg(feature = "with-containers")]
     fn generate_tempdir() -> String {
-        use rand::{distributions::Alphanumeric, thread_rng, Rng};
+        use rand::{Rng, distributions::Alphanumeric, thread_rng};
         let mut rng = thread_rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))

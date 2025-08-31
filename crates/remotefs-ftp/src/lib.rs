@@ -11,15 +11,16 @@
 //!
 //! ```toml
 //! remotefs = "^0.3"
-//! remotefs-ftp = "^0.2"
+//! remotefs-ftp = "^0.3"
 //! ```
 //!
 //! these features are supported:
 //!
-//! - `find`: enable `find()` method for RemoteFs. (*enabled by default*)
-//! - `secure`: enable FTPS
+//! - `find`: enable `find()` method on client (*enabled by default*)
+//! - `native-tls`: enable FTPS support using native-tls as backend
+//! - `native-tls-vendored`: enable static link for native-tls
 //! - `no-log`: disable logging. By default, this library will log via the `log` crate.
-//!
+//! - `rustls`: enable FTPS support using rustls as backend
 //!
 //! ### FTP client
 //!
