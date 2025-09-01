@@ -7,19 +7,26 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // -- modules
-mod commons;
+mod backend;
 mod config;
 #[cfg(test)]
 mod container;
+mod key_method;
 mod scp;
 mod sftp;
-mod stream;
-// -- export
-pub use scp::ScpFs;
-pub use sftp::SftpFs;
-pub use ssh2::MethodType as SshMethodType;
+
 pub use ssh2_config::ParseRule;
-use stream::{SftpReadStream, SftpWriteStream};
+
+#[cfg(feature = "libssh2")]
+#[cfg_attr(docsrs, doc(cfg(feature = "libssh2")))]
+pub use self::backend::LibSsh2Session;
+#[cfg(feature = "libssh")]
+#[cfg_attr(docsrs, doc(cfg(feature = "libssh")))]
+pub use self::backend::LibSshSession;
+pub use self::backend::SshSession;
+pub use self::key_method::{KeyMethod, MethodType};
+pub use self::scp::ScpFs;
+pub use self::sftp::SftpFs;
 
 // -- Ssh key storage
 
@@ -27,30 +34,6 @@ use stream::{SftpReadStream, SftpWriteStream};
 pub trait SshKeyStorage: Send + Sync {
     /// Return RSA key path from host and username
     fn resolve(&self, host: &str, username: &str) -> Option<PathBuf>;
-}
-
-// -- key method
-
-/// Ssh key method.
-/// Defined by [`MethodType`] (see ssh2 docs) and the list of supported algorithms.
-pub struct KeyMethod {
-    pub(crate) method_type: MethodType,
-    algos: Vec<String>,
-}
-
-impl KeyMethod {
-    /// Instantiates a new [`KeyMethod`]
-    pub fn new(method_type: MethodType, algos: &[String]) -> Self {
-        Self {
-            method_type,
-            algos: algos.to_vec(),
-        }
-    }
-
-    /// Get preferred algos in ssh protocol syntax
-    pub(crate) fn prefs(&self) -> String {
-        self.algos.join(",")
-    }
 }
 
 // -- ssh options
@@ -216,39 +199,31 @@ impl SshOpts {
     }
 }
 
-impl From<SshOpts> for SftpFs {
+#[cfg(feature = "libssh")]
+impl From<SshOpts> for SftpFs<LibSshSession> {
     fn from(opts: SshOpts) -> Self {
-        SftpFs::new(opts)
+        Self::libssh(opts)
     }
 }
 
-impl From<SshOpts> for ScpFs {
+#[cfg(feature = "libssh")]
+impl From<SshOpts> for ScpFs<LibSshSession> {
     fn from(opts: SshOpts) -> Self {
-        ScpFs::new(opts)
+        Self::libssh(opts)
     }
 }
 
-/// Re-implementation of ssh key method, in order to use `Eq`
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum MethodType {
-    CryptClientServer,
-    CryptServerClient,
-    HostKey,
-    Kex,
-    MacClientServer,
-    MacServerClient,
+#[cfg(feature = "libssh2")]
+impl From<SshOpts> for SftpFs<LibSsh2Session> {
+    fn from(opts: SshOpts) -> Self {
+        Self::libssh2(opts)
+    }
 }
 
-impl From<MethodType> for SshMethodType {
-    fn from(t: MethodType) -> Self {
-        match t {
-            MethodType::CryptClientServer => SshMethodType::CryptCs,
-            MethodType::CryptServerClient => SshMethodType::CryptSc,
-            MethodType::HostKey => SshMethodType::HostKey,
-            MethodType::Kex => SshMethodType::Kex,
-            MethodType::MacClientServer => SshMethodType::MacCs,
-            MethodType::MacServerClient => SshMethodType::MacSc,
-        }
+#[cfg(feature = "libssh2")]
+impl From<SshOpts> for ScpFs<LibSsh2Session> {
+    fn from(opts: SshOpts) -> Self {
+        Self::libssh2(opts)
     }
 }
 
@@ -331,15 +306,5 @@ mod test {
         );
         assert!(opts.key_storage.is_some());
         assert_eq!(opts.methods.len(), 1);
-    }
-
-    #[test]
-    fn should_build_sftp_client() {
-        let _: SftpFs = SshOpts::new("localhost").into();
-    }
-
-    #[test]
-    fn should_build_scp_client() {
-        let _: ScpFs = SshOpts::new("localhost").into();
     }
 }
