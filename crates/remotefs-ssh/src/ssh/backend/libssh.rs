@@ -43,7 +43,7 @@ impl Read for ScpRecvChannel {
         }
 
         // read up to
-        let max_read = self.filesize - self.read;
+        let max_read = (self.filesize - self.read).min(buf.len());
         let res = self.channel.stdout().read(&mut buf[..max_read])?;
 
         self.read += res;

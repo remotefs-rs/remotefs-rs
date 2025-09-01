@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{Cursor, sink};
 use std::time::SystemTime;
 
 use pretty_assertions::assert_eq;
@@ -221,6 +221,72 @@ fn should_create_file() {
     );
     // Verify size
     assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
+    finalize_client(client);
+}
+
+#[test]
+fn should_create_big_file() {
+    crate::mock::logger();
+    let TestCtx {
+        mut client,
+        container: _container,
+    } = setup_client();
+    // Create file
+    let p = Path::new("a.txt");
+    let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
+    let mut metadata = Metadata::default();
+    metadata.size = file_data.len() as u64;
+    let reader = Cursor::new(file_data);
+    assert_eq!(
+        client
+            .create_file(p, &metadata, Box::new(reader))
+            .ok()
+            .unwrap(),
+        2 * 1024 * 1024
+    );
+    // Verify size
+    assert_eq!(
+        client.stat(p).ok().unwrap().metadata().size,
+        2 * 1024 * 1024
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_read_big_file() {
+    crate::mock::logger();
+    let TestCtx {
+        mut client,
+        container: _container,
+    } = setup_client();
+    // Create file
+    let p = Path::new("a.txt");
+    let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
+    let mut metadata = Metadata::default();
+    metadata.size = file_data.len() as u64;
+    let reader = Cursor::new(file_data);
+    assert_eq!(
+        client
+            .create_file(p, &metadata, Box::new(reader))
+            .ok()
+            .unwrap(),
+        2 * 1024 * 1024
+    );
+    // Verify size
+    assert_eq!(
+        client.stat(p).ok().unwrap().metadata().size,
+        2 * 1024 * 1024
+    );
+
+    // read file
+    let dest = sink();
+    assert_eq!(
+        client
+            .open_file(p, Box::new(dest))
+            .expect("Cannot read file"),
+        2 * 1024 * 1024
+    );
+
     finalize_client(client);
 }
 

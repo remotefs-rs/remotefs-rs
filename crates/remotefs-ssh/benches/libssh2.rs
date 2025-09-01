@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::io::{Sink, Write as _, repeat};
+use std::io::{Sink, Write as _};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::{Container, Image};
 
 const P: &str = "/tmp/large_file";
-const WRITE_SIZE: u64 = 2 * 1024 * 1024 * 1024; // 2GB
+const WRITE_SIZE: u64 = 2 * 1024 * 1024; // 2MB
 
 fn benchmark_scp_read(c: &mut Criterion) {
     c.bench_function("scp_read", |b| {
@@ -33,6 +33,7 @@ fn benchmark_scp_read(c: &mut Criterion) {
     });
 }
 
+/*
 fn benchmark_scp_write(c: &mut Criterion) {
     c.bench_function("scp_write", |b| {
         b.iter_batched(
@@ -54,6 +55,7 @@ fn benchmark_scp_write(c: &mut Criterion) {
         );
     });
 }
+*/
 
 fn benchmark_sftp_read(c: &mut Criterion) {
     c.bench_function("sftp_read", |b| {
@@ -73,6 +75,7 @@ fn benchmark_sftp_read(c: &mut Criterion) {
     });
 }
 
+/*
 fn benchmark_sftp_write(c: &mut Criterion) {
     c.bench_function("sftp_write", |b| {
         b.iter_batched(
@@ -94,6 +97,7 @@ fn benchmark_sftp_write(c: &mut Criterion) {
         );
     });
 }
+*/
 
 struct BenchmarkCtx {
     _container: OpensshServer,
@@ -129,15 +133,12 @@ impl BenchmarkCtx {
             let file_to_transfer = PathBuf::from(P);
             // open file
             let mut writer = client
-                .create(
-                    &file_to_transfer,
-                    &Metadata::default().size(2 * 1024 * 1024 * 1024),
-                )
+                .create(&file_to_transfer, &Metadata::default().size(WRITE_SIZE))
                 .unwrap();
             let mut written = 0;
             let buf = [0; 1024 * 1024];
             loop {
-                let to_write = buf.len().min(2 * 1024 * 1024 * 1024 - written);
+                let to_write = buf.len().min(WRITE_SIZE as usize - written);
                 if to_write == 0 {
                     break;
                 }
@@ -169,15 +170,12 @@ impl BenchmarkCtx {
             let file_to_transfer = PathBuf::from(P);
             // open file
             let mut writer = client
-                .create(
-                    &file_to_transfer,
-                    &Metadata::default().size(2 * 1024 * 1024 * 1024),
-                )
+                .create(&file_to_transfer, &Metadata::default().size(WRITE_SIZE))
                 .unwrap();
             let mut written = 0;
             let buf = [0; 1024 * 1024];
             loop {
-                let to_write = buf.len().min(2 * 1024 * 1024 * 1024 - written);
+                let to_write = buf.len().min(WRITE_SIZE as usize - written);
                 if to_write == 0 {
                     break;
                 }
@@ -353,7 +351,7 @@ fn generate_tempdir() -> String {
 
 fn configure_criterion() -> Criterion {
     Criterion::default()
-        .measurement_time(std::time::Duration::from_secs(420)) // measure time
+        .measurement_time(std::time::Duration::from_secs(100)) // measure time
         .warm_up_time(std::time::Duration::from_secs(15))
         .sample_size(10) // samples
 }
@@ -362,8 +360,8 @@ criterion_group!(
     name = benches;
     config = configure_criterion();
     targets = benchmark_scp_read,
-    benchmark_scp_write,
+    //benchmark_scp_write,
     benchmark_sftp_read,
-    benchmark_sftp_write
+    //benchmark_sftp_write
 );
 criterion_main!(benches);
