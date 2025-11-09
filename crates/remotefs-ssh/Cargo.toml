@@ -10,7 +10,7 @@ license = "MIT"
 name = "remotefs-ssh"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-ssh"
-version = "0.7.0"
+version = "0.7.1"
 rust-version = "1.88.0"
 
 [dependencies]
