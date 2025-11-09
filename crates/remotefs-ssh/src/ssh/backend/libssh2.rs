@@ -544,11 +544,17 @@ fn perform_shell_cmd<S: AsRef<str>>(session: &mut ssh2::Session, cmd: S) -> Remo
             ));
         }
     };
-    // Execute command
-    if let Err(err) = channel.exec(cmd.as_ref()) {
+
+    // escape single quotes in command
+    let cmd = cmd.as_ref().replace('\'', r#"'\''"#); // close, escape, and reopen
+
+    // Execute command; always execute inside of sh -c to have proper shell behavior.
+    // if the remote peer has fish or other non-bash shell as default, commands like
+    // "cd /some/dir; somecommand" may fail.
+    if let Err(err) = channel.exec(format!("sh -c '{cmd}'").as_str()) {
         return Err(RemoteError::new_ex(
             RemoteErrorType::ProtocolError,
-            format!("Could not execute command \"{}\": {}", cmd.as_ref(), err),
+            format!("Could not execute command \"{cmd}\": {err}"),
         ));
     }
     // Read output

@@ -798,13 +798,18 @@ fn perform_shell_cmd<S: AsRef<str>>(
         )
     })?;
 
-    debug!("Requesting command execution: {}", cmd.as_ref());
-    channel.request_exec(cmd.as_ref()).map_err(|err| {
-        RemoteError::new_ex(
-            RemoteErrorType::ProtocolError,
-            format!("Could not execute command \"{}\": {err}", cmd.as_ref()),
-        )
-    })?;
+    // escape single quotes in command
+    let cmd = cmd.as_ref().replace('\'', r#"'\''"#); // close, escape, and reopen
+
+    debug!("Requesting command execution: {cmd}",);
+    channel
+        .request_exec(&format!("sh -c '{cmd}'"))
+        .map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not execute command \"{cmd}\": {err}"),
+            )
+        })?;
     // send EOF
     debug!("Sending EOF");
     channel.send_eof().map_err(|err| {

@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SSH client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.7.0 (01/09/2025)</p>
+<p align="center">Current version: 0.7.1 (09/11/2025)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
