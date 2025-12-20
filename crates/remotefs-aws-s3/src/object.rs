@@ -89,7 +89,7 @@ impl S3Object {
             true => tokens.nth(count - 2).unwrap().to_string(),
             false => String::new(),
         };
-        if let Some(last) = tokens.last() {
+        if let Some(last) = tokens.next_back() {
             // If last is not empty, return last one
             if !last.is_empty() {
                 return last.to_string();
