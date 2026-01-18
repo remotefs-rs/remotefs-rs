@@ -42,6 +42,17 @@
 //! assert!(client.disconnect().is_ok());
 //! ```
 //!
+//! ## Features
+//
+// these features are supported:
+//
+// - `find`: enable `find()` method on client (*enabled by default*)
+// - `native-tls`: enable FTPS support using native-tls as backend
+// - `native-tls-vendored`: enable static link for native-tls
+// - `no-log`: disable logging. By default, this library will log via the `log` crate.
+// - `rustls-aws-lc-rs`: enable FTPS support using rustls with aws-lc-rs as backend
+// - `rustls-ring`: enable FTPS support using rustls with ring as backend
+//!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 #![doc(

@@ -13,19 +13,22 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use suppaftp::FtpResult;
-#[cfg(not(any(feature = "native-tls", feature = "rustls")))]
+#[cfg(not(any(
+    feature = "native-tls",
+    any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
+)))]
 pub use suppaftp::FtpStream;
 #[cfg(feature = "native-tls")]
 use suppaftp::NativeTlsConnector as TlsConnector;
 #[cfg(feature = "native-tls")]
 pub use suppaftp::NativeTlsFtpStream as FtpStream;
-#[cfg(feature = "rustls")]
+#[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
 use suppaftp::RustlsConnector as TlsConnector;
-#[cfg(feature = "rustls")]
+#[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
 pub use suppaftp::RustlsFtpStream as FtpStream;
 #[cfg(feature = "native-tls")]
 use suppaftp::native_tls::TlsConnector as NativeTlsConnector;
-#[cfg(feature = "rustls")]
+#[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
 use suppaftp::rustls::ClientConfig;
 use suppaftp::{
     FtpError, Status,
@@ -52,7 +55,10 @@ pub struct FtpFs {
     passive_stream_builder: Option<Box<PassiveStreamBuilder>>,
     /// Client mode; default: `Mode::Passive`
     mode: Mode,
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(any(
+        feature = "native-tls",
+        any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
+    ))]
     /// use FTPS; default: `false`
     secure: bool,
     #[cfg(feature = "native-tls")]
@@ -74,7 +80,10 @@ impl FtpFs {
             password: None,
             mode: Mode::Passive,
             passive_stream_builder: None,
-            #[cfg(any(feature = "native-tls", feature = "rustls"))]
+            #[cfg(any(
+                feature = "native-tls",
+                any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
+            ))]
             secure: false,
             #[cfg(feature = "native-tls")]
             accept_invalid_certs: false,
@@ -118,7 +127,7 @@ impl FtpFs {
         self
     }
 
-    #[cfg(feature = "rustls")]
+    #[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
     pub fn secure(mut self) -> Self {
         self.secure = true;
         self
@@ -236,7 +245,7 @@ impl FtpFs {
             .map(|x| x.into())
     }
 
-    #[cfg(feature = "rustls")]
+    #[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
     fn setup_tls_connector(&self) -> RemoteResult<TlsConnector> {
         let mut root_store = suppaftp::rustls::RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
@@ -271,7 +280,10 @@ impl RemoteFs for FtpFs {
         };
 
         // If secure, connect TLS
-        #[cfg(any(feature = "native-tls", feature = "rustls"))]
+        #[cfg(any(
+            feature = "native-tls",
+            any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
+        ))]
         if self.secure {
             debug!("Setting up TLS stream...");
             #[cfg(feature = "native-tls")]
@@ -572,7 +584,10 @@ mod test {
         assert_eq!(client.username.as_str(), "anonymous");
         assert!(client.password.is_none());
         assert_eq!(client.mode, Mode::Passive);
-        #[cfg(any(feature = "native-tls", feature = "rustls"))]
+        #[cfg(any(
+            feature = "native-tls",
+            any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
+        ))]
         assert_eq!(client.secure, false);
         #[cfg(feature = "native-tls")]
         assert_eq!(client.accept_invalid_certs, false);
@@ -596,7 +611,10 @@ mod test {
     }
 
     #[test]
-    #[cfg(any(feature = "native-tls", feature = "rustls"))]
+    #[cfg(any(
+        feature = "native-tls",
+        any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
+    ))]
     fn should_build_secure_ftp_filesystem() {
         #[cfg(feature = "native-tls")]
         let client = FtpFs::new("127.0.0.1", 21)
@@ -605,7 +623,7 @@ mod test {
             .secure(true, true)
             .passive_mode()
             .active_mode();
-        #[cfg(feature = "rustls")]
+        #[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
         let client = FtpFs::new("127.0.0.1", 21)
             .username("test")
             .password("omar")
