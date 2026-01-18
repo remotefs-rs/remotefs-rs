@@ -21,7 +21,7 @@
   /></a>
   <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ftp.svg"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ftp.svg?style=badge"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-ftp"

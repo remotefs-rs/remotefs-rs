@@ -1241,10 +1241,6 @@ mod test {
     }
 
     fn finalize_client(mut client: FtpFs) {
-        // Get working directory
-        let wrkdir = client.pwd().ok().unwrap();
-        // Remove directory
-        assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
         assert!(client.disconnect().is_ok());
     }
 }
