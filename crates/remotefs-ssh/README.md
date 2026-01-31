@@ -1,68 +1,22 @@
 # remotefs SSH
 
-<p align="center">
-  <a href="https://veeso.github.io/remotefs-ssh/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
-  ·
-  <a href="#get-started">Get started</a>
-  ·
-  <a href="https://docs.rs/remotefs-ssh" target="_blank">Documentation</a>
-</p>
+[![license-mit](https://img.shields.io/crates/l/remotefs-ssh.svg)](https://opensource.org/licenses/MIT)
+[![repo-stars](https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ssh?style=flat)](https://github.com/remotefs-rs/remotefs-rs-ssh/stargazers)
+[![downloads](https://img.shields.io/crates/d/remotefs-ssh.svg)](https://crates.io/crates/remotefs-ssh)
+[![latest-version](https://img.shields.io/crates/v/remotefs-ssh.svg)](https://crates.io/crates/remotefs-ssh)
+[![ko-fi](https://img.shields.io/badge/donate-ko--fi-red)](https://ko-fi.com/veeso)
+[![conventional-commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://conventionalcommits.org)
 
-<p align="center">~ Remotefs SSH client ~</p>
-
-<p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.7.1 (09/11/2025)</p>
-
-<p align="center">
-  <a href="https://opensource.org/licenses/MIT"
-    ><img
-      src="https://img.shields.io/badge/License-MIT-teal.svg"
-      alt="License-MIT"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/stargazers"
-    ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ssh.svg?style=badge&icon=github"
-      alt="Repo stars"
-  /></a>
-  <a href="https://crates.io/crates/remotefs-ssh"
-    ><img
-      src="https://img.shields.io/crates/d/remotefs-ssh.svg"
-      alt="Downloads counter"
-  /></a>
-  <a href="https://crates.io/crates/remotefs-ssh"
-    ><img
-      src="https://img.shields.io/crates/v/remotefs-ssh.svg"
-      alt="Latest version"
-  /></a>
-  <a href="https://ko-fi.com/veeso">
-    <img
-      src="https://img.shields.io/badge/donate-ko--fi-red"
-      alt="Ko-fi"
-  /></a>
-</p>
-<p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ssh/actions/workflows/linux.yml"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-ssh/actions/workflows/test.yml/badge.svg"
-      alt="Linux CI"
-  /></a>
-  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-ssh"
-    ><img
-      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ssh/badge.svg"
-      alt="Coveralls"
-  /></a>
-  <a href="https://docs.rs/remotefs-ssh"
-    ><img
-      src="https://docs.rs/remotefs-ssh/badge.svg"
-      alt="Docs"
-  /></a>
-</p>
+[![Build](https://github.com/remotefs-rs/remotefs-rs-ssh/actions/workflows/test.yml/badge.svg)](https://github.com/veeso/remotefs-rs-ssh/actions/workflows/test.yml)
+[![coveralls](https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ssh/badge.svg)](https://coveralls.io/github/veeso/remotefs-rs-ssh)
+[![docs](https://docs.rs/remotefs-ssh/badge.svg)](https://docs.rs/remotefs-ssh)
 
 ---
 
 ## About remotefs-ssh ☁️
 
-remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SFTP/SCP protocol.
+remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support
+for the SFTP/SCP protocol.
 
 ---
 
@@ -93,7 +47,8 @@ Each backend can be built with the vendored version, using the vendored feature 
 - `libssh2-vendored`: Build the `libssh2` backend with the vendored version of the library.
 - `libssh-vendored`: Build the `libssh` backend with the vendored version of the library.
 
-If the vendored feature is **NOT** provided, you will need to have the corresponding system libraries installed on your machine.
+If the vendored feature is **NOT** provided, you will need to have the corresponding system libraries installed on your
+machine.
 
 > [!NOTE]
 > If you need SftpFs to be `Sync` YOU MUST use libssh2.
@@ -109,7 +64,8 @@ these features are supported:
 
 Here is a basic usage example, with the `Sftp` client, which is very similiar to the `Scp` client.
 
-Both the `SftpFs` and `ScpFs` constructors are respectively `SftpFs::libssh2` and `SftpFs::libssh` accordingly to the enabled backends.
+Both the `SftpFs` and `ScpFs` constructors are respectively `SftpFs::libssh2` and `SftpFs::libssh` accordingly to the
+enabled backends.
 
 ```rust,ignore
 // import remotefs trait and client
@@ -183,7 +139,8 @@ You can make a donation with one of these platforms:
 ## Contributing and issues 🤝🏻
 
 Contributions, bug reports, new features, and questions are welcome! 😉
-If you have any questions or concerns, or you want to suggest a new feature, or you want just want to improve remotefs, feel free to open an issue or a PR.
+If you have any questions or concerns, or you want to suggest a new feature, or you want just want to improve remotefs,
+feel free to open an issue or a PR.
 
 Please follow [our contributing guidelines](CONTRIBUTING.md)
 
