@@ -1,4 +1,4 @@
-use std::io::{Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::time::UNIX_EPOCH;
@@ -332,7 +332,13 @@ impl SshSession for LibSshSession {
     }
 }
 
-struct SftpFileReader(libssh_rs::SftpFile);
+/// Number of bytes per SFTP read call for buffered reads.
+///
+/// libssh caps each `sftp_read` at the server's maximum packet payload
+/// (typically 64 KiB). Using a larger request size lets the C library
+/// issue fewer round-trips when possible, while still working correctly
+/// when the server returns less.
+const SFTP_READ_BUF_SIZE: usize = 256 * 1024;
 
 struct SftpFileWriter(libssh_rs::SftpFile);
 
@@ -354,19 +360,22 @@ impl Seek for SftpFileWriter {
 
 impl WriteAndSeek for SftpFileWriter {}
 
-impl Read for SftpFileReader {
+/// A seekable, in-memory read buffer wrapping file data fetched via SFTP.
+struct BufferedSftpReader(Cursor<Vec<u8>>);
+
+impl Read for BufferedSftpReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.0.read(buf)
     }
 }
 
-impl Seek for SftpFileReader {
+impl Seek for BufferedSftpReader {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         self.0.seek(pos)
     }
 }
 
-impl ReadAndSeek for SftpFileReader {}
+impl ReadAndSeek for BufferedSftpReader {}
 
 impl Sftp for LibSshSftp {
     fn mkdir(&self, path: &Path, mode: i32) -> RemoteResult<()> {
@@ -384,18 +393,10 @@ impl Sftp for LibSshSftp {
     }
 
     fn open_read(&self, path: &Path) -> RemoteResult<ReadStream> {
-        self.inner
-            .open(conv_path_to_str(path), OpenFlags::READ_ONLY, 0)
-            .map(|file| ReadStream::from(Box::new(SftpFileReader(file)) as Box<dyn ReadAndSeek>))
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!(
-                        "Could not open file at '{path}': {err}",
-                        path = path.display()
-                    ),
-                )
-            })
+        let data = buffered_sftp_read(&self.inner, path)?;
+        Ok(ReadStream::from(
+            Box::new(BufferedSftpReader(Cursor::new(data))) as Box<dyn ReadAndSeek>
+        ))
     }
 
     fn open_write(
@@ -554,6 +555,65 @@ impl Sftp for LibSshSftp {
 
 fn conv_path_to_str(path: &Path) -> &str {
     path.to_str().unwrap_or_default()
+}
+
+/// Reads an entire remote file into memory using a large buffer to minimize
+/// SFTP round-trips.
+///
+/// Each `sftp_read` call in libssh is a synchronous request-response cycle,
+/// and file handles from the same session serialize through a mutex, so true
+/// pipelining is not possible without the AIO FFI. Reading with a large
+/// buffer (256 KiB) reduces the number of round-trips compared to the
+/// default 64 KiB reads the caller would otherwise perform.
+fn buffered_sftp_read(sftp: &libssh_rs::Sftp, path: &Path) -> RemoteResult<Vec<u8>> {
+    let path_str = conv_path_to_str(path);
+
+    let file_size = sftp
+        .metadata(path_str)
+        .map(|m| m.len().unwrap_or(0) as usize)
+        .map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not stat '{path}': {err}", path = path.display()),
+            )
+        })?;
+
+    if file_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut file = sftp
+        .open(path_str, OpenFlags::READ_ONLY, 0)
+        .map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!(
+                    "Could not open file at '{path}': {err}",
+                    path = path.display()
+                ),
+            )
+        })?;
+
+    let mut data = Vec::with_capacity(file_size);
+    let mut buf = [0_u8; SFTP_READ_BUF_SIZE];
+
+    loop {
+        let n = file.read(&mut buf).map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::IoError,
+                format!(
+                    "Failed to read file '{path}': {err}",
+                    path = path.display()
+                ),
+            )
+        })?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+    }
+
+    Ok(data)
 }
 
 enum MakePath<'a> {
