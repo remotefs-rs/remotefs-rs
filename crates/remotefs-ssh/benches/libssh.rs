@@ -13,7 +13,7 @@ use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::{Container, Image};
 
 const P: &str = "/tmp/large_file";
-const WRITE_SIZE: u64 = 2 * 1024 * 1024; // 2MB
+const WRITE_SIZE: u64 = 64 * 1024 * 1024; // 64MB
 
 fn benchmark_scp_read(c: &mut Criterion) {
     c.bench_function("scp_read", |b| {
@@ -250,7 +250,7 @@ impl OpensshServer {
     pub fn port(&self) -> u16 {
         std::thread::sleep(Duration::from_secs(5));
         self.container
-            .get_host_port_ipv6(2222)
+            .get_host_port_ipv4(2222)
             .expect("Failed to get port")
     }
 }

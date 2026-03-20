@@ -17,7 +17,7 @@ license = "MIT"
 name = "remotefs-ssh"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-ssh"
-version = "0.7.2"
+version = "0.8.0"
 rust-version = "1.88.0"
 
 [dependencies]
@@ -26,17 +26,21 @@ lazy-regex = "3"
 libssh-rs = { version = "0.3", optional = true }
 log = "^0.4"
 remotefs = "^0.3"
+russh = { version = "0.58", optional = true }
+russh-keys = { version = "0.49", optional = true }
+russh-sftp = { version = "2", optional = true }
 ssh2-config = "0.7"
 ssh2 = { version = "^0.9", optional = true }
+tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
 
 [dev-dependencies]
-criterion = "0.7"
+criterion = "0.8"
 env_logger = "^0.11"
 pretty_assertions = "^1"
-rand = "^0.9"
+rand = "0.9"
 rpassword = "7"
 tempfile = "^3"
-testcontainers = { version = "0.25", features = ["blocking"] }
+testcontainers = { version = "0.27", features = ["blocking"] }
 
 [features]
 default = ["find", "libssh2"]
@@ -46,6 +50,7 @@ libssh-vendored = ["libssh", "libssh-rs/vendored", "libssh-rs/vendored-openssl"]
 libssh2 = ["dep:ssh2"]
 libssh2-vendored = ["libssh2", "ssh2/vendored-openssl"]
 no-log = ["log/max_level_off"]
+russh = ["dep:russh", "dep:russh-keys", "dep:russh-sftp", "dep:tokio"]
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
@@ -65,12 +70,27 @@ name = "libssh"
 harness = false
 required-features = ["libssh"]
 
+[[bench]]
+name = "russh"
+harness = false
+required-features = ["russh"]
+
 [[example]]
 name = "scp"
 required-features = ["libssh2"]
 path = "examples/scp.rs"
 
 [[example]]
+name = "scp-russh"
+required-features = ["russh"]
+path = "examples/scp-russh.rs"
+
+[[example]]
 name = "sftp"
 required-features = ["libssh2"]
 path = "examples/sftp.rs"
+
+[[example]]
+name = "sftp-russh"
+required-features = ["russh"]
+path = "examples/sftp-russh.rs"

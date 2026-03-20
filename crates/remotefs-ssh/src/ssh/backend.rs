@@ -8,6 +8,9 @@ mod libssh;
 #[cfg(feature = "libssh2")]
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh2")))]
 mod libssh2;
+#[cfg(feature = "russh")]
+#[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
+mod russh;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -21,6 +24,9 @@ pub use self::libssh::LibSshSession;
 #[cfg(feature = "libssh2")]
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh2")))]
 pub use self::libssh2::LibSsh2Session;
+#[cfg(feature = "russh")]
+#[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
+pub use self::russh::{NoCheckServerKey, RusshSession};
 use crate::SshOpts;
 
 /// SSH session trait.

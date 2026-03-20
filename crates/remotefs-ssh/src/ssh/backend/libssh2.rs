@@ -143,13 +143,12 @@ impl SshSession for LibSsh2Session {
                 }
             }
 
-            return Err(match last_err {
-                Some(err) => err,
-                None => RemoteError::new_ex(
+            return Err(last_err.unwrap_or_else(|| {
+                RemoteError::new_ex(
                     RemoteErrorType::AuthenticationFailed,
                     "no authentication method provided",
-                ),
-            });
+                )
+            }));
         }
 
         Ok(Self { session })

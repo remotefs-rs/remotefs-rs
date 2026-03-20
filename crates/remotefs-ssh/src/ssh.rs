@@ -24,6 +24,9 @@ pub use self::backend::LibSsh2Session;
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh")))]
 pub use self::backend::LibSshSession;
 pub use self::backend::SshSession;
+#[cfg(feature = "russh")]
+#[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
+pub use self::backend::{NoCheckServerKey, RusshSession};
 pub use self::key_method::{KeyMethod, MethodType};
 pub use self::scp::ScpFs;
 pub use self::sftp::SftpFs;
@@ -105,6 +108,9 @@ pub struct SshOpts {
     parse_rules: ParseRule,
     /// Ssh agent configuration for authentication
     ssh_agent_identity: Option<SshAgentIdentity>,
+    /// tokio runtime
+    #[cfg(feature = "russh")]
+    runtime: Option<std::sync::Arc<tokio::runtime::Runtime>>,
 }
 
 impl SshOpts {
@@ -125,6 +131,8 @@ impl SshOpts {
             methods: Vec::default(),
             parse_rules: ParseRule::STRICT,
             ssh_agent_identity: None,
+            #[cfg(feature = "russh")]
+            runtime: None,
         }
     }
 
@@ -195,6 +203,14 @@ impl SshOpts {
     /// Add key method to ssh options
     pub fn method(mut self, method: KeyMethod) -> Self {
         self.methods.push(method);
+        self
+    }
+
+    /// Pass tokio runtime for backends which require it
+    #[cfg(feature = "russh")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
+    pub(crate) fn runtime(mut self, runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 }

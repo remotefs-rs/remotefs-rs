@@ -60,7 +60,7 @@ impl OpensshServer {
     pub fn port(&self) -> u16 {
         std::thread::sleep(Duration::from_secs(5));
         self.container
-            .get_host_port_ipv6(2222)
+            .get_host_port_ipv4(2222)
             .expect("Failed to get port")
     }
 }

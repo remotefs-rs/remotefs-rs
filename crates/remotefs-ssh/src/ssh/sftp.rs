@@ -55,6 +55,24 @@ impl SftpFs<super::backend::LibSshSession> {
     }
 }
 
+#[cfg(feature = "russh")]
+#[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
+impl<T> SftpFs<super::backend::RusshSession<T>>
+where
+    T: russh::client::Handler + Default + Send + 'static,
+{
+    /// Constructs a new [`SftpFs`] instance with the `russh` backend.
+    pub fn russh(opts: SshOpts, runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Self {
+        let opts = opts.runtime(runtime);
+        Self {
+            session: None,
+            sftp: None,
+            wrkdir: PathBuf::from("/"),
+            opts,
+        }
+    }
+}
+
 impl<S> SftpFs<S>
 where
     S: SshSession,

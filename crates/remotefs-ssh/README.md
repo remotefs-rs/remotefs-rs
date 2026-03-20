@@ -26,12 +26,12 @@ First of all, add `remotefs-ssh` to your project dependencies:
 
 ```toml
 remotefs = "0.3"
-remotefs-ssh = "^0.7"
+remotefs-ssh = "0.8"
 ```
 
 > [!NOTE]
 > The library supports multiple ssh backends.
-> Currently `libssh2` and `libssh` are supported.
+> Currently `libssh2`, `libssh`, and `russh` are supported.
 >
 > By default the library is using `libssh2`.
 
@@ -41,8 +41,9 @@ Each backend can be set as a feature in your `Cargo.toml`. Multiple backends can
 
 - `libssh2`: The default backend, using the `libssh2` library for SSH connections.
 - `libssh`: An alternative backend, using the `libssh` library for SSH connections.
+- `russh`: A pure-Rust backend, using the `russh` library for SSH connections. Does not require any system C libraries.
 
-Each backend can be built with the vendored version, using the vendored feature instead:
+Each C backend can be built with the vendored version, using the vendored feature instead:
 
 - `libssh2-vendored`: Build the `libssh2` backend with the vendored version of the library.
 - `libssh-vendored`: Build the `libssh` backend with the vendored version of the library.
@@ -51,7 +52,7 @@ If the vendored feature is **NOT** provided, you will need to have the correspon
 machine.
 
 > [!NOTE]
-> If you need SftpFs to be `Sync` YOU MUST use libssh2.
+> If you need SftpFs to be `Sync` YOU MUST use `libssh2` or `russh`. The `libssh` backend does not support `Sync`.
 
 ### Other features
 
@@ -64,11 +65,12 @@ these features are supported:
 
 Here is a basic usage example, with the `Sftp` client, which is very similiar to the `Scp` client.
 
-Both the `SftpFs` and `ScpFs` constructors are respectively `SftpFs::libssh2` and `SftpFs::libssh` accordingly to the
-enabled backends.
+The `SftpFs` and `ScpFs` constructors vary depending on the enabled backend:
+`SftpFs::libssh2`, `SftpFs::libssh`, or `SftpFs::russh` (and likewise for `ScpFs`).
+
+### libssh2 / libssh example
 
 ```rust,ignore
-// import remotefs trait and client
 use remotefs::RemoteFs;
 use remotefs_ssh::{SshConfigParseRule, SftpFs, SshOpts};
 use std::path::Path;
@@ -80,6 +82,43 @@ let opts = SshOpts::new("127.0.0.1")
     .config_file(Path::new("/home/cvisintin/.ssh/config"), ParseRule::STRICT);
 
 let mut client = SftpFs::libssh2(opts);
+
+// connect
+assert!(client.connect().is_ok());
+// get working directory
+println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+// change working directory
+assert!(client.change_dir(Path::new("/tmp")).is_ok());
+// disconnect
+assert!(client.disconnect().is_ok());
+```
+
+### russh example
+
+The `russh` backend requires a Tokio runtime and a type implementing `russh::client::Handler`
+for server key verification. `NoCheckServerKey` is provided as a convenience handler that
+accepts all host keys.
+
+```rust,ignore
+use remotefs::RemoteFs;
+use remotefs_ssh::{NoCheckServerKey, SftpFs, SshOpts};
+use std::path::Path;
+use std::sync::Arc;
+
+let runtime = Arc::new(
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap(),
+);
+
+let opts = SshOpts::new("127.0.0.1")
+    .port(22)
+    .username("test")
+    .password("password");
+
+let mut client: SftpFs<remotefs_ssh::RusshSession<NoCheckServerKey>> =
+    SftpFs::russh(opts, runtime);
 
 // connect
 assert!(client.connect().is_ok());
@@ -154,10 +193,11 @@ View remotefs-ssh changelog [HERE](CHANGELOG.md)
 
 ## Powered by 💪
 
-remotefs-ssh is powered by these aweseome projects:
+remotefs-ssh is powered by these awesome projects:
 
 - [ssh2-config](https://github.com/veeso/ssh2-config)
 - [ssh2-rs](https://github.com/alexcrichton/ssh2-rs)
+- [russh](https://github.com/warp-tech/russh)
 
 ---
 
