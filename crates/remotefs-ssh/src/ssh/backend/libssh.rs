@@ -395,7 +395,7 @@ impl Sftp for LibSshSftp {
     fn open_read(&self, path: &Path) -> RemoteResult<ReadStream> {
         let data = buffered_sftp_read(&self.inner, path)?;
         Ok(ReadStream::from(
-            Box::new(BufferedSftpReader(Cursor::new(data))) as Box<dyn ReadAndSeek>
+            Box::new(BufferedSftpReader(Cursor::new(data))) as Box<dyn ReadAndSeek>,
         ))
     }
 
@@ -601,10 +601,7 @@ fn buffered_sftp_read(sftp: &libssh_rs::Sftp, path: &Path) -> RemoteResult<Vec<u
         let n = file.read(&mut buf).map_err(|err| {
             RemoteError::new_ex(
                 RemoteErrorType::IoError,
-                format!(
-                    "Failed to read file '{path}': {err}",
-                    path = path.display()
-                ),
+                format!("Failed to read file '{path}': {err}", path = path.display()),
             )
         })?;
         if n == 0 {

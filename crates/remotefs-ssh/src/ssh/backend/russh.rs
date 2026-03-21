@@ -54,7 +54,7 @@ where
 /// SFTP handle for russh.
 pub struct RusshSftp {
     runtime: Arc<Runtime>,
-    session: SftpSession,
+    session: Arc<SftpSession>,
 }
 
 impl<T> SshSession for RusshSession<T>
@@ -179,7 +179,7 @@ where
             .block_on(async { SftpSession::new(channel.into_stream()).await })
             .map(|session| RusshSftp {
                 runtime: self.runtime.clone(),
-                session,
+                session: Arc::new(session),
             })
             .map_err(|err| {
                 error!("Failed to init SFTP session: {err}");
@@ -215,19 +215,14 @@ impl Sftp for RusshSftp {
 
     fn open_read(&self, path: &Path) -> RemoteResult<ReadStream> {
         let path_str = path.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            let data = pipelined_sftp_read(&self.session, &path_str)
-                .await
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::ProtocolError,
-                        format!("Could not read file at '{}': {err}", path.display()),
-                    )
-                })?;
-            Ok(ReadStream::from(
-                Box::new(std::io::Cursor::new(data)) as Box<dyn Read + Send>
-            ))
-        })
+        let reader = PipelinedSftpReader::new(self.runtime.clone(), self.session.clone(), path_str)
+            .map_err(|err| {
+                RemoteError::new_ex(
+                    RemoteErrorType::ProtocolError,
+                    format!("Could not read file at '{}': {err}", path.display()),
+                )
+            })?;
+        Ok(ReadStream::from(Box::new(reader) as Box<dyn Read + Send>))
     }
 
     fn open_write(&self, path: &Path, flags: WriteMode, mode: i32) -> RemoteResult<WriteStream> {
@@ -545,72 +540,247 @@ impl Seek for SftpFileWriter {
 
 impl remotefs::fs::stream::WriteAndSeek for SftpFileWriter {}
 
-/// Number of concurrent SFTP file handles used for pipelined reads.
-const SFTP_READ_PIPELINE_DEPTH: usize = 4;
+/// Number of concurrent SFTP file handles used per batch in pipelined reads.
+const SFTP_PIPELINE_DEPTH: usize = 4;
 
-/// Read a remote file using multiple concurrent SFTP file handles to pipeline
-/// reads.
+/// Size of each chunk read by a single pipeline task (4 MiB).
+const SFTP_CHUNK_SIZE: usize = 4 * 1024 * 1024;
+
+/// Maximum number of completed batches to buffer ahead of the current read
+/// position. Caps memory usage to roughly `(MAX_PREFETCH + 1) * BATCH_SIZE`.
+const MAX_PREFETCH: usize = 2;
+
+/// Batch size: [`SFTP_PIPELINE_DEPTH`] * [`SFTP_CHUNK_SIZE`] = 16 MiB.
+const BATCH_SIZE: usize = SFTP_PIPELINE_DEPTH * SFTP_CHUNK_SIZE;
+
+/// A streaming SFTP reader that pipelines reads in batches.
 ///
-/// Each task owns its chunk buffer and the final result is assembled only after
-/// all tasks complete, avoiding shared mutable state across tasks.
-async fn pipelined_sftp_read(
-    session: &russh_sftp::client::SftpSession,
-    path: &str,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+/// Each batch spawns [`SFTP_PIPELINE_DEPTH`] concurrent SFTP read tasks of
+/// [`SFTP_CHUNK_SIZE`] bytes. Up to [`MAX_PREFETCH`] batches are fetched ahead
+/// of the current read position so the caller receives data immediately while
+/// keeping memory bounded.
+struct PipelinedSftpReader {
+    runtime: Arc<Runtime>,
+    session: Arc<SftpSession>,
+    path: String,
+    file_size: usize,
+    /// Next byte offset to start fetching from the remote file.
+    fetch_offset: usize,
+    /// Completed batches ready for consumption, front = current.
+    batches: std::collections::VecDeque<Vec<u8>>,
+    /// Read cursor within `batches[0]`.
+    buf_cursor: usize,
+    /// Background pre-fetch task, if any.
+    pending: Option<PrefetchTask>,
+}
 
-    let metadata = session.metadata(path).await?;
-    let file_size = metadata.size.unwrap_or(0) as usize;
+/// In-flight background batch fetch.
+struct PrefetchTask {
+    /// The byte offset this batch starts at — used to roll back
+    /// `fetch_offset` on failure.
+    batch_offset: usize,
+    handle: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
+}
 
-    if file_size == 0 {
-        return Ok(Vec::new());
-    }
+impl PipelinedSftpReader {
+    /// Creates a new streaming reader.
+    ///
+    /// Eagerly fetches the first batch and starts a background pre-fetch for
+    /// the second batch so the caller can start reading immediately.
+    fn new(
+        runtime: Arc<Runtime>,
+        session: Arc<SftpSession>,
+        path: String,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let metadata = runtime.block_on(session.metadata(&path))?;
+        let file_size = metadata.size.unwrap_or(0) as usize;
 
-    let chunk_size = file_size.div_ceil(SFTP_READ_PIPELINE_DEPTH);
-    let mut tasks = Vec::with_capacity(SFTP_READ_PIPELINE_DEPTH);
+        let mut reader = Self {
+            runtime,
+            session,
+            path,
+            file_size,
+            fetch_offset: 0,
+            batches: std::collections::VecDeque::new(),
+            buf_cursor: 0,
+            pending: None,
+        };
 
-    for i in 0..SFTP_READ_PIPELINE_DEPTH {
-        let offset = i * chunk_size;
-        if offset >= file_size {
-            break;
+        if file_size == 0 {
+            return Ok(reader);
         }
-        let len = chunk_size.min(file_size - offset);
-        let mut file = session.open(path).await.map_err(std::io::Error::other)?;
-        file.seek(std::io::SeekFrom::Start(offset as u64)).await?;
 
-        tasks.push(tokio::spawn(async move {
-            let mut buf = vec![0_u8; len];
-            file.read_exact(&mut buf).await?;
-            Ok::<(usize, Vec<u8>), std::io::Error>((offset, buf))
-        }));
+        // Eagerly fetch the first batch so data is available immediately.
+        let first_batch = reader.fetch_batch_blocking()?;
+        reader.batches.push_back(first_batch);
+
+        // Start background pre-fetch for the next batch.
+        reader.maybe_start_prefetch();
+
+        Ok(reader)
     }
 
-    let mut result = vec![0_u8; file_size];
-    let mut first_err: Option<std::io::Error> = None;
+    /// Fetches the next batch synchronously by blocking on the runtime.
+    fn fetch_batch_blocking(
+        &mut self,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let remaining = self.file_size.saturating_sub(self.fetch_offset);
+        if remaining == 0 {
+            return Ok(Vec::new());
+        }
 
-    for task in tasks {
-        match task.await {
-            Ok(Ok((offset, chunk))) => {
-                result[offset..offset + chunk.len()].copy_from_slice(&chunk);
-            }
-            Ok(Err(err)) => {
-                if first_err.is_none() {
-                    first_err = Some(err);
-                }
-            }
+        let batch_len = remaining.min(BATCH_SIZE);
+        let offset = self.fetch_offset;
+        let batch = self
+            .runtime
+            .block_on(Self::fetch_batch(
+                self.session.clone(),
+                self.path.clone(),
+                offset,
+                batch_len,
+            ))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        self.fetch_offset += batch_len;
+        Ok(batch)
+    }
+
+    /// Spawns a background batch fetch if there is more data and the prefetch
+    /// queue is not full.
+    fn maybe_start_prefetch(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        if self.batches.len() > MAX_PREFETCH {
+            return;
+        }
+        let remaining = self.file_size.saturating_sub(self.fetch_offset);
+        if remaining == 0 {
+            return;
+        }
+
+        let batch_len = remaining.min(BATCH_SIZE);
+        let session = self.session.clone();
+        let path = self.path.clone();
+        let offset = self.fetch_offset;
+        // Speculatively advance; rolled back in collect_pending on failure.
+        self.fetch_offset += batch_len;
+
+        let handle = self
+            .runtime
+            .spawn(async move { Self::fetch_batch(session, path, offset, batch_len).await });
+
+        self.pending = Some(PrefetchTask {
+            batch_offset: offset,
+            handle,
+        });
+    }
+
+    /// Collects the result of a pending pre-fetch task.
+    ///
+    /// On failure, rolls back `fetch_offset` so the batch can be retried.
+    fn collect_pending(&mut self) -> std::io::Result<Option<Vec<u8>>> {
+        let task = match self.pending.take() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        match self
+            .runtime
+            .block_on(task.handle)
+            .map_err(std::io::Error::other)?
+        {
+            Ok(batch) if batch.is_empty() => Ok(None),
+            Ok(batch) => Ok(Some(batch)),
             Err(err) => {
-                if first_err.is_none() {
-                    first_err = Some(std::io::Error::other(err));
-                }
+                // Roll back so the caller (or a retry) can re-fetch this range.
+                self.fetch_offset = task.batch_offset;
+                Err(std::io::Error::other(err))
             }
         }
     }
 
-    if let Some(err) = first_err {
-        return Err(Box::new(err));
-    }
+    /// Fetches a single batch: spawns [`SFTP_PIPELINE_DEPTH`] concurrent reads
+    /// and assembles the result into a contiguous buffer.
+    async fn fetch_batch(
+        session: Arc<SftpSession>,
+        path: String,
+        batch_offset: usize,
+        batch_len: usize,
+    ) -> Result<Vec<u8>, std::io::Error> {
+        use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 
-    Ok(result)
+        let chunk_count = batch_len.div_ceil(SFTP_CHUNK_SIZE);
+        let mut tasks = Vec::with_capacity(chunk_count);
+
+        for i in 0..chunk_count {
+            let chunk_offset = i * SFTP_CHUNK_SIZE;
+            let len = SFTP_CHUNK_SIZE.min(batch_len - chunk_offset);
+            let abs_offset = batch_offset + chunk_offset;
+
+            let mut file = session.open(&path).await.map_err(std::io::Error::other)?;
+            file.seek(std::io::SeekFrom::Start(abs_offset as u64))
+                .await?;
+
+            tasks.push(tokio::spawn(async move {
+                let mut buf = vec![0_u8; len];
+                file.read_exact(&mut buf).await?;
+                Ok::<(usize, Vec<u8>), std::io::Error>((chunk_offset, buf))
+            }));
+        }
+
+        let mut result = vec![0_u8; batch_len];
+        for task in tasks {
+            let (chunk_offset, chunk) = task
+                .await
+                .map_err(std::io::Error::other)?
+                .map_err(std::io::Error::other)?;
+            result[chunk_offset..chunk_offset + chunk.len()].copy_from_slice(&chunk);
+        }
+
+        Ok(result)
+    }
+}
+
+impl Read for PipelinedSftpReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            // Try to serve from the current front batch.
+            if let Some(front) = self.batches.front() {
+                let available = &front[self.buf_cursor..];
+                if !available.is_empty() {
+                    let to_copy = available.len().min(buf.len());
+                    buf[..to_copy].copy_from_slice(&available[..to_copy]);
+                    self.buf_cursor += to_copy;
+                    return Ok(to_copy);
+                }
+
+                // Current batch fully consumed — pop it.
+                self.batches.pop_front();
+                self.buf_cursor = 0;
+
+                // Collect the pending pre-fetch if any.
+                if let Some(batch) = self.collect_pending()? {
+                    self.batches.push_back(batch);
+                }
+
+                // Kick off next pre-fetch.
+                self.maybe_start_prefetch();
+
+                continue;
+            }
+
+            // No batches buffered — try to collect pending.
+            if let Some(batch) = self.collect_pending()? {
+                self.batches.push_back(batch);
+                self.maybe_start_prefetch();
+                continue;
+            }
+
+            // Nothing left — EOF.
+            return Ok(0);
+        }
+    }
 }
 
 /// Apply algorithm preferences from SSH config to the russh [`client::Config`].

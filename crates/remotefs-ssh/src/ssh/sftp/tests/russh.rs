@@ -741,6 +741,48 @@ fn should_not_make_symlink() {
     finalize_client(client);
 }
 
+#[test]
+fn should_read_file_with_correct_byte_order() {
+    crate::mock::logger();
+    let TestCtx {
+        mut client,
+        container: _container,
+    } = setup_client();
+    let p = Path::new("sequential.bin");
+    // Create a file large enough to span multiple pipeline chunks (>16 MiB)
+    // so the pipelined reader must reassemble batches in the correct order.
+    let file_size: usize = 20 * 1024 * 1024; // 20 MiB
+    let file_data: Vec<u8> = (0..file_size).map(|i| (i % 251) as u8).collect();
+    let metadata = Metadata::default().size(file_size as u64);
+    let reader = Cursor::new(file_data.clone());
+    assert_eq!(
+        client
+            .create_file(p, &metadata, Box::new(reader))
+            .expect("Failed to create file"),
+        file_size as u64
+    );
+
+    // Read back via open() to get a ReadStream, then verify byte order
+    let mut stream = client.open(p).expect("Failed to open file");
+    let mut dest = Vec::with_capacity(file_size);
+    std::io::Read::read_to_end(&mut stream, &mut dest).expect("Failed to read stream");
+    client
+        .on_read(stream)
+        .expect("Failed to finalize read stream");
+    assert_eq!(dest.len(), file_size, "Read size mismatch");
+
+    // Verify the first bytes arrive in order (not from a middle chunk)
+    assert_eq!(
+        &dest[..256],
+        &file_data[..256],
+        "First 256 bytes do not match — data not delivered from file start"
+    );
+    // Verify full content matches
+    assert_eq!(dest, file_data, "File content mismatch — byte order error");
+
+    finalize_client(client);
+}
+
 // -- test utils
 
 struct TestCtx {
