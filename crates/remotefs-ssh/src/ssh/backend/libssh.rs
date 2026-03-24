@@ -457,7 +457,7 @@ impl Sftp for LibSshSftp {
 
     fn realpath(&self, path: &Path) -> RemoteResult<PathBuf> {
         self.inner
-            .read_link(conv_path_to_str(path))
+            .canonicalize(conv_path_to_str(path))
             .map(PathBuf::from)
             .map_err(|err| {
                 RemoteError::new_ex(
@@ -657,16 +657,18 @@ impl LibSshSftp {
         let accessed = metadata.accessed();
         let modified = metadata.modified();
         let symlink = match metadata.file_type() {
-            Some(libssh_rs::FileType::Symlink) => match self.realpath(&path) {
-                Ok(p) => Some(p),
-                Err(err) => {
-                    error!(
-                        "Failed to read link of {} (even it's supposed to be a symlink): {err}",
-                        path.display(),
-                    );
-                    None
+            Some(libssh_rs::FileType::Symlink) => {
+                match self.inner.read_link(conv_path_to_str(&path)) {
+                    Ok(target) => Some(PathBuf::from(target)),
+                    Err(err) => {
+                        error!(
+                            "Failed to read link of {} (even it's supposed to be a symlink): {err}",
+                            path.display(),
+                        );
+                        None
+                    }
                 }
-            },
+            }
             _ => None,
         };
         let file_type = if symlink.is_some() {
