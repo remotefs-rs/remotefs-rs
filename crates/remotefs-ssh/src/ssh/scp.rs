@@ -2,6 +2,7 @@
 //!
 //! Scp remote fs implementation
 
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -22,6 +23,22 @@ static LS_RE: Lazy<Regex> = lazy_regex!(
     r#"^(?<sym_dir>[\-ld])(?<pex>[\-rwxsStT]{9})(?<sec_ctx>\.|\+|\@)?\s+(?<n_links>\d+)\s+(?<uid>.+)\s+(?<gid>.+)\s+(?<size>\d+)\s+(?<date_time>\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(?<name>.+)$"#
 );
 
+/// Which `stat(1)` format flags the remote host accepts.
+///
+/// `ls -l` prints times in the server's local timezone with no offset, so we
+/// use `stat` to get a timezone-free Unix epoch. The CLI flags differ between
+/// GNU coreutils and BSD `stat`, so we probe once per session and cache the
+/// result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatFlavor {
+    /// GNU coreutils: `stat -c '<fmt>'`.
+    Gnu,
+    /// BSD / macOS: `stat -f '<fmt>'`.
+    Bsd,
+    /// Neither flavor is available; fall back to parsing `ls` output.
+    Unsupported,
+}
+
 /// SCP "filesystem" client
 pub struct ScpFs<S>
 where
@@ -30,6 +47,8 @@ where
     session: Option<S>,
     wrkdir: PathBuf,
     opts: SshOpts,
+    /// Cached `stat(1)` flavor for the remote host; probed lazily on first use.
+    stat_flavor: Option<StatFlavor>,
 }
 
 #[cfg(feature = "libssh2")]
@@ -41,6 +60,7 @@ impl ScpFs<super::backend::LibSsh2Session> {
             session: None,
             wrkdir: PathBuf::from("/"),
             opts,
+            stat_flavor: None,
         }
     }
 }
@@ -54,6 +74,7 @@ impl ScpFs<super::backend::LibSshSession> {
             session: None,
             wrkdir: PathBuf::from("/"),
             opts,
+            stat_flavor: None,
         }
     }
 }
@@ -71,6 +92,7 @@ where
             session: None,
             wrkdir: PathBuf::from("/"),
             opts,
+            stat_flavor: None,
         }
     }
 }
@@ -244,6 +266,79 @@ where
             Err(err) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, err)),
         }
     }
+
+    /// Detect which `stat(1)` flavor the remote host supports.
+    ///
+    /// Probes GNU first (`stat --version`, which BSD rejects) then BSD (`stat
+    /// -f %m /`). The result is cached on the session; callers pay at most
+    /// one extra roundtrip per connection. Returns
+    /// [`StatFlavor::Unsupported`] when neither flavor works so the caller
+    /// can fall back to the `ls`-based parser.
+    fn stat_flavor(&mut self) -> StatFlavor {
+        if let Some(flavor) = self.stat_flavor {
+            return flavor;
+        }
+        let session = self.session.as_mut().unwrap();
+        let flavor = match session.cmd("stat --version >/dev/null 2>&1") {
+            Ok((0, _)) => StatFlavor::Gnu,
+            _ => match session.cmd("stat -f %m / >/dev/null 2>&1") {
+                Ok((0, _)) => StatFlavor::Bsd,
+                _ => StatFlavor::Unsupported,
+            },
+        };
+        trace!("Detected remote stat flavor: {flavor:?}");
+        self.stat_flavor = Some(flavor);
+        flavor
+    }
+
+    /// Fetch the Unix epoch mtime of a single `path` via `stat`.
+    ///
+    /// Returns [`None`] when the remote host exposes neither GNU nor BSD
+    /// `stat`, or when the command fails.
+    fn mtime_epoch(&mut self, path: &Path) -> Option<SystemTime> {
+        let flag = match self.stat_flavor() {
+            StatFlavor::Gnu => "-c %Y",
+            StatFlavor::Bsd => "-f %m",
+            StatFlavor::Unsupported => return None,
+        };
+        let cmd = format!("stat {} \"{}\"", flag, path.display());
+        match self.session.as_mut().unwrap().cmd(cmd) {
+            Ok((0, output)) => parser_utils::parse_stat_epoch(&output),
+            _ => None,
+        }
+    }
+
+    /// Fetch the Unix epoch mtime for every entry in `entries` under `dir`
+    /// with a single batched `stat` invocation.
+    ///
+    /// Returns a map from basename to [`SystemTime`]. Entries missing from
+    /// the map should fall back to the `ls`-parsed timestamp.
+    fn mtimes_in_dir(
+        &mut self,
+        dir: &Path,
+        entries: &[&str],
+    ) -> HashMap<String, SystemTime> {
+        if entries.is_empty() {
+            return HashMap::new();
+        }
+        let fmt = match self.stat_flavor() {
+            StatFlavor::Gnu => "-c '%Y %n'",
+            StatFlavor::Bsd => "-f '%m %N'",
+            StatFlavor::Unsupported => return HashMap::new(),
+        };
+        let args: Vec<String> = entries
+            .iter()
+            .map(|name| format!("\"{}\"", dir.join(name).display()))
+            .collect();
+        let cmd = format!("stat {} {}", fmt, args.join(" "));
+        match self.session.as_mut().unwrap().cmd(cmd) {
+            Ok((_, output)) => parser_utils::parse_stat_listing(&output),
+            Err(err) => {
+                warn!("Batched stat failed, falling back to ls timestamps: {err}");
+                HashMap::new()
+            }
+        }
+    }
 }
 
 impl<S> RemoteFs for ScpFs<S>
@@ -281,6 +376,8 @@ where
                 Ok(_) => {
                     // Set session and sftp to none
                     self.session = None;
+                    // Drop cached probe so a fresh connection re-detects.
+                    self.stat_flavor = None;
                     Ok(())
                 }
                 Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, err)),
@@ -371,6 +468,16 @@ where
                         entries.push(entry);
                     }
                 }
+                // Override `ls`-parsed mtimes (which are TZ-ambiguous) with
+                // the server's Unix epoch via `stat`. One batched roundtrip.
+                let names: Vec<String> = entries.iter().map(|e| e.name()).collect();
+                let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                let mtimes = self.mtimes_in_dir(path.as_path(), &name_refs);
+                for (entry, name) in entries.iter_mut().zip(names.iter()) {
+                    if let Some(t) = mtimes.get(name) {
+                        entry.metadata.modified = Some(*t);
+                    }
+                }
                 debug!(
                     "Found {} out of {} valid file entries",
                     entries.len(),
@@ -410,7 +517,13 @@ where
                     }
                 };
                 match self.parse_ls_output(parent.as_path(), line.as_str().trim()) {
-                    Ok(entry) => Ok(entry),
+                    Ok(mut entry) => {
+                        // Override TZ-ambiguous `ls` mtime with Unix epoch.
+                        if let Some(t) = self.mtime_epoch(path.as_path()) {
+                            entry.metadata.modified = Some(t);
+                        }
+                        Ok(entry)
+                    }
                     Err(_) => Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)),
                 }
             }
