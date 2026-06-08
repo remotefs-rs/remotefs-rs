@@ -540,6 +540,17 @@ impl Seek for SftpFileWriter {
 
 impl remotefs::fs::stream::WriteAndSeek for SftpFileWriter {}
 
+impl Drop for SftpFileWriter {
+    fn drop(&mut self) {
+        use tokio::io::AsyncWriteExt as _;
+        // Close the handle with an awaited close. russh-sftp's `File::drop`
+        // uses `close_nowait`, which never decrements the client's open-handle
+        // counter and would leak a handle per upload until the negotiated limit
+        // is reached ("Handle limit reached").
+        let _ = self.runtime.block_on(self.file.shutdown());
+    }
+}
+
 /// Number of concurrent SFTP file handles used per batch in pipelined reads.
 const SFTP_PIPELINE_DEPTH: usize = 4;
 
@@ -708,7 +719,7 @@ impl PipelinedSftpReader {
         batch_offset: usize,
         batch_len: usize,
     ) -> Result<Vec<u8>, std::io::Error> {
-        use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+        use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 
         let chunk_count = batch_len.div_ceil(SFTP_CHUNK_SIZE);
         let mut tasks = Vec::with_capacity(chunk_count);
@@ -717,14 +728,22 @@ impl PipelinedSftpReader {
             let chunk_offset = i * SFTP_CHUNK_SIZE;
             let len = SFTP_CHUNK_SIZE.min(batch_len - chunk_offset);
             let abs_offset = batch_offset + chunk_offset;
-
-            let mut file = session.open(&path).await.map_err(std::io::Error::other)?;
-            file.seek(std::io::SeekFrom::Start(abs_offset as u64))
-                .await?;
+            let session = Arc::clone(&session);
+            let path = path.clone();
 
             tasks.push(tokio::spawn(async move {
+                let mut file = session.open(&path).await.map_err(std::io::Error::other)?;
+                file.seek(std::io::SeekFrom::Start(abs_offset as u64))
+                    .await?;
                 let mut buf = vec![0_u8; len];
-                file.read_exact(&mut buf).await?;
+                let read_res = file.read_exact(&mut buf).await;
+                // Explicitly close the handle with an awaited close. russh-sftp's
+                // `File::drop` uses `close_nowait`, which frees the handle
+                // server-side but never decrements the client's open-handle
+                // counter. Relying on it leaks handles until the negotiated
+                // limit is hit ("Handle limit reached") after many opens.
+                let _ = file.shutdown().await;
+                read_res?;
                 Ok::<(usize, Vec<u8>), std::io::Error>((chunk_offset, buf))
             }));
         }
