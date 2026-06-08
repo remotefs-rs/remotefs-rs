@@ -122,27 +122,62 @@ where
             ),
         )
     })?;
+    let private_key = Arc::new(private_key);
 
-    let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(Arc::new(private_key), None);
+    // For RSA keys, `None` maps to the legacy `ssh-rsa` (SHA-1) signature, which modern
+    // OpenSSH servers reject by default. Try the modern `rsa-sha2-512` / `rsa-sha2-256`
+    // signature algorithms first, falling back to SHA-1 for legacy servers.
+    // For non-RSA keys the hash is ignored, so a single `None` attempt is enough.
+    let hash_algs: &[Option<russh::keys::HashAlg>] = if private_key.algorithm().is_rsa() {
+        &[
+            Some(russh::keys::HashAlg::Sha512),
+            Some(russh::keys::HashAlg::Sha256),
+            None,
+        ]
+    } else {
+        &[None]
+    };
 
-    let auth_result = runtime
-        .block_on(async {
-            session
-                .authenticate_publickey(username, key_with_hash)
-                .await
-        })
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err))?;
+    let mut last_failure = None;
+    for hash_alg in hash_algs {
+        let key_with_hash =
+            russh::keys::PrivateKeyWithHashAlg::new(private_key.clone(), *hash_alg);
 
-    match auth_result {
-        russh::client::AuthResult::Success => Ok(()),
-        russh::client::AuthResult::Failure { .. } => Err(RemoteError::new_ex(
-            RemoteErrorType::AuthenticationFailed,
-            format!(
-                "public key authentication failed for key at '{}'",
-                key_path.display()
-            ),
-        )),
+        let auth_result = runtime
+            .block_on(async {
+                session
+                    .authenticate_publickey(username, key_with_hash)
+                    .await
+            })
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err))?;
+
+        match auth_result {
+            russh::client::AuthResult::Success => return Ok(()),
+            russh::client::AuthResult::Failure {
+                remaining_methods, ..
+            } => {
+                debug!(
+                    "public key authentication with hash {hash_alg:?} failed for key at '{}'; remaining methods: {remaining_methods:?}",
+                    key_path.display()
+                );
+                // If the server no longer offers public key auth, stop retrying hashes.
+                let pubkey_still_offered =
+                    remaining_methods.contains(&russh::MethodKind::PublicKey);
+                last_failure = Some(remaining_methods);
+                if !pubkey_still_offered {
+                    break;
+                }
+            }
+        }
     }
+
+    Err(RemoteError::new_ex(
+        RemoteErrorType::AuthenticationFailed,
+        format!(
+            "public key authentication failed for key at '{}' (remaining methods: {last_failure:?})",
+            key_path.display()
+        ),
+    ))
 }
 
 /// Authenticate with username and password.

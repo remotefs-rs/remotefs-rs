@@ -1058,6 +1058,26 @@ mod test {
     }
 
     #[test]
+    fn should_connect_to_ssh_server_auth_key_from_ssh_config() {
+        use crate::ssh::container::OpensshServer;
+
+        let container = OpensshServer::start();
+        let port = container.port();
+
+        crate::mock::logger();
+        let runtime = test_runtime();
+        // Authenticate purely via the `IdentityFile` directive of the ssh config,
+        // with no key storage configured.
+        let key_file = ssh_mock::create_key_file();
+        let config_file = ssh_mock::create_ssh_config_with_identity(port, key_file.path());
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .runtime(runtime);
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
+        assert!(session.authenticated().unwrap());
+    }
+
+    #[test]
     fn should_perform_shell_command_on_server() {
         crate::mock::logger();
         let container = crate::ssh::container::OpensshServer::start();

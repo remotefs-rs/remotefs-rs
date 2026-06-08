@@ -13,7 +13,10 @@ impl Image for OpensshServerImage {
     }
 
     fn tag(&self) -> &str {
-        "8.6_p1-r3-ls70"
+        // Use a modern OpenSSH (>= 8.8) which rejects the legacy ssh-rsa (SHA-1)
+        // signature algorithm by default. This ensures the test suite exercises
+        // rsa-sha2-256/512 negotiation, matching what real users run.
+        "10.2_p1-r0-ls226"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
