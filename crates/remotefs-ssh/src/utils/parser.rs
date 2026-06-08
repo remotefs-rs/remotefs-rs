@@ -208,7 +208,8 @@ mod test {
 
     #[test]
     fn should_skip_unparseable_stat_listing_lines() {
-        let output = "1704067200 /tmp/a.txt\nstat: cannot stat '/tmp/missing'\n1541376000 /tmp/b.txt\n";
+        let output =
+            "1704067200 /tmp/a.txt\nstat: cannot stat '/tmp/missing'\n1541376000 /tmp/b.txt\n";
         let map = parse_stat_listing(output);
         assert_eq!(map.len(), 2);
         assert!(map.contains_key("a.txt"));

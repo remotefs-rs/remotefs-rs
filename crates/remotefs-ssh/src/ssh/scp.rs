@@ -313,11 +313,7 @@ where
     ///
     /// Returns a map from basename to [`SystemTime`]. Entries missing from
     /// the map should fall back to the `ls`-parsed timestamp.
-    fn mtimes_in_dir(
-        &mut self,
-        dir: &Path,
-        entries: &[&str],
-    ) -> HashMap<String, SystemTime> {
+    fn mtimes_in_dir(&mut self, dir: &Path, entries: &[&str]) -> HashMap<String, SystemTime> {
         if entries.is_empty() {
             return HashMap::new();
         }

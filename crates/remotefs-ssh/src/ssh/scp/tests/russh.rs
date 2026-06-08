@@ -738,7 +738,7 @@ fn finalize_client(
 
 fn generate_tempdir() -> String {
     use rand::distr::Alphanumeric;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
     let mut rng = rng();
     let name: String = std::iter::repeat(())
         .map(|()| rng.sample(Alphanumeric))

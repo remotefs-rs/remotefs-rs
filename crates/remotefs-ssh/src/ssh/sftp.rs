@@ -156,25 +156,27 @@ where
                 error!("Failed to open {} for reading: {e}", src.display());
                 RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
             })?;
-            let mut writer = sftp.open_write(dest, WriteMode::Truncate, mode).map_err(|e| {
-                error!("Failed to open {} for writing: {e}", dest.display());
-                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-            })?;
+            let mut writer = sftp
+                .open_write(dest, WriteMode::Truncate, mode)
+                .map_err(|e| {
+                    error!("Failed to open {} for writing: {e}", dest.display());
+                    RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
+                })?;
             let mut buffer = [0u8; 65535];
             loop {
-                let bytes_read = reader.read(&mut buffer).map_err(|e| {
-                    RemoteError::new_ex(RemoteErrorType::IoError, e)
-                })?;
+                let bytes_read = reader
+                    .read(&mut buffer)
+                    .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
                 if bytes_read == 0 {
                     break;
                 }
-                writer.write_all(&buffer[..bytes_read]).map_err(|e| {
-                    RemoteError::new_ex(RemoteErrorType::IoError, e)
-                })?;
+                writer
+                    .write_all(&buffer[..bytes_read])
+                    .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
             }
-            writer.flush().map_err(|e| {
-                RemoteError::new_ex(RemoteErrorType::IoError, e)
-            })?;
+            writer
+                .flush()
+                .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
         }
 
         Ok(())
