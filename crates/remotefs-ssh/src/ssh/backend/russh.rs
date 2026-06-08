@@ -1078,6 +1078,79 @@ mod test {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn should_connect_to_ssh_server_auth_ssh_agent() {
+        use std::process::Command;
+
+        use crate::SshAgentIdentity;
+        use crate::ssh::container::OpensshServer;
+
+        crate::mock::logger();
+
+        // Spawn a dedicated ssh-agent and load the mock key into it.
+        let agent_out = Command::new("ssh-agent")
+            .arg("-s")
+            .output()
+            .expect("failed to spawn ssh-agent (is openssh installed?)");
+        let agent_stdout = String::from_utf8_lossy(&agent_out.stdout);
+        let auth_sock = parse_agent_var(&agent_stdout, "SSH_AUTH_SOCK")
+            .expect("ssh-agent did not report SSH_AUTH_SOCK");
+        let agent_pid = parse_agent_var(&agent_stdout, "SSH_AGENT_PID")
+            .expect("ssh-agent did not report SSH_AGENT_PID");
+
+        let key_file = ssh_mock::create_key_file();
+        // ssh-add refuses keys with loose permissions.
+        Command::new("chmod")
+            .args(["600", &key_file.path().display().to_string()])
+            .status()
+            .expect("chmod failed");
+        let added = Command::new("ssh-add")
+            .arg(key_file.path())
+            .env("SSH_AUTH_SOCK", &auth_sock)
+            .status()
+            .expect("ssh-add failed to run");
+        assert!(added.success(), "ssh-add could not load the mock key");
+
+        // Point the russh agent client at our agent. No key storage, no password:
+        // authentication must succeed through the agent alone.
+        // SAFETY: tests in this module run single-threaded (`--test-threads=1`).
+        unsafe {
+            std::env::set_var("SSH_AUTH_SOCK", &auth_sock);
+        }
+
+        let container = OpensshServer::start();
+        let port = container.port();
+        let runtime = test_runtime();
+        let config_file = ssh_mock::create_ssh_config(port);
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .ssh_agent_identity(Some(SshAgentIdentity::All))
+            .runtime(runtime);
+
+        let result = RusshSession::<NoCheckServerKey>::connect(&opts);
+
+        // Tear the agent down regardless of the outcome.
+        // SAFETY: see above.
+        unsafe {
+            std::env::remove_var("SSH_AUTH_SOCK");
+        }
+        let _ = Command::new("kill").arg(&agent_pid).status();
+
+        let session = result.expect("could not authenticate via ssh agent");
+        assert!(session.authenticated().unwrap());
+    }
+
+    /// Parse a `NAME=value;` assignment from `ssh-agent -s` output.
+    #[cfg(unix)]
+    fn parse_agent_var(output: &str, name: &str) -> Option<String> {
+        let needle = format!("{name}=");
+        let start = output.find(&needle)? + needle.len();
+        let rest = &output[start..];
+        let end = rest.find(';')?;
+        Some(rest[..end].to_string())
+    }
+
+    #[test]
     fn should_perform_shell_command_on_server() {
         crate::mock::logger();
         let container = crate::ssh::container::OpensshServer::start();

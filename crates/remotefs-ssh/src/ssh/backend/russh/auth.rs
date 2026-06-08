@@ -29,6 +29,20 @@ where
 {
     let username = &ssh_config.username;
 
+    // Authentication order mirrors the libssh2/libssh backends: SSH agent first,
+    // then key, then password.
+    if let Some(agent_identity) = opts.ssh_agent_identity.as_ref() {
+        match auth_with_agent(session, runtime, username, agent_identity) {
+            Ok(()) => {
+                info!("Authenticated with ssh agent");
+                return Ok(());
+            }
+            Err(err) => {
+                error!("Could not authenticate with ssh agent: {err}");
+            }
+        }
+    }
+
     // Collect authentication methods in priority order: RSA key, then password
     let mut methods = vec![];
 
@@ -203,4 +217,121 @@ where
             "password authentication failed",
         )),
     }
+}
+
+/// Authenticate with the SSH agent, letting it sign the challenges.
+///
+/// The agent socket is resolved from the `SSH_AUTH_SOCK` environment variable.
+#[cfg(unix)]
+fn auth_with_agent<T>(
+    session: &mut Handle<T>,
+    runtime: &Runtime,
+    username: &str,
+    identity: &crate::SshAgentIdentity,
+) -> RemoteResult<()>
+where
+    T: Handler,
+{
+    use russh::keys::agent::client::AgentClient;
+
+    debug!("Authenticating with username '{username}' via ssh agent");
+
+    runtime.block_on(async {
+        let mut agent = AgentClient::connect_env().await.map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ConnectionError,
+                format!("could not connect to ssh agent: {err}"),
+            )
+        })?;
+
+        let identities = agent.request_identities().await.map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ConnectionError,
+                format!("could not list ssh agent identities: {err}"),
+            )
+        })?;
+
+        let mut last_err = None;
+        for agent_identity in identities {
+            let pubkey = agent_identity.public_key().into_owned();
+            let blob = pubkey.to_bytes().unwrap_or_default();
+            if !identity.pubkey_matches(&blob) {
+                continue;
+            }
+            debug!(
+                "Trying to authenticate with ssh agent identity: {}",
+                pubkey.fingerprint(russh::keys::HashAlg::Sha256)
+            );
+
+            // Same SHA-1 caveat as direct key auth: for RSA identities request the
+            // modern rsa-sha2-512/256 signature algorithms before the legacy ssh-rsa.
+            let hash_algs: &[Option<russh::keys::HashAlg>] = if pubkey.algorithm().is_rsa() {
+                &[
+                    Some(russh::keys::HashAlg::Sha512),
+                    Some(russh::keys::HashAlg::Sha256),
+                    None,
+                ]
+            } else {
+                &[None]
+            };
+
+            for hash_alg in hash_algs {
+                match session
+                    .authenticate_publickey_with(username, pubkey.clone(), *hash_alg, &mut agent)
+                    .await
+                {
+                    Ok(russh::client::AuthResult::Success) => return Ok(()),
+                    Ok(russh::client::AuthResult::Failure {
+                        remaining_methods, ..
+                    }) => {
+                        debug!(
+                            "ssh agent auth with hash {hash_alg:?} failed; remaining methods: {remaining_methods:?}"
+                        );
+                        let pubkey_still_offered =
+                            remaining_methods.contains(&russh::MethodKind::PublicKey);
+                        last_err = Some(RemoteError::new_ex(
+                            RemoteErrorType::AuthenticationFailed,
+                            "ssh agent authentication failed",
+                        ));
+                        if !pubkey_still_offered {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        debug!("ssh agent auth signing error: {err}");
+                        last_err = Some(RemoteError::new_ex(
+                            RemoteErrorType::AuthenticationFailed,
+                            format!("ssh agent signing failed: {err}"),
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| {
+            RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                "ssh agent provided no usable identity",
+            )
+        }))
+    })
+}
+
+/// The SSH agent is only reachable over a Unix socket; on other platforms this is a no-op
+/// that simply reports the agent as unavailable so the remaining methods are tried.
+#[cfg(not(unix))]
+fn auth_with_agent<T>(
+    _session: &mut Handle<T>,
+    _runtime: &Runtime,
+    _username: &str,
+    _identity: &crate::SshAgentIdentity,
+) -> RemoteResult<()>
+where
+    T: Handler,
+{
+    Err(RemoteError::new_ex(
+        RemoteErrorType::AuthenticationFailed,
+        "ssh agent authentication is not supported on this platform for the russh backend",
+    ))
 }
