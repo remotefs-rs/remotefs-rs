@@ -11,7 +11,6 @@
 <p align="center">~ Remotefs Aws S3 client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.4.3 (2025-12-20)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -87,7 +86,7 @@ remotefs-aws-s3 = "^0.4"
 
 these features are supported:
 
-- `find`: enable `find()` method on client (*enabled by default*)
+- `find`: enable `find()` method on client (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ---
@@ -99,7 +98,7 @@ The following table states the compatibility for the client client and the remot
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | Aws-S3 |
-|----------------|--------|
+| -------------- | ------ |
 | append_file    | No     |
 | append         | No     |
 | change_dir     | Yes    |

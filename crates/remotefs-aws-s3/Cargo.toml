@@ -1,23 +1,23 @@
 [package]
-authors = ["Christian Visintin <christian.visintin1997@gmail.com>"]
+name = "remotefs-aws-s3"
+version = "0.4.4"
+authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
-description = "remotefs Aws S3 client library"
 documentation = "https://docs.rs/remotefs-aws-s3"
 edition = "2024"
-homepage = "https://veeso.github.io/remotefs-rs-aws-s3/"
+homepage = "https://github.com/remotefs-rs/remotefs-rs-aws-s3"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = ["remotefs", "s3-client"]
 license = "MIT"
-name = "remotefs-aws-s3"
 readme = "README.md"
-repository = "https://github.com/veeso/remotefs-rs-aws-s3"
-rust-version = "1.89.0"
-version = "0.4.3"
+repository = "https://github.com/remotefs-rs/remotefs-rs-aws-s3"
+rust-version = "1.94.1"
+description = "remotefs Aws S3 client library"
 
 [dependencies]
 aws-config = "1"
 aws-credential-types = "1"
-aws-sdk-s3 = "1"
+aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
 log = "^0.4"
 remotefs = "^0.3"
 thiserror = "2"
@@ -26,9 +26,9 @@ tokio = { version = "1", features = ["fs", "rt"] }
 [dev-dependencies]
 env_logger = "^0.11"
 pretty_assertions = "^1"
-rand = "^0.9"
+rand = "0.10"
 tempfile = "^3"
-testcontainers = { version = "0.26", features = ["blocking"] }
+testcontainers = { version = "0.28", features = ["blocking"] }
 
 [features]
 default = ["find"]

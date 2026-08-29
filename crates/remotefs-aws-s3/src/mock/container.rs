@@ -4,7 +4,7 @@ use std::time::Duration;
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::{Container, Image};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 struct MinioImage;
 
 impl Image for MinioImage {
@@ -42,9 +42,7 @@ pub struct Minio {
 impl Minio {
     pub fn start() -> Self {
         use testcontainers::runners::SyncRunner;
-        let container = MinioImage::default()
-            .start()
-            .expect("Failed to start container");
+        let container = MinioImage.start().expect("Failed to start container");
 
         Self { container }
     }
