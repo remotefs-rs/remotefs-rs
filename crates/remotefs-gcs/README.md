@@ -1,138 +1,178 @@
-# Rust template
+# remotefs-gcs
 
-[![CI](https://github.com/veeso/rust-template/actions/workflows/ci.yml/badge.svg)](https://github.com/veeso/rust-template/actions/workflows/ci.yml)
-[![TruffleHog](https://github.com/veeso/rust-template/actions/workflows/trufflehog.yml/badge.svg)](https://github.com/veeso/rust-template/actions/workflows/trufflehog.yml)
-[![zizmor](https://github.com/veeso/rust-template/actions/workflows/zizmor.yml/badge.svg)](https://github.com/veeso/rust-template/actions/workflows/zizmor.yml)
+[![Crates.io](https://img.shields.io/crates/v/remotefs-gcs.svg)](https://crates.io/crates/remotefs-gcs)
+[![Documentation](https://docs.rs/remotefs-gcs/badge.svg)](https://docs.rs/remotefs-gcs)
+[![CI](https://github.com/remotefs-rs/remotefs-rs-gcs/actions/workflows/ci.yml/badge.svg)](https://github.com/remotefs-rs/remotefs-rs-gcs/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/remotefs-rs/remotefs-rs-gcs/branch/main/graph/badge.svg)](https://codecov.io/gh/remotefs-rs/remotefs-rs-gcs)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Conventional Commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://www.conventionalcommits.org)
 
-A reusable Rust 1.98.0 project template with a complete local and continuous
-integration toolchain.
+`remotefs-gcs` is a synchronous [`remotefs`] client for Google Cloud Storage.
+It owns the Tokio runtime provided by the caller and uses the Google Cloud
+Storage Rust SDK for object bytes, metadata, listing, deletion, and rewrites.
 
-The starter package builds as both a library and a binary. Keep both targets or
-remove one to match the project you are creating.
+[`remotefs`]: https://github.com/remotefs-rs/remotefs-rs
 
-## Use this template
+## Installation
 
-Create a repository from
-[veeso/rust-template](https://github.com/veeso/rust-template), then review this
-checklist:
+Add the library and a Tokio runtime to `Cargo.toml`:
 
-1. Replace `rust-template` and `rust_template` in `Cargo.toml` and `src/`.
-2. Update the author, repository, homepage, description, keywords, and
-   categories in `Cargo.toml`.
-3. Replace repository links and badges in this README.
-4. Choose whether to keep the library target, binary target, or both.
-5. Review the license and dependency policy in `LICENSE` and `deny.toml`.
-6. Configure crates.io trusted publishing for `.github/workflows/publish.yml`.
-7. Run `just fmt`, `just check`, and `just setup_githooks`.
-
-## Choose the package shape
-
-Both targets compile by default:
-
-- Keep `src/lib.rs` and `src/main.rs` for a library with a companion binary.
-- Delete `src/main.rs` and the `[[bin]]` section for a library-only crate.
-- Delete `src/lib.rs` and the `[lib]` section for a binary-only crate, then
-  replace the library call in `src/main.rs` with the application entry point.
-
-## Install the tools
-
-The pinned Rust toolchain is installed automatically by rustup. Local recipes
-also use these tools:
-
-- [just](https://just.systems) for task execution.
-- [dprint](https://dprint.dev) 0.56.1 and nightly rustfmt for formatting.
-- [cargo-deny](https://embarkstudios.github.io/cargo-deny/) for dependency
-  policy.
-- [TruffleHog](https://github.com/trufflesecurity/trufflehog) for secret
-  scanning.
-- [git-cliff](https://git-cliff.org) for changelog generation.
-- [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) for coverage.
-- [zizmor](https://docs.zizmor.sh) for GitHub Actions auditing.
-- [shellcheck](https://www.shellcheck.net) for hook validation.
-
-On macOS with Homebrew, install the packaged tools with:
-
-```sh
-brew install cargo-deny dprint git-cliff just shellcheck trufflehog zizmor
-cargo install cargo-llvm-cov
-rustup toolchain install nightly --profile minimal --component rustfmt
+```toml
+[dependencies]
+remotefs = "0.3"
+remotefs-gcs = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread"] }
 ```
 
-## Run common tasks
+The crate exposes these features:
 
-Run `just` to list every recipe.
+| Feature           | Default | Purpose                                     |
+| ----------------- | :-----: | ------------------------------------------- |
+| `find`            |   yes   | Enables `RemoteFs::find`                    |
+| `no-log`          |   no    | Disables logging from this crate            |
+| `with-containers` |   no    | Enables the local fake GCS integration test |
+| `with-gcs-ci`     |   no    | Enables the optional live GCS smoke test    |
+
+## Application Default Credentials
+
+`GoogleCloudStorageFs::new` uses Application Default Credentials (ADC). The
+application must authenticate with the Google Cloud tooling or environment
+appropriate to its deployment:
+
+```rust,no_run
+use std::path::Path;
+use std::sync::Arc;
+
+use remotefs::RemoteFs;
+use remotefs_gcs::GoogleCloudStorageFs;
+use tokio::runtime::Runtime;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(Runtime::new()?);
+    let mut client = GoogleCloudStorageFs::new("my-bucket", &runtime);
+
+    client.connect()?;
+    println!("working directory: {}", client.pwd()?.display());
+    let _entries = client.list_dir(Path::new("/"))?;
+    client.disconnect()?;
+    Ok(())
+}
+```
+
+## Custom credentials
+
+Pass any `google-cloud-auth` credential provider supported by the SDK. This
+example builds the SDK's ADC credentials explicitly:
+
+```rust,no_run
+use std::sync::Arc;
+
+use remotefs::RemoteFs;
+use remotefs_gcs::credentials::Builder;
+use remotefs_gcs::{GoogleCloudStorageCredentials, GoogleCloudStorageFs};
+use tokio::runtime::Runtime;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let credentials = Builder::default().build()?;
+    let runtime = Arc::new(Runtime::new()?);
+    let mut client = GoogleCloudStorageFs::with_credentials(
+        "my-bucket",
+        GoogleCloudStorageCredentials::custom(credentials),
+        &runtime,
+    );
+
+    client.connect()?;
+    client.disconnect()?;
+    Ok(())
+}
+```
+
+## Anonymous and emulator access
+
+Use `anonymous` for public buckets or an emulator that does not require
+authentication. `endpoint` applies to both Google SDK clients:
+
+```rust,no_run
+use std::sync::Arc;
+
+use remotefs::RemoteFs;
+use remotefs_gcs::{GoogleCloudStorageCredentials, GoogleCloudStorageFs};
+use tokio::runtime::Runtime;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = Arc::new(Runtime::new()?);
+    let mut client = GoogleCloudStorageFs::with_credentials(
+        "test-bucket",
+        GoogleCloudStorageCredentials::anonymous(),
+        &runtime,
+    )
+    .endpoint("http://localhost:4443");
+
+    client.connect()?;
+    client.disconnect()?;
+    Ok(())
+}
+```
+
+## Filesystem behavior
+
+The bucket is presented as a rooted filesystem. Google Cloud Storage has a
+flat object namespace, so this crate treats both trailing-slash marker objects
+and returned object prefixes as directories.
+
+| Operation                    | Support | Notes                                        |
+| ---------------------------- | :-----: | -------------------------------------------- |
+| `connect`, `disconnect`      |   yes   | Builds both SDK clients                      |
+| `pwd`, `change_dir`          |   yes   | Paths are rooted at `/`                      |
+| `list_dir`, `stat`, `exists` |   yes   | Listings consume every SDK page              |
+| `create_dir`                 |   yes   | Creates a zero-byte trailing-slash marker    |
+| `remove_dir`                 |   yes   | Rejects non-empty directories                |
+| `remove_dir_all`             |   yes   | Deletes every object below the path          |
+| `create_file`, `open_file`   |   yes   | Blocking upload and download                 |
+| `copy`, `mov`                |   yes   | Rewrite; move is copy followed by delete     |
+| `setstat`, `symlink`, `exec` |   no    | Returns `UnsupportedFeature`                 |
+| `create`, `open`, `append`   |   no    | Streaming `remotefs` methods are unsupported |
+
+The root directory always exists and is never represented by an object. An
+implicit directory exists when an object has the corresponding prefix, even if
+there is no marker object.
+
+## Development and testing
+
+Run the default unit, integration, and documentation tests with:
 
 ```sh
-just build
-just release
 just test
-just coverage
-just fmt
-just fmt_check
-just lint "-- -D warnings"
-just doc
-just deny
-just scan_secrets
+```
+
+Run the emulator-backed integration test with Docker available:
+
+```sh
+just test "--features with-containers -- --test-threads=1"
+```
+
+The test is retained as an executable contract, but is currently ignored
+because `fake-gcs-server`'s HTTP mode does not provide the gRPC transport used
+by the SDK's `StorageControl` client.
+
+The live smoke test is opt-in. Set `GCS_TEST_BUCKET` and provide ADC before
+running it:
+
+```sh
+GCS_TEST_BUCKET=my-test-bucket just test "--features with-gcs-ci"
+```
+
+The complete local quality gate is:
+
+```sh
 just check
 ```
 
-`just check` is the local quality gate. It verifies formatting, runs Clippy
-with warnings denied, builds documentation with warnings denied, checks the
-dependency policy, and runs the tests.
+The minimum supported Rust version is 1.98.0. See the [Rust toolchain file]
+for the pinned compiler and the [contribution guide] for project conventions.
 
-## Enable the Git hooks
-
-Install the tracked pre-commit hook with:
-
-```sh
-just setup_githooks
-```
-
-The hook scans staged files for secrets, checks formatting, runs Clippy, and
-checks dependencies with cargo-deny.
-
-## Update the changelog
-
-Commits follow the
-[Conventional Commits](https://www.conventionalcommits.org) specification.
-Preview or generate release notes with:
-
-```sh
-just changelog_preview 0.1.0
-just changelog 0.1.0
-```
-
-Review and commit `CHANGELOG.md` before publishing.
-
-## Run continuous integration
-
-GitHub Actions provides:
-
-- Cross-platform builds, tests, and Clippy checks.
-- Formatting, documentation, and dependency-policy checks.
-- TruffleHog secret scanning.
-- zizmor workflow-security auditing.
-- Manual crates.io dry runs and trusted publishing.
-
-Every external action is pinned to a verified release commit. Checkout steps do
-not persist credentials, and each workflow declares explicit permissions.
-
-## Publish the crate
-
-Generate and review the changelog section for the package version, then open
-the `Publish` workflow in GitHub Actions. The workflow defaults to a dry run.
-For a live release, disable `dry_run` after configuring crates.io trusted
-publishing for this repository and workflow. After crates.io accepts the
-package, the workflow creates the matching `v<version>` Git tag.
-
-For a local package verification without uploading:
-
-```sh
-just publish "--dry-run --allow-dirty"
-```
+[Rust toolchain file]: rust-toolchain.toml
+[contribution guide]: https://github.com/remotefs-rs/remotefs-rs-gcs/blob/main/AGENTS.md
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+Licensed under the [MIT License](LICENSE).

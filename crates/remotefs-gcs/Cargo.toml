@@ -1,10 +1,10 @@
 [package]
-name = "rust-template"
+name = "remotefs-gcs"
 version = "0.1.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
-categories = ["development-tools"]
+categories = ["filesystem", "network-programming"]
 edition = "2024"
-homepage = "https://github.com/veeso/rust-template"
+homepage = "https://github.com/remotefs-rs/remotefs-rs-gcs"
 include = [
   "/CHANGELOG.md",
   "/Cargo.lock",
@@ -13,20 +13,43 @@ include = [
   "/README.md",
   "/src/**",
 ]
-keywords = ["rust", "starter", "template"]
+keywords = ["gcs", "google-cloud", "remotefs", "storage"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/veeso/rust-template"
+repository = "https://github.com/remotefs-rs/remotefs-rs-gcs"
 rust-version = "1.98.0"
-description = "A reusable Rust project template with batteries-included development tooling."
+description = "Google Cloud Storage client for remotefs-rs."
+
+[features]
+default = ["find"]
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+with-containers = []
+with-gcs-ci = []
+
+[dependencies]
+bytes = "1"
+google-cloud-auth = "1"
+google-cloud-gax = "1"
+google-cloud-storage = "1"
+log = "0.4"
+remotefs = "0.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+
+[dev-dependencies]
+env_logger = "0.11"
+pretty_assertions = "1"
+rand = "0.10"
+tempfile = "3"
+testcontainers = { version = "0.28", features = ["blocking", "http_wait"] }
 
 [lib]
-name = "rust_template"
+name = "remotefs_gcs"
 path = "src/lib.rs"
 
-[[bin]]
-name = "rust-template"
-path = "src/main.rs"
+[target."cfg(target_os = \"windows\")"]
+[target."cfg(target_os = \"windows\")".dependencies]
+path-slash = "^0.2"
 
 [lints.rust]
 ambiguous_negative_literals = "warn"
@@ -58,6 +81,9 @@ fn_to_numeric_cast_any = "warn"
 if_then_some_else_none = "warn"
 literal_string_with_formatting_args = "allow"
 map_err_ignore = "warn"
+multiple_crate_versions = "allow"
+negative_feature_names = "allow"
+redundant_feature_names = "allow"
 redundant_type_annotations = "warn"
 renamed_function_params = "warn"
 semicolon_outside_block = "warn"
