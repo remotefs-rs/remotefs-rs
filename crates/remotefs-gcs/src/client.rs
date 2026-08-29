@@ -39,6 +39,7 @@ pub struct GoogleCloudStorageFs {
     bucket: String,
     credentials: GoogleCloudStorageCredentials,
     endpoint: Option<String>,
+    control_endpoint: Option<String>,
     universe_domain: Option<String>,
     backoff_policy: Option<BackoffPolicyArg>,
     retry_policy: Option<RetryPolicyArg>,
@@ -73,6 +74,7 @@ impl GoogleCloudStorageFs {
             bucket: bucket.into(),
             credentials,
             endpoint: None,
+            control_endpoint: None,
             universe_domain: None,
             backoff_policy: None,
             retry_policy: None,
@@ -87,6 +89,20 @@ impl GoogleCloudStorageFs {
         S: Into<String>,
     {
         self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    /// Sets an endpoint override for the Google Cloud SDK control client.
+    ///
+    /// This is useful for emulators that expose object data over HTTP and
+    /// metadata operations over a separate gRPC endpoint. When unset, the
+    /// endpoint configured by [`Self::endpoint`] is used for both clients.
+    #[must_use]
+    pub fn control_endpoint<S>(mut self, endpoint: S) -> Self
+    where
+        S: Into<String>,
+    {
+        self.control_endpoint = Some(endpoint.into());
         self
     }
 
@@ -314,6 +330,9 @@ impl RemoteFs for GoogleCloudStorageFs {
             storage_builder = storage_builder.with_endpoint(endpoint.clone());
             control_builder = control_builder.with_endpoint(endpoint.clone());
         }
+        if let Some(endpoint) = &self.control_endpoint {
+            control_builder = control_builder.with_endpoint(endpoint.clone());
+        }
         if let Some(universe_domain) = &self.universe_domain {
             storage_builder = storage_builder.with_universe_domain(universe_domain.clone());
             control_builder = control_builder.with_universe_domain(universe_domain.clone());
@@ -443,18 +462,11 @@ impl RemoteFs for GoogleCloudStorageFs {
         }
         let prefix = directory_prefix(&absolute)?;
         let entries = self.query_objects(&prefix, None)?;
-        let marker_path = entry.path().to_path_buf();
-        let mut marker = None;
-        for child in entries {
-            if child.path() == marker_path && child.is_dir() {
-                marker = Some(child);
-            } else {
-                return Err(RemoteError::new(RemoteErrorType::DirectoryNotEmpty));
-            }
+        if !entries.is_empty() {
+            return Err(RemoteError::new(RemoteErrorType::DirectoryNotEmpty));
         }
-        let marker =
-            marker.ok_or_else(|| RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))?;
-        self.delete_file_object(&marker, RemoteErrorType::CouldNotRemoveFile)
+        let marker = format!("{}{OBJECT_DELIMITER}", object_name(&absolute)?);
+        self.delete_object(&marker, RemoteErrorType::CouldNotRemoveFile)
     }
 
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
@@ -477,7 +489,15 @@ impl RemoteFs for GoogleCloudStorageFs {
         for child in entries {
             self.delete_file_object(&child, RemoteErrorType::CouldNotRemoveFile)?;
         }
-        Ok(())
+        let marker = format!("{}{OBJECT_DELIMITER}", object_name(&absolute)?);
+        match self.delete_object(&marker, RemoteErrorType::CouldNotRemoveFile) {
+            Ok(())
+            | Err(RemoteError {
+                kind: RemoteErrorType::NoSuchFileOrDirectory,
+                ..
+            }) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     /// Creates a zero-byte trailing-slash marker object.
@@ -501,6 +521,7 @@ impl RemoteFs for GoogleCloudStorageFs {
             .block_on(
                 storage
                     .write_object(bucket_resource(&self.bucket), marker, bytes::Bytes::new())
+                    .set_content_type("application/octet-stream")
                     .set_if_generation_match(0_i64)
                     .send_buffered(),
             )
@@ -591,15 +612,17 @@ impl RemoteFs for GoogleCloudStorageFs {
         let absolute = self.absolute_path(path)?;
         let object = object_name(&absolute)?;
         let storage = self.require_storage()?;
+        let source = if metadata.size == 0 {
+            BlockingReaderSource::new(reader)
+        } else {
+            BlockingReaderSource::with_size(reader, metadata.size)
+        };
         let response = self
             .runtime
             .block_on(
                 storage
-                    .write_object(
-                        bucket_resource(&self.bucket),
-                        object,
-                        BlockingReaderSource::new(reader),
-                    )
+                    .write_object(bucket_resource(&self.bucket), object, source)
+                    .set_content_type("application/octet-stream")
                     .send_buffered(),
             )
             .map_err(|error| map_gcs_error(error, RemoteErrorType::FileCreateDenied))?;

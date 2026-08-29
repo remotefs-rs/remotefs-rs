@@ -72,6 +72,8 @@
 //! [`GoogleCloudStorageCredentials::anonymous`] is useful for public buckets
 //! and local emulators. Pair it with [`GoogleCloudStorageFs::endpoint`] when
 //! the service is not running at Google's default endpoint.
+//! Emulators with separate object-data and metadata endpoints can additionally
+//! use [`GoogleCloudStorageFs::control_endpoint`] for the latter.
 //!
 //! ## Filesystem semantics
 //!
@@ -88,6 +90,8 @@
 //!
 //! [`GoogleCloudStorageFs::new`]: client::GoogleCloudStorageFs::new
 //! [`GoogleCloudStorageFs::endpoint`]: client::GoogleCloudStorageFs::endpoint
+//! [`GoogleCloudStorageFs::control_endpoint`]:
+//!     client::GoogleCloudStorageFs::control_endpoint
 //! [`GoogleCloudStorageCredentials::anonymous`]:
 //!     credentials::GoogleCloudStorageCredentials::anonymous
 //! [`GoogleCloudStorageCredentials::custom`]:

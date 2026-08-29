@@ -23,7 +23,7 @@ keywords = [
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-gcs"
-rust-version = "1.98.0"
+rust-version = "1.90.0"
 description = "Google Cloud Storage client for remotefs-rs."
 
 [features]

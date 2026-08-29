@@ -5,18 +5,33 @@ use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::SyncRunner;
 use testcontainers::{Container, GenericImage, ImageExt};
 
-const GCS_IMAGE: &str = "fsouza/fake-gcs-server";
-const GCS_TAG: &str = "1.54.0";
-const GCS_PORT: ContainerPort = ContainerPort::Tcp(4443);
+const GCS_GRPC_PORT: ContainerPort = ContainerPort::Tcp(8888);
+const GCS_HTTP_PORT: ContainerPort = ContainerPort::Tcp(9000);
+const GCS_IMAGE: &str = "gcr.io/cloud-devrel-public-resources/storage-testbench";
+const GCS_TAG: &str = concat!(
+    "latest@sha256:",
+    "600fa5c3cfc8be26435c38591cc094fb4ef648f760ffabf77f93237b1ebee027"
+);
+// The testbench assumes every multipart media part has a content type, while
+// the Google Rust SDK omits that header for streamed parts.
+const GCS_COMMAND: [&str; 2] = [
+    "-c",
+    concat!(
+        "sed -i 's|headers\\[content_type_key\\]|headers.get(content_type_key, ",
+        "b\"application/octet-stream\")|' ",
+        "/opt/storage-testbench/testbench/common.py && ",
+        "exec python3 testbench_run.py 0.0.0.0 9000 10"
+    ),
+];
 
 #[derive(Debug)]
-/// A running fake Google Cloud Storage server.
+/// A running Google Cloud Storage testbench.
 pub struct GcsContainer {
     container: Container<GenericImage>,
 }
 
 impl GcsContainer {
-    /// Starts a fake Google Cloud Storage server in Docker.
+    /// Starts a Google Cloud Storage testbench in Docker.
     ///
     /// # Panics
     ///
@@ -25,16 +40,18 @@ impl GcsContainer {
     #[must_use]
     pub fn start() -> Self {
         let wait_for = WaitFor::http(
-            HttpWaitStrategy::new("/_internal/healthcheck")
-                .with_port(GCS_PORT)
+            HttpWaitStrategy::new("/start_grpc?port=8888")
+                .with_port(GCS_HTTP_PORT)
                 .with_expected_status_code(200_u16),
         );
         let container = GenericImage::new(GCS_IMAGE, GCS_TAG)
-            .with_exposed_port(GCS_PORT)
+            .with_exposed_port(GCS_HTTP_PORT)
+            .with_exposed_port(GCS_GRPC_PORT)
             .with_wait_for(wait_for)
-            .with_cmd(["-scheme", "http"])
+            .with_entrypoint("sh")
+            .with_cmd(GCS_COMMAND)
             .start()
-            .expect("failed to start fake GCS server");
+            .expect("failed to start GCS testbench");
         Self { container }
     }
 
@@ -47,8 +64,22 @@ impl GcsContainer {
     pub fn endpoint(&self) -> String {
         let port = self
             .container
-            .get_host_port_ipv4(GCS_PORT)
-            .expect("failed to map fake GCS server port");
+            .get_host_port_ipv4(GCS_GRPC_PORT)
+            .expect("failed to map GCS testbench gRPC port");
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// Returns the host endpoint for the HTTP object-data server.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the exposed HTTP port cannot be mapped.
+    #[must_use]
+    pub fn http_endpoint(&self) -> String {
+        let port = self
+            .container
+            .get_host_port_ipv4(GCS_HTTP_PORT)
+            .expect("failed to map GCS testbench HTTP port");
         format!("http://127.0.0.1:{port}")
     }
 }

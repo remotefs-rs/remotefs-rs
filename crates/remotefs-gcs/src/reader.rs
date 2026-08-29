@@ -3,18 +3,27 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use google_cloud_storage::streaming_source::StreamingSource;
+use google_cloud_storage::streaming_source::{SizeHint, StreamingSource};
 
 pub(crate) const READ_CHUNK_SIZE: usize = 256 * 1024;
 
 pub(crate) struct BlockingReaderSource {
     reader: Arc<Mutex<Box<dyn Read + Send>>>,
+    size: Option<u64>,
 }
 
 impl BlockingReaderSource {
     pub(crate) fn new(reader: Box<dyn Read + Send>) -> Self {
         Self {
             reader: Arc::new(Mutex::new(reader)),
+            size: None,
+        }
+    }
+
+    pub(crate) fn with_size(reader: Box<dyn Read + Send>, size: u64) -> Self {
+        Self {
+            reader: Arc::new(Mutex::new(reader)),
+            size: Some(size),
         }
     }
 }
@@ -28,6 +37,12 @@ impl fmt::Debug for BlockingReaderSource {
 
 impl StreamingSource for BlockingReaderSource {
     type Error = std::io::Error;
+
+    fn size_hint(&self) -> impl std::future::Future<Output = Result<SizeHint, Self::Error>> + Send {
+        std::future::ready(Ok(self
+            .size
+            .map_or_else(SizeHint::new, SizeHint::with_exact)))
+    }
 
     async fn next(&mut self) -> Option<Result<Bytes, Self::Error>> {
         let reader = Arc::clone(&self.reader);

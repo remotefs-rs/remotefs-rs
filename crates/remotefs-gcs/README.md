@@ -25,12 +25,12 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 
 The crate exposes these features:
 
-| Feature           | Default | Purpose                                     |
-| ----------------- | :-----: | ------------------------------------------- |
-| `find`            |   yes   | Enables `RemoteFs::find`                    |
-| `no-log`          |   no    | Disables logging from this crate            |
-| `with-containers` |   no    | Enables the local fake GCS integration test |
-| `with-gcs-ci`     |   no    | Enables the optional live GCS smoke test    |
+| Feature           | Default | Purpose                                           |
+| ----------------- | :-----: | ------------------------------------------------- |
+| `find`            |   yes   | Enables `RemoteFs::find`                          |
+| `no-log`          |   no    | Disables logging from this crate                  |
+| `with-containers` |   no    | Enables the local GCS testbench integration suite |
+| `with-gcs-ci`     |   no    | Enables the optional live GCS smoke test          |
 
 ## Application Default Credentials
 
@@ -138,21 +138,20 @@ there is no marker object.
 
 ## Development and testing
 
-Run the default unit, integration, and documentation tests with:
+Run the default unit and documentation tests with:
 
 ```sh
 just test
 ```
 
-Run the emulator-backed integration test with Docker available:
+Run the Storage testbench integration suite with Docker available:
 
 ```sh
-just test "--features with-containers -- --test-threads=1"
+just integration
 ```
 
-The test is retained as an executable contract, but is currently ignored
-because `fake-gcs-server`'s HTTP mode does not provide the gRPC transport used
-by the SDK's `StorageControl` client.
+The integration recipe starts a pinned testbench container and runs one test
+for every supported or intentionally unsupported `RemoteFs` capability.
 
 The live smoke test is opt-in. Set `GCS_TEST_BUCKET` and provide ADC before
 running it:
