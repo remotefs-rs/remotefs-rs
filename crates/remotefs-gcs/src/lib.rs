@@ -105,7 +105,7 @@
 extern crate log;
 
 pub mod backoff_policy;
-pub mod client;
+mod client;
 pub mod credentials;
 mod error;
 mod object;
@@ -116,4 +116,4 @@ pub mod retry_throttler;
 pub use client::GoogleCloudStorageFs;
 #[doc(inline)]
 pub use credentials::GoogleCloudStorageCredentials;
-pub(crate) mod utils;
+mod utils;
