@@ -12,6 +12,7 @@ include = [
   "/LICENSE",
   "/README.md",
   "/src/**",
+  "/tests/**",
 ]
 keywords = [
   "gcs",
