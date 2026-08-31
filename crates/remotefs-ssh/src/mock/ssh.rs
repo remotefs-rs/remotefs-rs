@@ -129,7 +129,10 @@ Host scp
 }
 
 /// Create an ssh config file that authenticates via `IdentityFile` (no key storage).
-pub fn create_ssh_config_with_identity(port: u16, identity_file: &std::path::Path) -> NamedTempFile {
+pub fn create_ssh_config_with_identity(
+    port: u16,
+    identity_file: &std::path::Path,
+) -> NamedTempFile {
     let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
     let identity = identity_file.display();
     let config = format!(

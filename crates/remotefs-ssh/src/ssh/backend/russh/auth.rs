@@ -154,8 +154,7 @@ where
 
     let mut last_failure = None;
     for hash_alg in hash_algs {
-        let key_with_hash =
-            russh::keys::PrivateKeyWithHashAlg::new(private_key.clone(), *hash_alg);
+        let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(private_key.clone(), *hash_alg);
 
         let auth_result = runtime
             .block_on(async {
