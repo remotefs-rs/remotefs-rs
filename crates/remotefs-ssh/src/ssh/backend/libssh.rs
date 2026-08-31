@@ -9,7 +9,7 @@ use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
 use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 
-use super::{SshSession, interface};
+use super::{SshSession, interface, socket};
 use crate::SshOpts;
 use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
@@ -228,6 +228,8 @@ impl SshSession for LibSshSession {
             error!("SSH handshake failed: {err}");
             return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
         }
+        socket::set_keepalive(&session, ssh_config.params.tcp_keep_alive.unwrap_or(true))
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
 
         // try to authenticate userauth_none
         authenticate(&mut session, opts)?;
@@ -1161,6 +1163,42 @@ mod tests {
             .password("password");
         let session = LibSshSession::connect(&opts)
             .expect("BindAddress should take precedence over BindInterface");
+        session.disconnect().expect("failed to disconnect");
+    }
+
+    #[test]
+    fn should_apply_configured_tcp_keep_alive() {
+        let container = OpensshServer::start();
+        let port = container.port();
+        for (configured, expected) in [("yes", true), ("no", false)] {
+            let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+            writeln!(
+                config_file,
+                "Host keepalive\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    TCPKeepAlive {configured}"
+            )
+            .expect("failed to write SSH config");
+            let opts = SshOpts::new("keepalive")
+                .config_file(config_file.path(), ParseRule::STRICT)
+                .password("password");
+            let session = LibSshSession::connect(&opts).expect("failed to connect");
+
+            assert_eq!(
+                crate::ssh::backend::socket::keepalive(&session.session)
+                    .expect("failed to read SO_KEEPALIVE"),
+                expected
+            );
+            session.disconnect().expect("failed to disconnect");
+        }
+
+        let opts = SshOpts::new("127.0.0.1")
+            .port(port)
+            .username("sftp")
+            .password("password");
+        let session = LibSshSession::connect(&opts).expect("failed to connect");
+        assert!(
+            crate::ssh::backend::socket::keepalive(&session.session)
+                .expect("failed to read default SO_KEEPALIVE")
+        );
         session.disconnect().expect("failed to disconnect");
     }
 }

@@ -3,6 +3,8 @@
 
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 mod interface;
+#[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
+mod socket;
 
 #[cfg(feature = "libssh")]
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh")))]

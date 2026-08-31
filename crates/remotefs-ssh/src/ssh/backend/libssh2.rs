@@ -10,7 +10,7 @@ use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use socket2::{Domain, Protocol, Socket, Type};
 use ssh2::{FileStat, OpenType, RenameFlags};
 
-use super::{SshSession, interface};
+use super::{SshSession, interface, socket};
 use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
 use crate::{SshAgentIdentity, SshOpts};
@@ -93,6 +93,8 @@ impl SshSession for LibSsh2Session {
                 ));
             }
         };
+        socket::set_keepalive(&stream, ssh_config.params.tcp_keep_alive.unwrap_or(true))
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
         // Create session
         let mut session = match ssh2::Session::new() {
             Ok(s) => s,
@@ -1012,6 +1014,42 @@ mod test {
             .config_file(invalid_config.path(), ParseRule::STRICT)
             .password("password");
         assert!(LibSsh2Session::connect(&opts).is_err());
+    }
+
+    #[test]
+    fn should_apply_configured_tcp_keep_alive() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+        for (configured, expected) in [("yes", true), ("no", false)] {
+            let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+            writeln!(
+                config_file,
+                "Host keepalive\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    TCPKeepAlive {configured}"
+            )
+            .expect("failed to write SSH config");
+            let opts = SshOpts::new("keepalive")
+                .config_file(config_file.path(), ParseRule::STRICT)
+                .password("password");
+            let session = LibSsh2Session::connect(&opts).expect("failed to connect");
+
+            assert_eq!(
+                crate::ssh::backend::socket::keepalive(&session.session)
+                    .expect("failed to read SO_KEEPALIVE"),
+                expected
+            );
+            session.disconnect().expect("failed to disconnect");
+        }
+
+        let opts = SshOpts::new("127.0.0.1")
+            .port(port)
+            .username("sftp")
+            .password("password");
+        let session = LibSsh2Session::connect(&opts).expect("failed to connect");
+        assert!(
+            crate::ssh::backend::socket::keepalive(&session.session)
+                .expect("failed to read default SO_KEEPALIVE")
+        );
+        session.disconnect().expect("failed to disconnect");
     }
 
     #[test]

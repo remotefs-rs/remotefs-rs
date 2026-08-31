@@ -23,7 +23,7 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime::Runtime;
 use tokio::time::{Instant, Sleep};
 
-use super::{SshSession, WriteMode, interface};
+use super::{SshSession, WriteMode, interface, socket};
 use crate::SshOpts;
 use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
@@ -149,6 +149,7 @@ fn connect_with_timeout<T>(
     address: &str,
     bind_address: Option<&str>,
     bind_interface: Option<&str>,
+    tcp_keep_alive: Option<bool>,
     timeout: std::time::Duration,
 ) -> RemoteResult<Handle<T>>
 where
@@ -157,8 +158,11 @@ where
     let deadline = Instant::now() + timeout;
     let stream = runtime
         .block_on(async {
-            tokio::time::timeout_at(deadline, connect_tcp(address, bind_address, bind_interface))
-                .await
+            tokio::time::timeout_at(
+                deadline,
+                connect_tcp(address, bind_address, bind_interface, tcp_keep_alive),
+            )
+            .await
         })
         .map_err(|err| {
             let msg = format!("SSH connection timed out: {err}");
@@ -194,9 +198,13 @@ async fn connect_tcp(
     address: &str,
     bind_address: Option<&str>,
     bind_interface: Option<&str>,
+    tcp_keep_alive: Option<bool>,
 ) -> std::io::Result<TcpStream> {
+    let tcp_keep_alive = tcp_keep_alive.unwrap_or(true);
     if bind_address.is_none() && bind_interface.is_none() {
-        return TcpStream::connect(address).await;
+        let stream = TcpStream::connect(address).await?;
+        socket::set_keepalive(&stream, tcp_keep_alive)?;
+        return Ok(stream);
     }
 
     let source_addresses = if let Some(bind_address) = bind_address {
@@ -227,6 +235,10 @@ async fn connect_tcp(
                     continue;
                 }
             };
+            if let Err(err) = socket.set_keepalive(tcp_keep_alive) {
+                last_error = Some(err);
+                continue;
+            }
             if let Err(err) = socket.bind(*source_address) {
                 last_error = Some(err);
                 continue;
@@ -285,6 +297,7 @@ where
                 &ssh_config.address,
                 ssh_config.params.bind_address.as_deref(),
                 ssh_config.params.bind_interface.as_deref(),
+                ssh_config.params.tcp_keep_alive,
                 ssh_config.connection_timeout,
             ) {
                 Ok(session) => break session,
@@ -1409,6 +1422,56 @@ mod test {
             .password("ippopotamo")
             .runtime(runtime);
         assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
+    }
+
+    #[test]
+    fn should_apply_configured_tcp_keep_alive() {
+        for (configured, expected) in [(Some(true), true), (Some(false), false), (None, true)] {
+            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
+                .expect("failed to bind test listener");
+            let address = listener
+                .local_addr()
+                .expect("failed to read test listener address");
+            let server = std::thread::spawn(move || {
+                let (_stream, _peer) = listener.accept().expect("failed to accept connection");
+            });
+            let runtime = test_runtime();
+            let stream = runtime
+                .block_on(connect_tcp(&address.to_string(), None, None, configured))
+                .expect("failed to connect test socket");
+
+            assert_eq!(
+                crate::ssh::backend::socket::keepalive(&stream)
+                    .expect("failed to read SO_KEEPALIVE"),
+                expected
+            );
+            drop(stream);
+            server.join().expect("test server panicked");
+        }
+
+        let listener =
+            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind test listener");
+        let address = listener
+            .local_addr()
+            .expect("failed to read test listener address");
+        let server = std::thread::spawn(move || {
+            let (_stream, _peer) = listener.accept().expect("failed to accept connection");
+        });
+        let runtime = test_runtime();
+        let stream = runtime
+            .block_on(connect_tcp(
+                &address.to_string(),
+                Some("127.0.0.1"),
+                None,
+                Some(true),
+            ))
+            .expect("failed to connect bound test socket");
+        assert!(
+            crate::ssh::backend::socket::keepalive(&stream)
+                .expect("failed to read bound SO_KEEPALIVE")
+        );
+        drop(stream);
+        server.join().expect("test server panicked");
     }
 
     #[test]
