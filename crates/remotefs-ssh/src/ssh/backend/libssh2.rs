@@ -1,7 +1,9 @@
 use std::io::{Read, Seek, Write};
-use std::net::{SocketAddr, TcpStream, ToSocketAddrs as _};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs as _};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
@@ -39,157 +41,10 @@ impl SshSession for LibSsh2Session {
     type Sftp = LibSsh2Sftp;
 
     fn connect(opts: &SshOpts) -> RemoteResult<Self> {
-        // parse configuration
         let ssh_config = Config::try_from(opts)?;
-        // Resolve host
         debug!("Connecting to '{}'", ssh_config.address);
-        // setup tcp stream
-        let socket_addresses: Vec<SocketAddr> = match ssh_config.address.to_socket_addrs() {
-            Ok(s) => s.collect(),
-            Err(err) => {
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::BadAddress,
-                    err.to_string(),
-                ));
-            }
-        };
-        let mut stream = None;
-        let mut last_connection_error = None;
-        for _ in 0..ssh_config.connection_attempts {
-            for socket_addr in socket_addresses.iter() {
-                trace!(
-                    "Trying to connect to socket address '{}' (timeout: {}s)",
-                    socket_addr,
-                    ssh_config.connection_timeout.as_secs()
-                );
-                match tcp_connect(
-                    socket_addr,
-                    ssh_config.connection_timeout,
-                    ssh_config.params.bind_address.as_deref(),
-                    ssh_config.params.bind_interface.as_deref(),
-                ) {
-                    Ok(tcp_stream) => {
-                        debug!("Connection established with address {socket_addr}");
-                        stream = Some(tcp_stream);
-                        break;
-                    }
-                    Err(err) => last_connection_error = Some(err),
-                }
-            }
-            // break from attempts cycle if some
-            if stream.is_some() {
-                break;
-            }
-        }
-        // If stream is None, return connection timeout
-        let stream = match stream {
-            Some(s) => s,
-            None => {
-                let message = last_connection_error.map_or_else(
-                    || "No suitable socket address found; connection timeout".to_string(),
-                    |err| err.to_string(),
-                );
-                error!("Could not establish connection: {message}");
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::ConnectionError,
-                    message,
-                ));
-            }
-        };
-        socket::set_keepalive(&stream, ssh_config.params.tcp_keep_alive.unwrap_or(true))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-        // Create session
-        let mut session = match ssh2::Session::new() {
-            Ok(s) => s,
-            Err(err) => {
-                error!("Could not create session: {err}");
-                return Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, err));
-            }
-        };
-        // Set TCP stream
-        session.set_tcp_stream(stream);
-        // configure algos
-        set_algo_prefs(&mut session, opts, &ssh_config)?;
-        // Open connection and initialize handshake
-        if let Err(err) = session.handshake() {
-            error!("SSH handshake failed: {err}");
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
-
-        let pubkey_authentication = ssh_config.params.pubkey_authentication.unwrap_or(true);
-
-        // if use_ssh_agent is enabled, try to authenticate with ssh agent
-        if pubkey_authentication && let Some(ssh_agent_config) = &opts.ssh_agent_identity {
-            match session_auth_with_agent(
-                &mut session,
-                &ssh_config.username,
-                ssh_agent_config,
-                ssh_config.params.pubkey_accepted_algorithms.algorithms(),
-            ) {
-                Ok(_) => {
-                    info!("Authenticated with ssh agent");
-                    return Ok(Self { session });
-                }
-                Err(err) => {
-                    error!("Could not authenticate with ssh agent: {err}");
-                }
-            }
-        }
-
-        // Authenticate with password or key
-        if !session.authenticated() {
-            let mut methods = vec![];
-            // first try with ssh agent
-            if pubkey_authentication {
-                if let Some(rsa_key) = opts.key_storage.as_ref().and_then(|x| {
-                    x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
-                        .or(x.resolve(
-                            ssh_config.resolved_host.as_str(),
-                            ssh_config.username.as_str(),
-                        ))
-                }) {
-                    methods.push(Authentication::RsaKey {
-                        private_key: rsa_key.clone(),
-                        certificate: ssh_config.params.certificate_file.clone(),
-                    });
-                }
-                if let Some(identity_files) = ssh_config.params.identity_file.as_deref() {
-                    methods.extend(identity_files.iter().cloned().map(|private_key| {
-                        Authentication::RsaKey {
-                            private_key,
-                            certificate: ssh_config.params.certificate_file.clone(),
-                        }
-                    }));
-                }
-            }
-            // then try with password
-            if let Some(password) = opts.password.as_ref() {
-                methods.push(Authentication::Password(password.clone()));
-            }
-
-            // try with methods
-            let mut last_err = None;
-            for auth_method in methods {
-                match session_auth(&mut session, opts, &ssh_config, auth_method) {
-                    Ok(_) => {
-                        info!("Authenticated successfully");
-                        return Ok(Self { session });
-                    }
-                    Err(err) => {
-                        error!("Authentication failed: {err}",);
-                        last_err = Some(err);
-                    }
-                }
-            }
-
-            return Err(last_err.unwrap_or_else(|| {
-                RemoteError::new_ex(
-                    RemoteErrorType::AuthenticationFailed,
-                    "no authentication method provided",
-                )
-            }));
-        }
-
+        let mut session = connect_libssh2_transport(opts, &ssh_config)?;
+        authenticate_libssh2_session(&mut session, opts, &ssh_config)?;
         Ok(Self { session })
     }
 
@@ -284,6 +139,293 @@ impl SshSession for LibSsh2Session {
                 )
             })?,
         })
+    }
+}
+
+fn connect_libssh2_transport(opts: &SshOpts, destination: &Config) -> RemoteResult<ssh2::Session> {
+    let proxy_jumps = destination.proxy_jump_configs(opts)?;
+    let Some(first_jump) = proxy_jumps.first() else {
+        return connect_libssh2_direct(opts, destination);
+    };
+
+    let mut session = connect_libssh2_direct(opts, first_jump)?;
+    authenticate_libssh2_session(&mut session, opts, first_jump)?;
+    for next_hop in proxy_jumps
+        .iter()
+        .skip(1)
+        .chain(std::iter::once(destination))
+    {
+        session = connect_libssh2_through_jump(opts, &session, next_hop)?;
+        if !std::ptr::eq(next_hop, destination) {
+            authenticate_libssh2_session(&mut session, opts, next_hop)?;
+        }
+    }
+    Ok(session)
+}
+
+fn connect_libssh2_direct(opts: &SshOpts, config: &Config) -> RemoteResult<ssh2::Session> {
+    let socket_addresses: Vec<SocketAddr> = config
+        .address
+        .to_socket_addrs()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::BadAddress, err))?
+        .collect();
+    let mut stream = None;
+    let mut last_connection_error = None;
+    for _ in 0..config.connection_attempts.max(1) {
+        for socket_addr in &socket_addresses {
+            trace!(
+                "Trying to connect to socket address '{}' (timeout: {}s)",
+                socket_addr,
+                config.connection_timeout.as_secs()
+            );
+            match tcp_connect(
+                socket_addr,
+                config.connection_timeout,
+                config.params.bind_address.as_deref(),
+                config.params.bind_interface.as_deref(),
+            ) {
+                Ok(tcp_stream) => {
+                    stream = Some(tcp_stream);
+                    break;
+                }
+                Err(err) => last_connection_error = Some(err),
+            }
+        }
+        if stream.is_some() {
+            break;
+        }
+    }
+    let stream = stream.ok_or_else(|| {
+        let message = last_connection_error.map_or_else(
+            || "No suitable socket address found; connection timeout".to_string(),
+            |err| err.to_string(),
+        );
+        RemoteError::new_ex(RemoteErrorType::ConnectionError, message)
+    })?;
+    socket::set_keepalive(&stream, config.params.tcp_keep_alive.unwrap_or(true))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    connect_libssh2_stream(opts, config, stream)
+}
+
+fn connect_libssh2_through_jump(
+    opts: &SshOpts,
+    jump_session: &ssh2::Session,
+    target: &Config,
+) -> RemoteResult<ssh2::Session> {
+    let mut last_error = None;
+    for attempt in 1..=target.connection_attempts.max(1) {
+        let (stream, cancelled, relay) = match libssh2_tunnel_stream(
+            jump_session,
+            &target.resolved_host,
+            target.port,
+            target.connection_timeout,
+        ) {
+            Ok(tunnel) => tunnel,
+            Err(err) if attempt < target.connection_attempts.max(1) => {
+                warn!("SSH connection attempt {attempt} through ProxyJump failed: {err}");
+                last_error = Some(err);
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        let result = connect_libssh2_stream(opts, target, stream);
+        match result {
+            Ok(session) => {
+                drop(relay);
+                return Ok(session);
+            }
+            Err(err) if attempt < target.connection_attempts.max(1) => {
+                cancelled.store(true, Ordering::Release);
+                let _ = relay.join();
+                warn!("SSH connection attempt {attempt} through ProxyJump failed: {err}");
+                last_error = Some(err);
+            }
+            Err(err) => {
+                cancelled.store(true, Ordering::Release);
+                let _ = relay.join();
+                return Err(err);
+            }
+        }
+    }
+    Err(last_error.expect("at least one connection attempt"))
+}
+
+fn connect_libssh2_stream(
+    opts: &SshOpts,
+    config: &Config,
+    stream: TcpStream,
+) -> RemoteResult<ssh2::Session> {
+    let mut session = ssh2::Session::new()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    session.set_timeout(config.connection_timeout.as_millis().min(u32::MAX.into()) as u32);
+    session.set_tcp_stream(stream);
+    set_algo_prefs(&mut session, opts, config)?;
+    session.handshake().map_err(|err| {
+        error!("SSH handshake failed: {err}");
+        RemoteError::new_ex(RemoteErrorType::ProtocolError, err)
+    })?;
+    Ok(session)
+}
+
+fn authenticate_libssh2_session(
+    session: &mut ssh2::Session,
+    opts: &SshOpts,
+    config: &Config,
+) -> RemoteResult<()> {
+    let pubkey_authentication = config.params.pubkey_authentication.unwrap_or(true);
+    if pubkey_authentication && let Some(agent_identity) = &opts.ssh_agent_identity {
+        match session_auth_with_agent(
+            session,
+            &config.username,
+            agent_identity,
+            config.params.pubkey_accepted_algorithms.algorithms(),
+        ) {
+            Ok(()) => return Ok(()),
+            Err(err) => error!("Could not authenticate with ssh agent: {err}"),
+        }
+    }
+
+    let mut methods = Vec::new();
+    if pubkey_authentication {
+        if let Some(private_key) = opts.key_storage.as_ref().and_then(|storage| {
+            storage
+                .resolve(&config.host, &config.username)
+                .or_else(|| storage.resolve(&config.resolved_host, &config.username))
+        }) {
+            methods.push(Authentication::RsaKey {
+                private_key,
+                certificate: config.params.certificate_file.clone(),
+            });
+        }
+        if let Some(identity_files) = config.params.identity_file.as_deref() {
+            methods.extend(identity_files.iter().cloned().map(|private_key| {
+                Authentication::RsaKey {
+                    private_key,
+                    certificate: config.params.certificate_file.clone(),
+                }
+            }));
+        }
+    }
+    if let Some(password) = opts.password.as_ref() {
+        methods.push(Authentication::Password(password.clone()));
+    }
+
+    let mut last_error = None;
+    for method in methods {
+        match session_auth(session, opts, config, method) {
+            Ok(()) => return Ok(()),
+            Err(err) => last_error = Some(err),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            "no authentication method provided",
+        )
+    }))
+}
+
+fn libssh2_tunnel_stream(
+    session: &ssh2::Session,
+    target_host: &str,
+    target_port: u16,
+    timeout: Duration,
+) -> RemoteResult<(TcpStream, Arc<AtomicBool>, std::thread::JoinHandle<()>)> {
+    session.set_blocking(true);
+    session.set_timeout(timeout.as_millis().min(u32::MAX.into()) as u32);
+    let channel = session.channel_direct_tcpip(target_host, target_port, None);
+    session.set_blocking(false);
+    let channel =
+        channel.map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    let client = TcpStream::connect(
+        listener
+            .local_addr()
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?,
+    )
+    .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    let (relay, _) = listener
+        .accept()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let relay_cancelled = Arc::clone(&cancelled);
+    let relay = std::thread::spawn(move || {
+        relay_libssh2_channel(channel, relay, &relay_cancelled);
+    });
+    Ok((client, cancelled, relay))
+}
+
+fn relay_libssh2_channel(
+    mut channel: ssh2::Channel,
+    mut socket: TcpStream,
+    cancelled: &AtomicBool,
+) {
+    let _ = socket.set_nonblocking(true);
+    let mut socket_eof = false;
+    let mut channel_eof = false;
+    let mut channel_eof_sent = false;
+    let mut to_channel = Vec::new();
+    let mut to_socket = Vec::new();
+    let mut buffer = [0_u8; 32 * 1024];
+
+    while !cancelled.load(Ordering::Acquire) {
+        let mut progressed = false;
+        if !socket_eof && to_channel.is_empty() {
+            match socket.read(&mut buffer) {
+                Ok(0) => socket_eof = true,
+                Ok(read) => {
+                    to_channel.extend_from_slice(&buffer[..read]);
+                    progressed = true;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => break,
+            }
+        }
+        if !to_channel.is_empty() {
+            match channel.write(&to_channel) {
+                Ok(written) => {
+                    to_channel.drain(..written);
+                    progressed = written > 0;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => break,
+            }
+        }
+        if socket_eof && to_channel.is_empty() && !channel_eof_sent {
+            channel_eof_sent = channel.send_eof().is_ok();
+        }
+
+        if !channel_eof && to_socket.is_empty() {
+            match channel.read(&mut buffer) {
+                Ok(0) => channel_eof = true,
+                Ok(read) => {
+                    to_socket.extend_from_slice(&buffer[..read]);
+                    progressed = true;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => break,
+            }
+        }
+        if !to_socket.is_empty() {
+            match socket.write(&to_socket) {
+                Ok(written) => {
+                    to_socket.drain(..written);
+                    progressed = written > 0;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(_) => break,
+            }
+        }
+        if channel_eof && to_socket.is_empty() {
+            let _ = socket.shutdown(Shutdown::Write);
+            if socket_eof {
+                break;
+            }
+        }
+        if !progressed {
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 }
 
@@ -1304,6 +1446,34 @@ mod test {
             .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()));
         let session = LibSsh2Session::connect(&opts).unwrap();
         assert!(session.authenticated().unwrap());
+    }
+
+    #[test]
+    fn should_connect_through_proxy_jump() {
+        use crate::ssh::container::ProxyJumpServers;
+
+        let servers = ProxyJumpServers::start();
+        let config_file = ssh_mock::create_ssh_config_with_proxy_jump(
+            &servers.target_host,
+            2222,
+            servers.first_jump.port(),
+            &servers.second_jump_host,
+        );
+        let opts = SshOpts::new("target")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .password("password");
+
+        let mut session =
+            LibSsh2Session::connect(&opts).expect("failed to connect through ProxyJump");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+        assert_eq!(
+            session.cmd("pwd").expect("command through proxy failed").0,
+            0
+        );
     }
 
     #[test]

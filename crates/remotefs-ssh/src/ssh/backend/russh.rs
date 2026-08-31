@@ -603,48 +603,24 @@ where
 
         let ssh_config = Config::try_from(opts)?;
         debug!("Connecting to '{}'", ssh_config.address);
-
-        let mut config = client::Config::default();
-
-        // Apply algorithm preferences from ssh config
-        apply_config_algo_prefs(&mut config, &ssh_config);
-
-        // Apply algorithm preferences from opts
-        apply_opts_algo_prefs(&mut config, opts);
-
-        let config = Arc::new(config);
-        let connection_attempts = ssh_config.connection_attempts.max(1);
-        let ca_signature_algorithms = ssh_config
-            .params
-            .ca_signature_algorithms
-            .algorithms()
-            .to_vec();
-        let mut attempt = 1;
-        let mut session = loop {
-            let handler =
-                CaSignaturePolicyHandler::new(T::default(), ca_signature_algorithms.clone());
-            match connect_with_timeout(
-                &runtime,
-                config.clone(),
-                handler,
-                ConnectionTarget {
-                    address: &ssh_config.address,
-                    bind_address: ssh_config.params.bind_address.as_deref(),
-                    bind_interface: ssh_config.params.bind_interface.as_deref(),
-                },
-                ssh_config.params.tcp_keep_alive,
-                ssh_config.connection_timeout,
-            ) {
-                Ok(session) => break session,
-                Err(err) if attempt < connection_attempts => {
-                    warn!("SSH connection attempt {attempt} failed: {err}");
-                    attempt += 1;
+        let proxy_jumps = ssh_config.proxy_jump_configs(opts)?;
+        let mut session = if let Some(first_jump) = proxy_jumps.first() {
+            let mut session = connect_russh_direct::<T>(&runtime, opts, first_jump)?;
+            auth::authenticate(&mut session, &runtime, opts, first_jump)?;
+            for next_hop in proxy_jumps
+                .iter()
+                .skip(1)
+                .chain(std::iter::once(&ssh_config))
+            {
+                session = connect_russh_through_jump::<T>(&runtime, opts, &session, next_hop)?;
+                if !std::ptr::eq(next_hop, &ssh_config) {
+                    auth::authenticate(&mut session, &runtime, opts, next_hop)?;
                 }
-                Err(err) => return Err(err),
             }
+            session
+        } else {
+            connect_russh_direct::<T>(&runtime, opts, &ssh_config)?
         };
-
-        // Authenticate
         auth::authenticate(&mut session, &runtime, opts, &ssh_config)?;
 
         Ok(Self { runtime, session })
@@ -732,6 +708,107 @@ where
                 error!("Failed to init SFTP session: {err}");
                 RemoteError::new_ex(RemoteErrorType::ProtocolError, err.to_string())
             })
+    }
+}
+
+fn russh_client_config(opts: &SshOpts, ssh_config: &Config) -> Arc<client::Config> {
+    let mut config = client::Config::default();
+    apply_config_algo_prefs(&mut config, ssh_config);
+    apply_opts_algo_prefs(&mut config, opts);
+    Arc::new(config)
+}
+
+fn connect_russh_direct<T>(
+    runtime: &Runtime,
+    opts: &SshOpts,
+    ssh_config: &Config,
+) -> RemoteResult<Handle<CaSignaturePolicyHandler<T>>>
+where
+    T: Handler + Default + Send + 'static,
+{
+    let config = russh_client_config(opts, ssh_config);
+    let connection_attempts = ssh_config.connection_attempts.max(1);
+    let ca_signature_algorithms = ssh_config
+        .params
+        .ca_signature_algorithms
+        .algorithms()
+        .to_vec();
+    let mut attempt = 1;
+    loop {
+        let handler = CaSignaturePolicyHandler::new(T::default(), ca_signature_algorithms.clone());
+        match connect_with_timeout(
+            runtime,
+            config.clone(),
+            handler,
+            ConnectionTarget {
+                address: &ssh_config.address,
+                bind_address: ssh_config.params.bind_address.as_deref(),
+                bind_interface: ssh_config.params.bind_interface.as_deref(),
+            },
+            ssh_config.params.tcp_keep_alive,
+            ssh_config.connection_timeout,
+        ) {
+            Ok(session) => return Ok(session),
+            Err(err) if attempt < connection_attempts => {
+                warn!("SSH connection attempt {attempt} failed: {err}");
+                attempt += 1;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn connect_russh_through_jump<T>(
+    runtime: &Runtime,
+    opts: &SshOpts,
+    jump_session: &Handle<CaSignaturePolicyHandler<T>>,
+    target: &Config,
+) -> RemoteResult<Handle<CaSignaturePolicyHandler<T>>>
+where
+    T: Handler + Default + Send + 'static,
+{
+    let config = russh_client_config(opts, target);
+    let ca_signature_algorithms = target.params.ca_signature_algorithms.algorithms().to_vec();
+    let mut attempt = 1;
+    loop {
+        let handler = CaSignaturePolicyHandler::new(T::default(), ca_signature_algorithms.clone());
+        let result = runtime.block_on(async {
+            tokio::time::timeout(target.connection_timeout, async {
+                let channel = jump_session
+                    .channel_open_direct_tcpip(
+                        target.resolved_host.clone(),
+                        u32::from(target.port),
+                        "127.0.0.1",
+                        0,
+                    )
+                    .await?;
+                client::connect_stream(config.clone(), channel.into_stream(), handler).await
+            })
+            .await
+        });
+        match result {
+            Ok(Ok(session)) => return Ok(session),
+            Ok(Err(err)) if attempt < target.connection_attempts.max(1) => {
+                warn!("SSH connection attempt {attempt} through ProxyJump failed: {err:?}");
+                attempt += 1;
+            }
+            Ok(Err(err)) => {
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::ConnectionError,
+                    format!("SSH connection through ProxyJump failed: {err:?}"),
+                ));
+            }
+            Err(err) if attempt < target.connection_attempts.max(1) => {
+                warn!("SSH connection attempt {attempt} through ProxyJump timed out: {err}");
+                attempt += 1;
+            }
+            Err(err) => {
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::ConnectionError,
+                    format!("SSH connection through ProxyJump timed out: {err}"),
+                ));
+            }
+        }
     }
 }
 
@@ -1836,6 +1913,35 @@ mod test {
             .runtime(runtime);
         let session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
         assert!(session.authenticated().unwrap());
+    }
+
+    #[test]
+    fn should_connect_through_proxy_jump() {
+        use crate::ssh::container::ProxyJumpServers;
+
+        let servers = ProxyJumpServers::start();
+        let config_file = ssh_mock::create_ssh_config_with_proxy_jump(
+            &servers.target_host,
+            2222,
+            servers.first_jump.port(),
+            &servers.second_jump_host,
+        );
+        let opts = SshOpts::new("target")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .password("password")
+            .runtime(test_runtime());
+
+        let mut session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("failed to connect through ProxyJump");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+        assert_eq!(
+            session.cmd("pwd").expect("command through proxy failed").0,
+            0
+        );
     }
 
     #[test]

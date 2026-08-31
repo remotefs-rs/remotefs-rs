@@ -284,6 +284,22 @@ pub fn create_ssh_config_with_certificate(
     temp
 }
 
+/// Create an ssh config file that reaches a container-only host through a jump host.
+pub fn create_ssh_config_with_proxy_jump(
+    target_host: &str,
+    target_port: u16,
+    first_jump_port: u16,
+    second_jump_host: &str,
+) -> NamedTempFile {
+    let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
+    writeln!(
+        temp,
+        "Host target\n    HostName {target_host}\n    Port {target_port}\n    User sftp\n    ProxyJump jump1,jump2\nHost jump1\n    HostName 127.0.0.1\n    Port {first_jump_port}\n    User sftp\nHost jump2\n    HostName {second_jump_host}\n    Port 2222\n    User sftp",
+    )
+    .expect("Failed to write proxy jump SSH config");
+    temp
+}
+
 fn create_ssh_config_with_identity_options(
     port: u16,
     identity_file: &std::path::Path,
