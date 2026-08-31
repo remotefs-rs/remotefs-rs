@@ -20,6 +20,13 @@ enum Authentication {
     Password(String),
 }
 
+struct KeyAuthenticationOptions<'a> {
+    certificate_path: Option<&'a Path>,
+    passphrase: Option<&'a str>,
+    accepted_algorithms: &'a [String],
+    add_to_agent: bool,
+}
+
 /// Local private-key signer for russh's hash-selecting certificate API.
 struct PrivateKeySigner {
     private_key: Arc<russh::keys::PrivateKey>,
@@ -133,9 +140,15 @@ where
                     runtime,
                     username,
                     &key_path,
-                    certificate.as_deref(),
-                    opts.password.as_deref(),
-                    ssh_config.params.pubkey_accepted_algorithms.algorithms(),
+                    KeyAuthenticationOptions {
+                        certificate_path: certificate.as_deref(),
+                        passphrase: opts.password.as_deref(),
+                        accepted_algorithms: ssh_config
+                            .params
+                            .pubkey_accepted_algorithms
+                            .algorithms(),
+                        add_to_agent: ssh_config.params.add_keys_to_agent.unwrap_or(false),
+                    },
                 ) {
                     Ok(()) => {
                         info!("Authenticated with key at '{}'", key_path.display());
@@ -236,9 +249,7 @@ fn auth_with_rsa_key<T>(
     runtime: &Runtime,
     username: &str,
     key_path: &Path,
-    certificate_path: Option<&Path>,
-    passphrase: Option<&str>,
-    accepted_algorithms: &[String],
+    options: KeyAuthenticationOptions<'_>,
 ) -> RemoteResult<()>
 where
     T: Handler,
@@ -248,18 +259,20 @@ where
         key_path.display()
     );
 
-    let private_key = russh::keys::load_secret_key(key_path, passphrase).map_err(|err| {
-        RemoteError::new_ex(
-            RemoteErrorType::AuthenticationFailed,
-            format!(
-                "Could not load private key at '{}': {err}",
-                key_path.display()
-            ),
-        )
-    })?;
+    let private_key =
+        russh::keys::load_secret_key(key_path, options.passphrase).map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                format!(
+                    "Could not load private key at '{}': {err}",
+                    key_path.display()
+                ),
+            )
+        })?;
     let private_key = Arc::new(private_key);
+    maybe_add_key_to_agent(runtime, private_key.as_ref(), options.add_to_agent);
 
-    if let Some(certificate_path) = certificate_path {
+    if let Some(certificate_path) = options.certificate_path {
         let certificate =
             russh::keys::load_openssh_certificate(certificate_path).map_err(|err| {
                 RemoteError::new_ex(
@@ -271,7 +284,7 @@ where
                 )
             })?;
         let hash_algs =
-            accepted_hash_algorithms(&certificate.algorithm(), accepted_algorithms, true);
+            accepted_hash_algorithms(&certificate.algorithm(), options.accepted_algorithms, true);
         if hash_algs.is_empty() {
             return Err(RemoteError::new_ex(
                 RemoteErrorType::AuthenticationFailed,
@@ -323,7 +336,7 @@ where
     }
 
     let key_algorithm = private_key.algorithm();
-    let hash_algs = accepted_hash_algorithms(&key_algorithm, accepted_algorithms, false);
+    let hash_algs = accepted_hash_algorithms(&key_algorithm, options.accepted_algorithms, false);
     if hash_algs.is_empty() {
         return Err(RemoteError::new_ex(
             RemoteErrorType::AuthenticationFailed,
@@ -369,6 +382,47 @@ where
             "public key authentication failed for key at '{}' (remaining methods: {last_failure:?})",
             key_path.display()
         ),
+    ))
+}
+
+fn maybe_add_key_to_agent(
+    runtime: &Runtime,
+    private_key: &russh::keys::PrivateKey,
+    add_to_agent: bool,
+) {
+    if add_to_agent && let Err(err) = add_key_to_agent(runtime, private_key) {
+        warn!("Could not add loaded key to SSH agent: {err}");
+    }
+}
+
+#[cfg(unix)]
+fn add_key_to_agent(runtime: &Runtime, private_key: &russh::keys::PrivateKey) -> RemoteResult<()> {
+    use russh::keys::agent::client::AgentClient;
+
+    runtime.block_on(async {
+        let mut agent = AgentClient::connect_env().await.map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ConnectionError,
+                format!("could not connect to SSH agent: {err}"),
+            )
+        })?;
+        agent.add_identity(private_key, &[]).await.map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("could not add identity to SSH agent: {err}"),
+            )
+        })
+    })
+}
+
+#[cfg(not(unix))]
+fn add_key_to_agent(
+    _runtime: &Runtime,
+    _private_key: &russh::keys::PrivateKey,
+) -> RemoteResult<()> {
+    Err(RemoteError::new_ex(
+        RemoteErrorType::UnsupportedFeature,
+        "adding identities to the SSH agent is not supported on this platform",
     ))
 }
 
