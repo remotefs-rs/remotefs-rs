@@ -14,9 +14,9 @@ use std::task::{Context, Poll};
 
 use remotefs::fs::{Metadata, ReadStream, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
-use russh::client::{Handle, Handler};
-use russh::keys::{Algorithm, PublicKeyOrCertificate};
-use russh::{Disconnect, client};
+use russh::client::{ChannelOpenHandle, DisconnectReason, Handle, Handler, Msg, Session};
+use russh::keys::{Algorithm, PublicKey, PublicKeyOrCertificate};
+use russh::{Channel, ChannelId, ChannelOpenFailure, Disconnect, Sig, client};
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream};
@@ -49,13 +49,328 @@ impl Handler for NoCheckServerKey {
     }
 }
 
+/// Transparent handler wrapper enforcing configured CA signature algorithms.
+struct CaSignaturePolicyHandler<T> {
+    inner: T,
+    allowed_algorithms: Vec<String>,
+}
+
+impl<T> CaSignaturePolicyHandler<T> {
+    fn new(inner: T, allowed_algorithms: Vec<String>) -> Self {
+        Self {
+            inner,
+            allowed_algorithms,
+        }
+    }
+}
+
+impl<T> Handler for CaSignaturePolicyHandler<T>
+where
+    T: Handler,
+{
+    type Error = T::Error;
+
+    fn auth_banner(
+        &mut self,
+        banner: &str,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.auth_banner(banner, session)
+    }
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        if let PublicKeyOrCertificate::Certificate(certificate) = server_public_key {
+            let signature_algorithm = certificate.signature().algorithm();
+            if !self
+                .allowed_algorithms
+                .iter()
+                .any(|allowed| allowed == signature_algorithm.as_ref())
+            {
+                return Ok(false);
+            }
+        }
+        self.inner.check_server_key(server_public_key).await
+    }
+
+    fn kex_done(
+        &mut self,
+        shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.kex_done(shared_secret, names, session)
+    }
+
+    fn channel_open_confirmation(
+        &mut self,
+        id: ChannelId,
+        max_packet_size: u32,
+        window_size: u32,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .channel_open_confirmation(id, max_packet_size, window_size, session)
+    }
+
+    fn channel_success(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.channel_success(channel, session)
+    }
+
+    fn channel_failure(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.channel_failure(channel, session)
+    }
+
+    fn channel_close(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.channel_close(channel, session)
+    }
+
+    fn channel_eof(
+        &mut self,
+        channel: ChannelId,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.channel_eof(channel, session)
+    }
+
+    fn channel_open_failure(
+        &mut self,
+        channel: ChannelId,
+        reason: ChannelOpenFailure,
+        description: &str,
+        language: &str,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .channel_open_failure(channel, reason, description, language, session)
+    }
+
+    fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.server_channel_open_forwarded_tcpip(
+            channel,
+            connected_address,
+            connected_port,
+            originator_address,
+            originator_port,
+            reply,
+            session,
+        )
+    }
+
+    fn server_channel_open_forwarded_streamlocal(
+        &mut self,
+        channel: Channel<Msg>,
+        socket_path: &str,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .server_channel_open_forwarded_streamlocal(channel, socket_path, reply, session)
+    }
+
+    fn server_channel_open_agent_forward(
+        &mut self,
+        channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .server_channel_open_agent_forward(channel, reply, session)
+    }
+
+    fn should_accept_unknown_server_channel(
+        &mut self,
+        id: ChannelId,
+        channel_type: &str,
+    ) -> impl Future<Output = bool> + Send {
+        self.inner
+            .should_accept_unknown_server_channel(id, channel_type)
+    }
+
+    fn server_channel_open_unknown(
+        &mut self,
+        channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .server_channel_open_unknown(channel, reply, session)
+    }
+
+    fn server_channel_open_session(
+        &mut self,
+        channel: Channel<Msg>,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .server_channel_open_session(channel, reply, session)
+    }
+
+    fn server_channel_open_direct_tcpip(
+        &mut self,
+        channel: Channel<Msg>,
+        host_to_connect: &str,
+        port_to_connect: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.server_channel_open_direct_tcpip(
+            channel,
+            host_to_connect,
+            port_to_connect,
+            originator_address,
+            originator_port,
+            reply,
+            session,
+        )
+    }
+
+    fn server_channel_open_direct_streamlocal(
+        &mut self,
+        channel: Channel<Msg>,
+        socket_path: &str,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner
+            .server_channel_open_direct_streamlocal(channel, socket_path, reply, session)
+    }
+
+    fn server_channel_open_x11(
+        &mut self,
+        channel: Channel<Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        reply: ChannelOpenHandle,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.server_channel_open_x11(
+            channel,
+            originator_address,
+            originator_port,
+            reply,
+            session,
+        )
+    }
+
+    fn data(
+        &mut self,
+        channel: ChannelId,
+        data: &[u8],
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.data(channel, data, session)
+    }
+
+    fn extended_data(
+        &mut self,
+        channel: ChannelId,
+        ext: u32,
+        data: &[u8],
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.extended_data(channel, ext, data, session)
+    }
+
+    fn xon_xoff(
+        &mut self,
+        channel: ChannelId,
+        client_can_do: bool,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.xon_xoff(channel, client_can_do, session)
+    }
+
+    fn exit_status(
+        &mut self,
+        channel: ChannelId,
+        exit_status: u32,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.exit_status(channel, exit_status, session)
+    }
+
+    fn exit_signal(
+        &mut self,
+        channel: ChannelId,
+        signal_name: Sig,
+        core_dumped: bool,
+        error_message: &str,
+        lang_tag: &str,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.exit_signal(
+            channel,
+            signal_name,
+            core_dumped,
+            error_message,
+            lang_tag,
+            session,
+        )
+    }
+
+    fn window_adjusted(
+        &mut self,
+        channel: ChannelId,
+        new_size: u32,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.window_adjusted(channel, new_size, session)
+    }
+
+    fn adjust_window(&mut self, channel: ChannelId, window: u32) -> u32 {
+        self.inner.adjust_window(channel, window)
+    }
+
+    fn openssh_ext_host_keys_announced(
+        &mut self,
+        keys: Vec<PublicKey>,
+        session: &mut Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.openssh_ext_host_keys_announced(keys, session)
+    }
+
+    fn disconnected(
+        &mut self,
+        reason: DisconnectReason<Self::Error>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.inner.disconnected(reason)
+    }
+}
+
 /// [`russh`](https://docs.rs/russh/latest/russh) session.
 pub struct RusshSession<T>
 where
     T: Handler + Default + Send + 'static,
 {
     runtime: Arc<Runtime>,
-    session: Handle<T>,
+    session: Handle<CaSignaturePolicyHandler<T>>,
 }
 
 /// SFTP handle for russh.
@@ -143,24 +458,34 @@ impl AsyncWrite for ConnectionDeadlineStream {
     }
 }
 
+struct ConnectionTarget<'a> {
+    address: &'a str,
+    bind_address: Option<&'a str>,
+    bind_interface: Option<&'a str>,
+}
+
 fn connect_with_timeout<T>(
     runtime: &Runtime,
     config: Arc<client::Config>,
-    address: &str,
-    bind_address: Option<&str>,
-    bind_interface: Option<&str>,
+    handler: T,
+    target: ConnectionTarget<'_>,
     tcp_keep_alive: Option<bool>,
     timeout: std::time::Duration,
 ) -> RemoteResult<Handle<T>>
 where
-    T: Handler + Default + Send + 'static,
+    T: Handler + Send + 'static,
 {
     let deadline = Instant::now() + timeout;
     let stream = runtime
         .block_on(async {
             tokio::time::timeout_at(
                 deadline,
-                connect_tcp(address, bind_address, bind_interface, tcp_keep_alive),
+                connect_tcp(
+                    target.address,
+                    target.bind_address,
+                    target.bind_interface,
+                    tcp_keep_alive,
+                ),
             )
             .await
         })
@@ -184,7 +509,7 @@ where
     let connection_deadline_active = deadline_active.clone();
     let session_result = runtime.block_on(async {
         let stream = ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
-        client::connect_stream(config, stream, T::default()).await
+        client::connect_stream(config, stream, handler).await
     });
     deadline_active.store(false, Ordering::Release);
     session_result.map_err(|err| {
@@ -289,14 +614,24 @@ where
 
         let config = Arc::new(config);
         let connection_attempts = ssh_config.connection_attempts.max(1);
+        let ca_signature_algorithms = ssh_config
+            .params
+            .ca_signature_algorithms
+            .algorithms()
+            .to_vec();
         let mut attempt = 1;
         let mut session = loop {
-            match connect_with_timeout::<T>(
+            let handler =
+                CaSignaturePolicyHandler::new(T::default(), ca_signature_algorithms.clone());
+            match connect_with_timeout(
                 &runtime,
                 config.clone(),
-                &ssh_config.address,
-                ssh_config.params.bind_address.as_deref(),
-                ssh_config.params.bind_interface.as_deref(),
+                handler,
+                ConnectionTarget {
+                    address: &ssh_config.address,
+                    bind_address: ssh_config.params.bind_address.as_deref(),
+                    bind_interface: ssh_config.params.bind_interface.as_deref(),
+                },
                 ssh_config.params.tcp_keep_alive,
                 ssh_config.connection_timeout,
             ) {
@@ -1256,6 +1591,30 @@ mod test {
                 .build()
                 .unwrap(),
         )
+    }
+
+    #[test]
+    fn should_apply_ca_signature_algorithms_to_host_certificates() {
+        let certificate = russh::keys::Certificate::from_openssh(ssh_mock::MOCK_USER_CERTIFICATE)
+            .expect("failed to parse test certificate");
+        let server_key = PublicKeyOrCertificate::Certificate(certificate);
+        let runtime = test_runtime();
+
+        let mut rejected =
+            CaSignaturePolicyHandler::new(NoCheckServerKey, vec!["rsa-sha2-256".to_string()]);
+        assert!(
+            !runtime
+                .block_on(rejected.check_server_key(&server_key))
+                .expect("failed to check rejected certificate")
+        );
+
+        let mut accepted =
+            CaSignaturePolicyHandler::new(NoCheckServerKey, vec!["ssh-ed25519".to_string()]);
+        assert!(
+            runtime
+                .block_on(accepted.check_server_key(&server_key))
+                .expect("failed to check accepted certificate")
+        );
     }
 
     #[test]
