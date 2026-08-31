@@ -1044,19 +1044,15 @@ fn apply_config_algo_prefs(config: &mut client::Config, ssh_config: &Config) {
     }
 
     // Host key algorithms
-    let host_keys: Vec<Algorithm> = params
-        .host_key_algorithms
-        .algorithms()
-        .iter()
-        .filter_map(|name| {
-            name.parse::<Algorithm>()
-                .map_err(|err| warn!("Unsupported host key algorithm '{name}': {err}"))
-                .ok()
-        })
-        .collect();
-    if !host_keys.is_empty() {
-        config.preferred.key = Cow::Owned(host_keys);
-    }
+    let (host_keys, host_key_certificates) = parse_host_key_algorithms(
+        params
+            .host_key_algorithms
+            .algorithms()
+            .iter()
+            .map(String::as_str),
+    );
+    config.preferred.host_key_certificates = Cow::Owned(host_key_certificates);
+    config.preferred.key = Cow::Owned(host_keys);
 
     // Cipher algorithms
     let ciphers: Vec<russh::cipher::Name> = params
@@ -1112,15 +1108,9 @@ fn apply_opts_algo_prefs(config: &mut client::Config, opts: &SshOpts) {
                 }
             }
             MethodType::HostKey => {
-                let keys: Vec<Algorithm> = names
-                    .iter()
-                    .filter_map(|name| {
-                        name.parse::<Algorithm>()
-                            .map_err(|err| warn!("Unsupported host key algorithm '{name}': {err}"))
-                            .ok()
-                    })
-                    .collect();
-                if !keys.is_empty() {
+                let (keys, certificates) = parse_host_key_algorithms(names.iter().copied());
+                if !keys.is_empty() || !certificates.is_empty() {
+                    config.preferred.host_key_certificates = Cow::Owned(certificates);
                     config.preferred.key = Cow::Owned(keys);
                 }
             }
@@ -1158,6 +1148,34 @@ fn apply_opts_algo_prefs(config: &mut client::Config, opts: &SshOpts) {
             }
         }
     }
+}
+
+/// Split host key algorithm names into plain key and certificate preferences.
+///
+/// Russh advertises certificate preferences before plain key preferences because its API exposes
+/// them as separate lists, so cross-list ordering cannot be preserved.
+fn parse_host_key_algorithms<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> (Vec<Algorithm>, Vec<Algorithm>) {
+    let mut keys = Vec::new();
+    let mut certificates = Vec::new();
+
+    for name in names {
+        let result = if name.ends_with("-cert-v01@openssh.com") {
+            Algorithm::new_certificate(name)
+                .map(|algorithm| certificates.push(algorithm))
+                .map_err(|err| err.to_string())
+        } else {
+            name.parse::<Algorithm>()
+                .map(|algorithm| keys.push(algorithm))
+                .map_err(|err| err.to_string())
+        };
+        if let Err(err) = result {
+            warn!("Unsupported host key algorithm '{name}': {err}");
+        }
+    }
+
+    (keys, certificates)
 }
 
 /// Execute a shell command on the remote server via a russh channel.
@@ -1228,6 +1246,7 @@ mod test {
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::KeyMethod;
     use crate::mock::ssh as ssh_mock;
 
     fn test_runtime() -> Arc<Runtime> {
@@ -1261,6 +1280,82 @@ mod test {
                 .collect::<Vec<_>>();
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn should_apply_configured_host_key_certificates() {
+        let mut ssh_config =
+            Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
+        ssh_config.params.host_key_algorithms = ssh2_config::Algorithms::new([
+            "ssh-ed25519-cert-v01@openssh.com",
+            "rsa-sha2-512-cert-v01@openssh.com",
+            "ecdsa-sha2-nistp256",
+        ]);
+        let mut config = client::Config::default();
+
+        apply_config_algo_prefs(&mut config, &ssh_config);
+
+        let certificates = config
+            .preferred
+            .host_key_certificates
+            .iter()
+            .map(Algorithm::to_certificate_type)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            certificates,
+            [
+                "ssh-ed25519-cert-v01@openssh.com",
+                "rsa-sha2-512-cert-v01@openssh.com"
+            ]
+        );
+        let plain_keys = config
+            .preferred
+            .key
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>();
+        assert_eq!(plain_keys, ["ecdsa-sha2-nistp256"]);
+    }
+
+    #[test]
+    fn should_override_configured_host_key_certificates_with_options() {
+        let mut ssh_config =
+            Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
+        ssh_config.params.host_key_algorithms =
+            ssh2_config::Algorithms::new(["ssh-ed25519-cert-v01@openssh.com", "ssh-ed25519"]);
+        let opts = SshOpts::new("localhost").method(KeyMethod::new(
+            MethodType::HostKey,
+            &["ecdsa-sha2-nistp256".to_string()],
+        ));
+        let mut config = client::Config::default();
+
+        apply_config_algo_prefs(&mut config, &ssh_config);
+        apply_opts_algo_prefs(&mut config, &opts);
+
+        assert!(config.preferred.host_key_certificates.is_empty());
+        let plain_keys = config
+            .preferred
+            .key
+            .iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>();
+        assert_eq!(plain_keys, ["ecdsa-sha2-nistp256"]);
+    }
+
+    #[test]
+    fn should_preserve_host_key_preferences_for_empty_options() {
+        let mut ssh_config =
+            Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
+        ssh_config.params.host_key_algorithms =
+            ssh2_config::Algorithms::new(["ssh-ed25519-cert-v01@openssh.com", "ssh-ed25519"]);
+        let opts = SshOpts::new("localhost").method(KeyMethod::new(MethodType::HostKey, &[]));
+        let mut config = client::Config::default();
+
+        apply_config_algo_prefs(&mut config, &ssh_config);
+        apply_opts_algo_prefs(&mut config, &opts);
+
+        assert_eq!(config.preferred.host_key_certificates.len(), 1);
+        assert_eq!(config.preferred.key.len(), 1);
     }
 
     #[test]
