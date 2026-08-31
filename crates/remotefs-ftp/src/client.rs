@@ -1184,7 +1184,7 @@ mod test {
     // -- test utils
 
     fn generate_tempdir() -> String {
-        use rand::{Rng, distr::Alphanumeric, rng};
+        use rand::{RngExt as _, distr::Alphanumeric, rng};
         let mut rng = rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
