@@ -176,6 +176,9 @@ impl SshOpts {
 
     /// Set SSH configuration file to read
     ///
+    /// User and system SSH configuration files are not loaded implicitly. Call this method to
+    /// apply SSH configuration from the provided file.
+    ///
     /// The supported options are:
     ///
     /// - Host block

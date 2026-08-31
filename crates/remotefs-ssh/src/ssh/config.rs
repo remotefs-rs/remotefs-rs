@@ -265,6 +265,7 @@ mod test {
         assert_eq!(config.connection_timeout, Duration::from_secs(30));
         assert_eq!(config.address.as_str(), "192.168.1.1:22");
         assert_eq!(config.host.as_str(), "192.168.1.1");
+        assert_eq!(config.port, 22);
         assert!(config.username.is_empty());
         assert_eq!(
             config.params,
@@ -283,6 +284,7 @@ mod test {
         assert_eq!(config.connection_timeout, Duration::from_secs(10));
         assert_eq!(config.host.as_str(), "192.168.1.1");
         assert_eq!(config.address.as_str(), "192.168.1.1:2222");
+        assert_eq!(config.port, 2222);
         assert_eq!(config.username.as_str(), "omar");
         assert_eq!(
             config.params,
@@ -292,14 +294,15 @@ mod test {
 
     #[test]
     fn should_init_config_from_file() {
-        let config_file = ssh_mock::create_ssh_config(22);
+        let config_file = ssh_mock::create_ssh_config(2222);
         let opts = SshOpts::new("sftp").config_file(config_file.path(), ParseRule::STRICT);
         let config = Config::try_from(&opts).ok().unwrap();
         assert_eq!(config.connection_attempts, 3);
         assert_eq!(config.connection_timeout, Duration::from_secs(60));
         assert_eq!(config.host.as_str(), "sftp");
         assert_eq!(config.resolved_host.as_str(), "127.0.0.1");
-        assert_eq!(config.address.as_str(), "127.0.0.1:22");
+        assert_eq!(config.address.as_str(), "127.0.0.1:2222");
+        assert_eq!(config.port, 2222);
         assert_eq!(config.username.as_str(), "sftp");
         assert_ne!(
             config.params,
@@ -309,23 +312,35 @@ mod test {
 
     #[test]
     fn should_init_config_from_file_with_override() {
-        let config_file = ssh_mock::create_ssh_config(22);
+        let config_file = ssh_mock::create_ssh_config(2222);
         let opts = SshOpts::new("sftp")
             .config_file(config_file.path(), ParseRule::STRICT)
             .connection_timeout(Duration::from_secs(10))
-            .port(22)
+            .port(2200)
             .username("omar");
         let config = Config::try_from(&opts).ok().unwrap();
         assert_eq!(config.connection_attempts, 3);
         assert_eq!(config.connection_timeout, Duration::from_secs(10));
         assert_eq!(config.host.as_str(), "sftp");
         assert_eq!(config.resolved_host.as_str(), "127.0.0.1");
-        assert_eq!(config.address.as_str(), "127.0.0.1:22");
+        assert_eq!(config.address.as_str(), "127.0.0.1:2200");
+        assert_eq!(config.port, 2200);
         assert_eq!(config.username.as_str(), "omar");
         assert_ne!(
             config.params,
             HostParams::new(&DefaultAlgorithms::default())
         );
+    }
+
+    #[test]
+    fn should_format_ipv6_address() {
+        let opts = SshOpts::new("2001:db8::1").port(2222);
+
+        let config = Config::try_from(&opts).expect("failed to resolve SSH config");
+
+        assert_eq!(config.address.as_str(), "[2001:db8::1]:2222");
+        assert_eq!(config.resolved_host.as_str(), "2001:db8::1");
+        assert_eq!(config.port, 2222);
     }
 
     #[test]

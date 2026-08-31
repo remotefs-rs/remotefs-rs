@@ -67,28 +67,40 @@ fn connect_with_timeout(
     result
 }
 
+fn configure_libssh_endpoint(
+    session: &libssh_rs::Session,
+    opts: &SshOpts,
+    ssh_config: &Config,
+) -> RemoteResult<()> {
+    session
+        .set_option(SshOption::ProcessConfig(false))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    session
+        .set_option(SshOption::Hostname(opts.host.clone()))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    if let Some(config_file) = opts.config_file.as_ref() {
+        debug!(
+            "Using config file: {config_file}",
+            config_file = config_file.display()
+        );
+        session
+            .options_parse_config(Some(config_file.to_string_lossy().as_ref()))
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    }
+    session
+        .set_option(SshOption::Hostname(ssh_config.resolved_host.clone()))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    session
+        .set_option(SshOption::Port(ssh_config.port))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))
+}
+
 fn connect_libssh_session(opts: &SshOpts, ssh_config: &Config) -> RemoteResult<libssh_rs::Session> {
     let mut session = libssh_rs::Session::new().map_err(|err| {
         error!("Could not create session: {err}");
         RemoteError::new_ex(RemoteErrorType::ConnectionError, err)
     })?;
-    session
-        .set_option(SshOption::Hostname(opts.host.clone()))
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
-    let config_file = opts
-        .config_file
-        .as_ref()
-        .map(|path| path.display().to_string());
-    debug!("Using config file: {config_file:?}");
-    session
-        .options_parse_config(config_file.as_deref())
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
-    if let Some(port) = opts.port {
-        debug!("Using port: {port}");
-        session
-            .set_option(SshOption::Port(port))
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
-    }
+    configure_libssh_endpoint(&session, opts, ssh_config)?;
 
     let bind_addresses = if ssh_config.params.bind_address.is_none()
         && let Some(bind_interface) = ssh_config.params.bind_interface.as_deref()
@@ -1559,6 +1571,55 @@ mod tests {
         let session = LibSshSession::connect(&opts)
             .expect("the explicit port should override the SSH configuration");
         session.disconnect().expect("failed to disconnect");
+    }
+
+    #[test]
+    fn should_use_resolved_endpoint_after_native_config_parsing() {
+        let container = OpensshServer::start();
+        let port = container.port();
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host sftp\n    HostName 127.0.0.2\n    Port 1\n    User sftp"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("sftp")
+            .password("password")
+            .config_file(config_file.path(), ParseRule::STRICT);
+        let mut ssh_config = Config::try_from(&opts).expect("failed to resolve SSH config");
+        ssh_config.address = format!("127.0.0.1:{port}");
+        ssh_config.port = port;
+        ssh_config.resolved_host = "127.0.0.1".to_string();
+
+        let session = connect_libssh_session(&opts, &ssh_config)
+            .expect("the resolved endpoint should override native config parsing");
+        session.disconnect();
+    }
+
+    #[test]
+    fn should_ignore_implicit_ssh_config() {
+        let container = OpensshServer::start();
+        let port = container.port();
+        let ssh_directory = tempfile::tempdir().expect("failed to create SSH directory");
+        std::fs::write(
+            ssh_directory.path().join("config"),
+            "Host 127.0.0.1\n    BindAddress 192.0.2.1\n",
+        )
+        .expect("failed to write implicit SSH config");
+        let opts = SshOpts::new("127.0.0.1").port(port);
+        let ssh_config = Config::try_from(&opts).expect("failed to resolve SSH config");
+        let session = libssh_rs::Session::new().expect("failed to create libssh session");
+        session
+            .set_option(SshOption::SshDir(Some(
+                ssh_directory.path().display().to_string(),
+            )))
+            .expect("failed to set SSH directory");
+
+        configure_libssh_endpoint(&session, &opts, &ssh_config)
+            .expect("failed to configure libssh endpoint");
+        connect_with_timeout(&session, ssh_config.connection_timeout)
+            .expect("implicit SSH config should not affect the connection");
+        session.disconnect();
     }
 
     #[test]
