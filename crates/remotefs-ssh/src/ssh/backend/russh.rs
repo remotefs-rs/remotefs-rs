@@ -143,6 +143,48 @@ impl AsyncWrite for ConnectionDeadlineStream {
     }
 }
 
+fn connect_with_timeout<T>(
+    runtime: &Runtime,
+    config: Arc<client::Config>,
+    address: &str,
+    timeout: std::time::Duration,
+) -> RemoteResult<Handle<T>>
+where
+    T: Handler + Default + Send + 'static,
+{
+    let deadline = Instant::now() + timeout;
+    let stream = runtime
+        .block_on(async { tokio::time::timeout_at(deadline, TcpStream::connect(address)).await })
+        .map_err(|err| {
+            let msg = format!("SSH connection timed out: {err}");
+            error!("{msg}");
+            RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+        })?
+        .map_err(|err| {
+            let msg = format!("SSH connection failed: {err}");
+            error!("{msg}");
+            RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+        })?;
+    if config.nodelay
+        && let Err(err) = stream.set_nodelay(true)
+    {
+        warn!("Failed to enable TCP_NODELAY: {err}");
+    }
+
+    let deadline_active = Arc::new(AtomicBool::new(true));
+    let connection_deadline_active = deadline_active.clone();
+    let session_result = runtime.block_on(async {
+        let stream = ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
+        client::connect_stream(config, stream, T::default()).await
+    });
+    deadline_active.store(false, Ordering::Release);
+    session_result.map_err(|err| {
+        let msg = format!("SSH connection failed: {err:?}");
+        error!("{msg}");
+        RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+    })
+}
+
 impl<T> SshSession for RusshSession<T>
 where
     T: Handler + Default + Send + 'static,
@@ -169,40 +211,23 @@ where
         apply_opts_algo_prefs(&mut config, opts);
 
         let config = Arc::new(config);
-        let deadline = Instant::now() + ssh_config.connection_timeout;
-        let stream = runtime
-            .block_on(async {
-                tokio::time::timeout_at(deadline, TcpStream::connect(&ssh_config.address)).await
-            })
-            .map_err(|err| {
-                let msg = format!("SSH connection timed out: {err}");
-                error!("{msg}");
-                RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
-            })?
-            .map_err(|err| {
-                let msg = format!("SSH connection failed: {err}");
-                error!("{msg}");
-                RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
-            })?;
-        if config.nodelay
-            && let Err(err) = stream.set_nodelay(true)
-        {
-            warn!("Failed to enable TCP_NODELAY: {err}");
-        }
-
-        let deadline_active = Arc::new(AtomicBool::new(true));
-        let connection_deadline_active = deadline_active.clone();
-        let session_result = runtime.block_on(async {
-            let stream =
-                ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
-            client::connect_stream(config, stream, T::default()).await
-        });
-        deadline_active.store(false, Ordering::Release);
-        let mut session = session_result.map_err(|err| {
-            let msg = format!("SSH connection failed: {err:?}");
-            error!("{msg}");
-            RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
-        })?;
+        let connection_attempts = ssh_config.connection_attempts.max(1);
+        let mut attempt = 1;
+        let mut session = loop {
+            match connect_with_timeout::<T>(
+                &runtime,
+                config.clone(),
+                &ssh_config.address,
+                ssh_config.connection_timeout,
+            ) {
+                Ok(session) => break session,
+                Err(err) if attempt < connection_attempts => {
+                    warn!("SSH connection attempt {attempt} failed: {err}");
+                    attempt += 1;
+                }
+                Err(err) => return Err(err),
+            }
+        };
 
         // Authenticate
         auth::authenticate(&mut session, &runtime, opts, &ssh_config)?;
@@ -1347,6 +1372,27 @@ mod test {
             server_elapsed < Duration::from_secs(1),
             "connection remained open after timeout: {server_elapsed:?}"
         );
+    }
+
+    #[test]
+    fn should_retry_connection_using_configured_attempts() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let (port, _proxy) = ssh_mock::start_flaky_proxy(container.port(), 1);
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host flaky\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ConnectionAttempts 2"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("flaky")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(test_runtime());
+
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("connection should succeed on the configured retry");
+        session.disconnect().expect("failed to disconnect");
+        drop(session);
     }
 
     #[test]

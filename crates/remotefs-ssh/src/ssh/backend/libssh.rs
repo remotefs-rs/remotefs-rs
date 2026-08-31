@@ -165,9 +165,19 @@ impl SshSession for LibSshSession {
         }
 
         // Open connection and initialize handshake
-        if let Err(err) = connect_with_timeout(&session, ssh_config.connection_timeout) {
-            error!("SSH handshake failed: {err}");
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        let connection_attempts = ssh_config.connection_attempts.max(1);
+        for attempt in 1..=connection_attempts {
+            match connect_with_timeout(&session, ssh_config.connection_timeout) {
+                Ok(()) => break,
+                Err(err) if attempt < connection_attempts => {
+                    warn!("SSH connection attempt {attempt} failed: {err}");
+                    session.disconnect();
+                }
+                Err(err) => {
+                    error!("SSH handshake failed: {err}");
+                    return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+                }
+            }
         }
 
         // try to authenticate userauth_none
@@ -1039,5 +1049,26 @@ mod tests {
             server_elapsed < Duration::from_secs(1),
             "connection remained open after timeout: {server_elapsed:?}"
         );
+    }
+
+    #[test]
+    fn should_retry_connection_using_configured_attempts() {
+        let container = OpensshServer::start();
+        let (port, proxy) = ssh_mock::start_flaky_proxy(container.port(), 1);
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host flaky\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ConnectionAttempts 2"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("flaky")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password");
+
+        let session = LibSshSession::connect(&opts)
+            .expect("connection should succeed on the configured retry");
+        session.disconnect().expect("failed to disconnect");
+        drop(session);
+        proxy.join().expect("test proxy panicked");
     }
 }

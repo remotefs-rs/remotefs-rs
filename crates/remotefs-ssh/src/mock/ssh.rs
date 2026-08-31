@@ -3,7 +3,7 @@
 //! Contains mock for SSH protocol
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -46,6 +46,40 @@ pub fn start_unresponsive_server(hold: Duration) -> (u16, JoinHandle<Duration>) 
             }
         }
         started.elapsed()
+    });
+
+    (port, handle)
+}
+
+/// Start a TCP proxy that drops a number of connections before relaying one.
+pub fn start_flaky_proxy(target_port: u16, failures: usize) -> (u16, JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind test proxy");
+    let port = listener
+        .local_addr()
+        .expect("failed to read test proxy address")
+        .port();
+    let handle = thread::spawn(move || {
+        for _ in 0..failures {
+            let (stream, _address) = listener
+                .accept()
+                .expect("failed to accept rejected connection");
+            drop(stream);
+        }
+
+        let (mut client, _address) = listener
+            .accept()
+            .expect("failed to accept relayed connection");
+        let mut server = TcpStream::connect(("127.0.0.1", target_port))
+            .expect("failed to connect test proxy target");
+        let mut client_reader = client.try_clone().expect("failed to clone client stream");
+        let mut server_writer = server.try_clone().expect("failed to clone server stream");
+        let upstream = thread::spawn(move || {
+            let _ = std::io::copy(&mut client_reader, &mut server_writer);
+            let _ = server_writer.shutdown(Shutdown::Write);
+        });
+        let _ = std::io::copy(&mut server, &mut client);
+        let _ = client.shutdown(Shutdown::Write);
+        upstream.join().expect("test proxy panicked");
     });
 
     (port, handle)
