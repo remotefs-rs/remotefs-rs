@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime};
 use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
 use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
+use socket2::{Domain, Protocol, Socket, Type};
 use ssh2::{FileStat, OpenType, RenameFlags};
 
 use super::SshSession;
@@ -50,6 +51,7 @@ impl SshSession for LibSsh2Session {
             }
         };
         let mut stream = None;
+        let mut last_connection_error = None;
         for _ in 0..ssh_config.connection_attempts {
             for socket_addr in socket_addresses.iter() {
                 trace!(
@@ -57,10 +59,17 @@ impl SshSession for LibSsh2Session {
                     socket_addr,
                     ssh_config.connection_timeout.as_secs()
                 );
-                if let Ok(tcp_stream) = tcp_connect(socket_addr, ssh_config.connection_timeout) {
-                    debug!("Connection established with address {socket_addr}");
-                    stream = Some(tcp_stream);
-                    break;
+                match tcp_connect(
+                    socket_addr,
+                    ssh_config.connection_timeout,
+                    ssh_config.params.bind_address.as_deref(),
+                ) {
+                    Ok(tcp_stream) => {
+                        debug!("Connection established with address {socket_addr}");
+                        stream = Some(tcp_stream);
+                        break;
+                    }
+                    Err(err) => last_connection_error = Some(err),
                 }
             }
             // break from attempts cycle if some
@@ -72,10 +81,14 @@ impl SshSession for LibSsh2Session {
         let stream = match stream {
             Some(s) => s,
             None => {
-                error!("No suitable socket address found; connection timeout");
+                let message = last_connection_error.map_or_else(
+                    || "No suitable socket address found; connection timeout".to_string(),
+                    |err| err.to_string(),
+                );
+                error!("Could not establish connection: {message}");
                 return Err(RemoteError::new_ex(
                     RemoteErrorType::ConnectionError,
-                    "connection timeout",
+                    message,
                 ));
             }
         };
@@ -574,12 +587,49 @@ fn perform_shell_cmd<S: AsRef<str>>(session: &mut ssh2::Session, cmd: S) -> Remo
 
 /// connect to socket address with provided timeout.
 /// If timeout is zero, don't set timeout
-fn tcp_connect(address: &SocketAddr, timeout: Duration) -> std::io::Result<TcpStream> {
-    if timeout.is_zero() {
-        TcpStream::connect(address)
-    } else {
-        TcpStream::connect_timeout(address, timeout)
+fn tcp_connect(
+    address: &SocketAddr,
+    timeout: Duration,
+    bind_address: Option<&str>,
+) -> std::io::Result<TcpStream> {
+    let Some(bind_address) = bind_address else {
+        return if timeout.is_zero() {
+            TcpStream::connect(address)
+        } else {
+            TcpStream::connect_timeout(address, timeout)
+        };
+    };
+
+    let mut last_error = None;
+    for source_address in (bind_address, 0)
+        .to_socket_addrs()?
+        .filter(|source| source.is_ipv4() == address.is_ipv4())
+    {
+        let result = (|| {
+            let socket = Socket::new(
+                Domain::for_address(*address),
+                Type::STREAM,
+                Some(Protocol::TCP),
+            )?;
+            socket.bind(&source_address.into())?;
+            if timeout.is_zero() {
+                socket.connect(&(*address).into())?;
+            } else {
+                socket.connect_timeout(&(*address).into(), timeout)?;
+            }
+            Ok::<TcpStream, std::io::Error>(socket.into())
+        })();
+        match result {
+            Ok(stream) => return Ok(stream),
+            Err(err) => last_error = Some(err),
+        }
     }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("no {address} address family found for BindAddress {bind_address}"),
+        )
+    }))
 }
 
 /// Configure algorithm preferences into session
@@ -777,6 +827,7 @@ fn session_auth_with_password(
 mod test {
 
     use ssh2_config::ParseRule;
+    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::mock::ssh as ssh_mock;
@@ -874,6 +925,35 @@ mod test {
             .port(port)
             .username("sftp")
             .password("ippopotamo");
+        assert!(LibSsh2Session::connect(&opts).is_err());
+    }
+
+    #[test]
+    fn should_apply_configured_bind_address() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+        let mut valid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            valid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 127.0.0.1"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(valid_config.path(), ParseRule::STRICT)
+            .password("password");
+        let session = LibSsh2Session::connect(&opts)
+            .expect("failed to connect with an available bind address");
+        session.disconnect().expect("failed to disconnect");
+
+        let mut invalid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            invalid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 192.0.2.1"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(invalid_config.path(), ParseRule::STRICT)
+            .password("password");
         assert!(LibSsh2Session::connect(&opts).is_err());
     }
 

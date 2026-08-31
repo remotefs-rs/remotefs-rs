@@ -19,7 +19,7 @@ use russh::keys::{Algorithm, PublicKeyOrCertificate};
 use russh::{Disconnect, client};
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime::Runtime;
 use tokio::time::{Instant, Sleep};
 
@@ -147,6 +147,7 @@ fn connect_with_timeout<T>(
     runtime: &Runtime,
     config: Arc<client::Config>,
     address: &str,
+    bind_address: Option<&str>,
     timeout: std::time::Duration,
 ) -> RemoteResult<Handle<T>>
 where
@@ -154,7 +155,9 @@ where
 {
     let deadline = Instant::now() + timeout;
     let stream = runtime
-        .block_on(async { tokio::time::timeout_at(deadline, TcpStream::connect(address)).await })
+        .block_on(async {
+            tokio::time::timeout_at(deadline, connect_tcp(address, bind_address)).await
+        })
         .map_err(|err| {
             let msg = format!("SSH connection timed out: {err}");
             error!("{msg}");
@@ -183,6 +186,50 @@ where
         error!("{msg}");
         RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
     })
+}
+
+async fn connect_tcp(address: &str, bind_address: Option<&str>) -> std::io::Result<TcpStream> {
+    let Some(bind_address) = bind_address else {
+        return TcpStream::connect(address).await;
+    };
+
+    let source_addresses: Vec<_> = tokio::net::lookup_host((bind_address, 0)).await?.collect();
+    let target_addresses: Vec<_> = tokio::net::lookup_host(address).await?.collect();
+    let mut last_error = None;
+    for target_address in target_addresses {
+        for source_address in source_addresses
+            .iter()
+            .filter(|source| source.is_ipv4() == target_address.is_ipv4())
+        {
+            let socket = if target_address.is_ipv4() {
+                TcpSocket::new_v4()
+            } else {
+                TcpSocket::new_v6()
+            };
+            let socket = match socket {
+                Ok(socket) => socket,
+                Err(err) => {
+                    last_error = Some(err);
+                    continue;
+                }
+            };
+            if let Err(err) = socket.bind(*source_address) {
+                last_error = Some(err);
+                continue;
+            }
+            match socket.connect(target_address).await {
+                Ok(stream) => return Ok(stream),
+                Err(err) => last_error = Some(err),
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
+            format!("no compatible address family found for BindAddress {bind_address}"),
+        )
+    }))
 }
 
 impl<T> SshSession for RusshSession<T>
@@ -218,6 +265,7 @@ where
                 &runtime,
                 config.clone(),
                 &ssh_config.address,
+                ssh_config.params.bind_address.as_deref(),
                 ssh_config.connection_timeout,
             ) {
                 Ok(session) => break session,
@@ -1393,6 +1441,37 @@ mod test {
             .expect("connection should succeed on the configured retry");
         session.disconnect().expect("failed to disconnect");
         drop(session);
+    }
+
+    #[test]
+    fn should_apply_configured_bind_address() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+        let mut valid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            valid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 127.0.0.1"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(valid_config.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(test_runtime());
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("failed to connect with an available bind address");
+        session.disconnect().expect("failed to disconnect");
+
+        let mut invalid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            invalid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 192.0.2.1"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(invalid_config.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(test_runtime());
+        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
     }
 
     #[test]
