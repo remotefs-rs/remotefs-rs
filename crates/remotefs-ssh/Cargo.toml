@@ -28,7 +28,7 @@ libssh-vendored = ["libssh", "libssh-rs/vendored", "libssh-rs/vendored-openssl"]
 libssh2 = ["dep:ssh2"]
 libssh2-vendored = ["libssh2", "ssh2/vendored-openssl"]
 no-log = ["log/max_level_off"]
-russh = ["dep:russh", "dep:russh-keys", "dep:russh-sftp", "dep:tokio"]
+russh = ["dep:russh", "dep:russh-sftp", "dep:tokio"]
 
 [dependencies]
 chrono = "0.4"
@@ -37,7 +37,6 @@ libssh-rs = { version = "0.3", optional = true }
 log = "0.4"
 remotefs = "0.3"
 russh = { version = "0.63", optional = true }
-russh-keys = { version = "0.49", optional = true }
 russh-sftp = { version = "2", optional = true }
 ssh2 = { version = "0.9", optional = true }
 ssh2-config = "0.7"

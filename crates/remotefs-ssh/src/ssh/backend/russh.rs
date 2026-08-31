@@ -11,7 +11,7 @@ use std::sync::Arc;
 use remotefs::fs::{Metadata, ReadStream, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use russh::client::{Handle, Handler};
-use russh::keys::{Algorithm, PublicKey};
+use russh::keys::{Algorithm, PublicKeyOrCertificate};
 use russh::{Disconnect, client};
 use russh_sftp::client::SftpSession;
 use tokio::runtime::Runtime;
@@ -36,7 +36,7 @@ impl Handler for NoCheckServerKey {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        _server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         Ok(true)
     }
