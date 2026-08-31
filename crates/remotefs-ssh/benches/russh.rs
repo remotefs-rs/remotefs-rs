@@ -21,7 +21,7 @@ const WRITE_SIZE: u64 = 64 * 1024 * 1024; // 64MB
 fn benchmark_scp_read(c: &mut Criterion) {
     c.bench_function("scp_read", |b| {
         b.iter_batched(
-            || BenchmarkCtx::new(),
+            BenchmarkCtx::new,
             |mut ctx| {
                 let reader = Sink::default();
 
@@ -39,7 +39,7 @@ fn benchmark_scp_read(c: &mut Criterion) {
 fn benchmark_sftp_read(c: &mut Criterion) {
     c.bench_function("sftp_read", |b| {
         b.iter_batched(
-            || BenchmarkCtx::new(),
+            BenchmarkCtx::new,
             |mut ctx| {
                 let reader = Sink::default();
 

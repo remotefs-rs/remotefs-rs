@@ -226,8 +226,10 @@ fn should_create_big_file() {
     } = setup_client();
     let p = Path::new("a.txt");
     let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     let reader = Cursor::new(file_data);
     assert_eq!(
         client
@@ -252,8 +254,10 @@ fn should_read_big_file() {
     } = setup_client();
     let p = Path::new("a.txt");
     let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     let reader = Cursor::new(file_data);
     assert_eq!(
         client

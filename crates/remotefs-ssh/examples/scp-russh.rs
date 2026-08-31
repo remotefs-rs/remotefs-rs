@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     scp_fs.connect()?;
 
     // list files
-    let files = scp_fs.list_dir(&Path::new("/tmp"))?;
+    let files = scp_fs.list_dir(Path::new("/tmp"))?;
     for file in files {
         info!("Found file: {:?}", file);
     }

@@ -77,8 +77,10 @@ fn should_copy_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     assert!(client.copy(p, Path::new("b.txt")).is_ok());
     assert!(client.stat(p).is_ok());
@@ -96,8 +98,10 @@ fn should_not_copy_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
     finalize_client(client);
@@ -171,8 +175,10 @@ fn should_create_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert_eq!(
         client
             .create_file(p, &metadata, Box::new(reader))
@@ -193,8 +199,10 @@ fn should_create_big_file() {
     } = setup_client();
     let p = Path::new("a.txt");
     let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     let reader = Cursor::new(file_data);
     assert_eq!(
         client
@@ -219,8 +227,10 @@ fn should_read_big_file() {
     } = setup_client();
     let p = Path::new("a.txt");
     let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     let reader = Cursor::new(file_data);
     assert_eq!(
         client
@@ -253,8 +263,10 @@ fn should_not_create_file() {
     let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_err());
     finalize_client(client);
 }
@@ -283,8 +295,10 @@ fn should_tell_whether_file_exists() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     assert_eq!(client.exists(p).ok().unwrap(), true);
     assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
@@ -307,8 +321,10 @@ fn should_list_dir() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     let file = client
         .list_dir(wrkdir.as_path())
@@ -348,8 +364,10 @@ fn should_move_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     let dest = Path::new("b.txt");
     assert!(client.mov(p, dest).is_ok());
@@ -368,8 +386,10 @@ fn should_not_move_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
     assert!(client.mov(p, dest).is_err());
@@ -443,8 +463,10 @@ fn should_remove_dir_all() {
     file_path.push(Path::new("a.txt"));
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(
         client
             .create_file(file_path.as_path(), &metadata, Box::new(reader))
@@ -505,8 +527,10 @@ fn should_not_remove_dir() {
     file_path.push(Path::new("a.txt"));
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(
         client
             .create_file(file_path.as_path(), &metadata, Box::new(reader))
@@ -526,8 +550,10 @@ fn should_remove_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     assert!(client.remove_file(p).is_ok());
     finalize_client(client);
@@ -543,8 +569,10 @@ fn should_setstat_file() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
 
     assert!(
@@ -615,8 +643,10 @@ fn should_stat_file() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert_eq!(
         client
             .create_file(p, &metadata, Box::new(reader))
@@ -657,8 +687,10 @@ fn should_make_symlink() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     let symlink = Path::new("b.sh");
     assert!(client.symlink(symlink, p).is_ok());
@@ -676,8 +708,10 @@ fn should_not_make_symlink() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    let mut metadata = Metadata::default();
-    metadata.size = file_data.len() as u64;
+    let metadata = Metadata {
+        size: file_data.len() as u64,
+        ..Default::default()
+    };
     assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
     let symlink = Path::new("b.sh");
     let file_data = "echo 5\n";

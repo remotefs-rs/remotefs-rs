@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     sftp_fs.connect()?;
     // list files
-    let files = sftp_fs.list_dir(&Path::new("/tmp"))?;
+    let files = sftp_fs.list_dir(Path::new("/tmp"))?;
     for file in files {
         info!("Found file: {:?}", file);
     }
