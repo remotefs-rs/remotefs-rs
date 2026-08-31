@@ -28,7 +28,10 @@ pub struct LibSsh2Sftp {
 /// Authentication method
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Authentication {
-    RsaKey(PathBuf),
+    RsaKey {
+        private_key: PathBuf,
+        certificate: Option<PathBuf>,
+    },
     Password(String),
 }
 
@@ -145,10 +148,18 @@ impl SshSession for LibSsh2Session {
                             ssh_config.username.as_str(),
                         ))
                 }) {
-                    methods.push(Authentication::RsaKey(rsa_key.clone()));
+                    methods.push(Authentication::RsaKey {
+                        private_key: rsa_key.clone(),
+                        certificate: ssh_config.params.certificate_file.clone(),
+                    });
                 }
                 if let Some(identity_files) = ssh_config.params.identity_file.as_deref() {
-                    methods.extend(identity_files.iter().cloned().map(Authentication::RsaKey));
+                    methods.extend(identity_files.iter().cloned().map(|private_key| {
+                        Authentication::RsaKey {
+                            private_key,
+                            certificate: ssh_config.params.certificate_file.clone(),
+                        }
+                    }));
                 }
             }
             // then try with password
@@ -815,15 +826,40 @@ fn session_auth_with_rsakey(
     session: &mut ssh2::Session,
     username: &str,
     private_key: &Path,
+    certificate: Option<&Path>,
     password: Option<&str>,
     accepted_algorithms: &[String],
 ) -> RemoteResult<()> {
-    let private_key_algorithm = private_key_algorithm(private_key, password)?;
-    if !pubkey_algorithm_is_accepted(&private_key_algorithm, accepted_algorithms) {
-        return Err(RemoteError::new_ex(
-            RemoteErrorType::AuthenticationFailed,
-            format!("private key algorithm {private_key_algorithm} is not accepted by SSH config"),
-        ));
+    if let Some(certificate) = certificate {
+        let certificate_algorithm = ssh_key::Certificate::read_file(certificate)
+            .map(|certificate| certificate.algorithm().to_certificate_type())
+            .map_err(|err| {
+                RemoteError::new_ex(
+                    RemoteErrorType::AuthenticationFailed,
+                    format!(
+                        "could not inspect certificate at '{}': {err}",
+                        certificate.display()
+                    ),
+                )
+            })?;
+        if !public_key_blob_algorithm_is_accepted(&certificate_algorithm, accepted_algorithms) {
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                format!(
+                    "certificate algorithm {certificate_algorithm} is not accepted by SSH config"
+                ),
+            ));
+        }
+    } else {
+        let private_key_algorithm = private_key_algorithm(private_key, password)?;
+        if !pubkey_algorithm_is_accepted(&private_key_algorithm, accepted_algorithms) {
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                format!(
+                    "private key algorithm {private_key_algorithm} is not accepted by SSH config"
+                ),
+            ));
+        }
     }
 
     debug!("Authenticating with username '{username}' and RSA key");
@@ -832,7 +868,7 @@ fn session_auth_with_rsakey(
         private_key.display()
     );
     session
-        .userauth_pubkey_file(username, None, private_key, password)
+        .userauth_pubkey_file(username, certificate, private_key, password)
         .map(|()| debug!("Authenticated with key at '{}'", private_key.display()))
         .map_err(|err| {
             error!("Authentication failed: {err}");
@@ -848,10 +884,14 @@ fn session_auth(
     authentication: Authentication,
 ) -> RemoteResult<()> {
     match authentication {
-        Authentication::RsaKey(private_key) => session_auth_with_rsakey(
+        Authentication::RsaKey {
+            private_key,
+            certificate,
+        } => session_auth_with_rsakey(
             session,
             &ssh_config.username,
             private_key.as_path(),
+            certificate.as_deref(),
             opts.password.as_deref(),
             ssh_config.params.pubkey_accepted_algorithms.algorithms(),
         ),
@@ -1116,6 +1156,29 @@ mod test {
 
         let session = LibSsh2Session::connect(&opts)
             .expect("failed to authenticate with IdentityFile from SSH config");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
+    fn should_connect_with_certificate_file_from_ssh_config() {
+        let (key_file, certificate_file) = ssh_mock::create_certificate_key_files();
+        let container = crate::ssh::container::OpensshServer::start_with_public_key(
+            ssh_mock::MOCK_CERTIFICATE_AUTHORITY,
+        );
+        let config_file = ssh_mock::create_ssh_config_with_certificate(
+            container.port(),
+            key_file.path(),
+            certificate_file.path(),
+        );
+        let opts =
+            SshOpts::new("sftp").config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+
+        let session = LibSsh2Session::connect(&opts)
+            .expect("failed to authenticate with CertificateFile from SSH config");
         assert!(
             session
                 .authenticated()

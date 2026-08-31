@@ -1452,6 +1452,30 @@ mod test {
     }
 
     #[test]
+    fn should_connect_with_certificate_file_from_ssh_config() {
+        use crate::ssh::container::OpensshServer;
+
+        let (key_file, certificate_file) = ssh_mock::create_certificate_key_files();
+        let container = OpensshServer::start_with_public_key(ssh_mock::MOCK_CERTIFICATE_AUTHORITY);
+        let config_file = ssh_mock::create_ssh_config_with_certificate(
+            container.port(),
+            key_file.path(),
+            certificate_file.path(),
+        );
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .runtime(test_runtime());
+
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("failed to authenticate with CertificateFile from SSH config");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
     fn should_apply_pubkey_accepted_algorithms_from_ssh_config() {
         use crate::ssh::container::OpensshServer;
 

@@ -125,11 +125,36 @@ TNKCN34QCWkyuYRHGhcNc0quEDayPw5QWGXlP4BzjfRUcPxY9cCXLe5wDLYsX33HwOAc59
 RorU9FCmS/654wAAABFyb290QDhjNTBmZDRjMzQ1YQECAw==
 -----END OPENSSH PRIVATE KEY-----";
 
+/// Mock Ed25519 private key corresponding to [`MOCK_USER_CERTIFICATE`].
+pub const MOCK_CERTIFICATE_PRIVATE_KEY: &str = r"-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACDJ56wnEEIs+S6Q3HSkOG9CL52gyGhiks7nIpjnC7J2oQAAAJC5vJ0Eubyd
+BAAAAAtzc2gtZWQyNTUxOQAAACDJ56wnEEIs+S6Q3HSkOG9CL52gyGhiks7nIpjnC7J2oQ
+AAAECQinML6DJh4UnRw9JnmYxid2/uokrMij8QHexNdWbGbMnnrCcQQiz5LpDcdKQ4b0Iv
+naDIaGKSzucimOcLsnahAAAADXJlbW90ZWZzLXRlc3Q=
+-----END OPENSSH PRIVATE KEY-----";
+
+/// Mock OpenSSH user certificate authorized by certificate-specific tests.
+pub const MOCK_USER_CERTIFICATE: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIAz/P/5CFqsedANCc3LTG39ioP5DjNVmIYFhLTkyZKicAAAAIMnnrCcQQiz5LpDcdKQ4b0IvnaDIaGKSzucimOcLsnahAAAAAAAAAAAAAAABAAAADXJlbW90ZWZzLXRlc3QAAAAIAAAABHNmdHAAAAAAXgvS8AAAAAD0hPdwAAAAAAAAAIIAAAAVcGVybWl0LVgxMS1mb3J3YXJkaW5nAAAAAAAAABdwZXJtaXQtYWdlbnQtZm9yd2FyZGluZwAAAAAAAAAWcGVybWl0LXBvcnQtZm9yd2FyZGluZwAAAAAAAAAKcGVybWl0LXB0eQAAAAAAAAAOcGVybWl0LXVzZXItcmMAAAAAAAAAAAAAADMAAAALc3NoLWVkMjU1MTkAAAAgTuSDWPlyniZISIy9nFEAIdcOxZqEWXAPXMW66gMlskUAAABTAAAAC3NzaC1lZDI1NTE5AAAAQEJOYJzhcZ2sz7BblmD/8kbL/ZjNvngxew+XIBjx1xich5HLFMYYOuY4MnpzlZHPaR9tAwo/gxiRQ5AbPd0owgQ= remotefs-test";
+
+/// Mock certificate authority entry for the test server's `authorized_keys`.
+pub const MOCK_CERTIFICATE_AUTHORITY: &str = "cert-authority ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE7kg1j5cp4mSEiMvZxRACHXDsWahFlwD1zFuuoDJbJF remotefs-test";
+
 /// Write the mock private key to a temp file and return it.
 pub fn create_key_file() -> NamedTempFile {
     let mut key = NamedTempFile::new().expect("Failed to create tempfile");
     writeln!(key, "{MOCK_PRIVATE_KEY}").expect("Failed to write key");
     key
+}
+
+/// Write the mock certificate private key and certificate to temporary files.
+pub fn create_certificate_key_files() -> (NamedTempFile, NamedTempFile) {
+    let mut key = NamedTempFile::new().expect("Failed to create certificate key tempfile");
+    writeln!(key, "{MOCK_CERTIFICATE_PRIVATE_KEY}")
+        .expect("Failed to write certificate private key");
+    let mut certificate = NamedTempFile::new().expect("Failed to create certificate tempfile");
+    writeln!(certificate, "{MOCK_USER_CERTIFICATE}").expect("Failed to write certificate");
+    (key, certificate)
 }
 
 /// Mock ssh key storage
@@ -240,6 +265,23 @@ pub fn create_ssh_config_with_identity_and_pubkey_algorithms(
     pubkey_algorithms: &str,
 ) -> NamedTempFile {
     create_ssh_config_with_identity_options(port, identity_file, true, Some(pubkey_algorithms))
+}
+
+/// Create an ssh config file with `IdentityFile` and `CertificateFile`.
+pub fn create_ssh_config_with_certificate(
+    port: u16,
+    identity_file: &std::path::Path,
+    certificate_file: &std::path::Path,
+) -> NamedTempFile {
+    let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
+    writeln!(
+        temp,
+        "Host sftp\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    IdentityFile {identity}\n    CertificateFile {certificate}",
+        identity = identity_file.display(),
+        certificate = certificate_file.display(),
+    )
+    .expect("Failed to write certificate SSH config");
+    temp
 }
 
 fn create_ssh_config_with_identity_options(
