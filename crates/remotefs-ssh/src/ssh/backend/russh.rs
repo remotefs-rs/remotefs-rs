@@ -4,9 +4,13 @@ mod auth;
 mod scp;
 
 use std::borrow::Cow;
+use std::future::Future as _;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::{Context, Poll};
 
 use remotefs::fs::{Metadata, ReadStream, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
@@ -14,7 +18,10 @@ use russh::client::{Handle, Handler};
 use russh::keys::{Algorithm, PublicKeyOrCertificate};
 use russh::{Disconnect, client};
 use russh_sftp::client::SftpSession;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
+use tokio::time::{Instant, Sleep};
 
 use super::{SshSession, WriteMode};
 use crate::SshOpts;
@@ -57,6 +64,85 @@ pub struct RusshSftp {
     session: Arc<SftpSession>,
 }
 
+struct ConnectionDeadlineStream {
+    inner: TcpStream,
+    deadline: Pin<Box<Sleep>>,
+    deadline_active: Arc<AtomicBool>,
+}
+
+impl ConnectionDeadlineStream {
+    fn new(inner: TcpStream, deadline: Instant, deadline_active: Arc<AtomicBool>) -> Self {
+        Self {
+            inner,
+            deadline: Box::pin(tokio::time::sleep_until(deadline)),
+            deadline_active,
+        }
+    }
+
+    fn poll_timed_out(&mut self, context: &mut Context<'_>) -> bool {
+        self.deadline_active.load(Ordering::Acquire)
+            && self.deadline.as_mut().poll(context).is_ready()
+    }
+}
+
+impl AsyncRead for ConnectionDeadlineStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        if self.poll_timed_out(context) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH connection timed out",
+            )));
+        }
+        Pin::new(&mut self.inner).poll_read(context, buffer)
+    }
+}
+
+impl AsyncWrite for ConnectionDeadlineStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        if self.poll_timed_out(context) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH connection timed out",
+            )));
+        }
+        Pin::new(&mut self.inner).poll_write(context, buffer)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        if self.poll_timed_out(context) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH connection timed out",
+            )));
+        }
+        Pin::new(&mut self.inner).poll_flush(context)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        if self.poll_timed_out(context) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "SSH connection timed out",
+            )));
+        }
+        Pin::new(&mut self.inner).poll_shutdown(context)
+    }
+}
+
 impl<T> SshSession for RusshSession<T>
 where
     T: Handler + Default + Send + 'static,
@@ -74,10 +160,7 @@ where
         let ssh_config = Config::try_from(opts)?;
         debug!("Connecting to '{}'", ssh_config.address);
 
-        let mut config = client::Config {
-            inactivity_timeout: Some(ssh_config.connection_timeout),
-            ..Default::default()
-        };
+        let mut config = client::Config::default();
 
         // Apply algorithm preferences from ssh config
         apply_config_algo_prefs(&mut config, &ssh_config);
@@ -86,16 +169,40 @@ where
         apply_opts_algo_prefs(&mut config, opts);
 
         let config = Arc::new(config);
-
-        let mut session = runtime
+        let deadline = Instant::now() + ssh_config.connection_timeout;
+        let stream = runtime
             .block_on(async {
-                client::connect(config, ssh_config.address.as_str(), T::default()).await
+                tokio::time::timeout_at(deadline, TcpStream::connect(&ssh_config.address)).await
             })
             .map_err(|err| {
-                let msg = format!("SSH connection failed: {err:?}");
+                let msg = format!("SSH connection timed out: {err}");
+                error!("{msg}");
+                RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+            })?
+            .map_err(|err| {
+                let msg = format!("SSH connection failed: {err}");
                 error!("{msg}");
                 RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
             })?;
+        if config.nodelay
+            && let Err(err) = stream.set_nodelay(true)
+        {
+            warn!("Failed to enable TCP_NODELAY: {err}");
+        }
+
+        let deadline_active = Arc::new(AtomicBool::new(true));
+        let connection_deadline_active = deadline_active.clone();
+        let session_result = runtime.block_on(async {
+            let stream =
+                ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
+            client::connect_stream(config, stream, T::default()).await
+        });
+        deadline_active.store(false, Ordering::Release);
+        let mut session = session_result.map_err(|err| {
+            let msg = format!("SSH connection failed: {err:?}");
+            error!("{msg}");
+            RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+        })?;
 
         // Authenticate
         auth::authenticate(&mut session, &runtime, opts, &ssh_config)?;
@@ -1000,8 +1107,10 @@ where
 mod test {
 
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use ssh2_config::ParseRule;
+    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::mock::ssh as ssh_mock;
@@ -1208,6 +1317,36 @@ mod test {
             .password("ippopotamo")
             .runtime(runtime);
         assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
+    }
+
+    #[test]
+    fn should_apply_connection_timeout_to_handshake() {
+        let (port, server) = ssh_mock::start_unresponsive_server(Duration::from_secs(2));
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host unresponsive\n    HostName 127.0.0.1\n    Port {port}\n    ConnectTimeout 5"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("unresponsive")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .connection_timeout(Duration::from_millis(100))
+            .runtime(test_runtime());
+
+        let started = Instant::now();
+        let result = RusshSession::<NoCheckServerKey>::connect(&opts);
+        let elapsed = started.elapsed();
+        let server_elapsed = server.join().expect("test server panicked");
+
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "connection exceeded explicit timeout: {elapsed:?}"
+        );
+        assert!(
+            server_elapsed < Duration::from_secs(1),
+            "connection remained open after timeout: {server_elapsed:?}"
+        );
     }
 
     #[test]

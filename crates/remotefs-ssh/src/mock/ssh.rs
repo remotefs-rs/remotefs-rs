@@ -2,11 +2,54 @@
 //!
 //! Contains mock for SSH protocol
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use tempfile::NamedTempFile;
 
 use crate::SshKeyStorage;
+
+/// Start a TCP server that accepts one connection without completing an SSH handshake.
+pub fn start_unresponsive_server(hold: Duration) -> (u16, JoinHandle<Duration>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind test server");
+    let port = listener
+        .local_addr()
+        .expect("failed to read test server address")
+        .port();
+    let handle = thread::spawn(move || {
+        let (mut stream, _address) = listener.accept().expect("failed to accept connection");
+        stream
+            .set_read_timeout(Some(hold))
+            .expect("failed to set test server timeout");
+        stream
+            .write_all(b"SSH-2.0-timeout-test\r\n")
+            .expect("failed to write test server banner");
+        let started = Instant::now();
+        let mut buffer = [0_u8; 256];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    break;
+                }
+                Err(err) => panic!("test server read failed: {err}"),
+            }
+        }
+        started.elapsed()
+    });
+
+    (port, handle)
+}
 
 /// Mock RSA private key (matches the `PUBLIC_KEY` authorized in the test container).
 pub const MOCK_PRIVATE_KEY: &str = r"-----BEGIN OPENSSH PRIVATE KEY-----

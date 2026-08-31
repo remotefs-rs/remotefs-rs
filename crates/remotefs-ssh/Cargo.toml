@@ -40,7 +40,7 @@ russh = { version = "0.63", optional = true }
 russh-sftp = { version = "2", optional = true }
 ssh2 = { version = "0.9", optional = true }
 ssh2-config = "0.7"
-tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
+tokio = { version = "1", default-features = false, features = ["net", "rt", "time"], optional = true }
 
 [dev-dependencies]
 criterion = "0.8"

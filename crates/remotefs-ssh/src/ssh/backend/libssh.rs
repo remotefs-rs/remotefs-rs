@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use libssh_rs::{AuthMethods, AuthStatus, OpenFlags, SshKey, SshOption};
 use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
@@ -25,6 +25,31 @@ pub struct LibSshSession {
 /// See <https://docs.rs/libssh-rs/0.3.6/libssh_rs/struct.Sftp.html>
 pub struct LibSshSftp {
     inner: libssh_rs::Sftp,
+}
+
+fn connect_with_timeout(
+    session: &libssh_rs::Session,
+    timeout: Duration,
+) -> libssh_rs::SshResult<()> {
+    session.set_blocking(false);
+    let started = Instant::now();
+    let result = loop {
+        match session.connect() {
+            Ok(()) => break Ok(()),
+            Err(libssh_rs::Error::TryAgain) if started.elapsed() < timeout => {
+                let remaining = timeout.saturating_sub(started.elapsed());
+                std::thread::sleep(Duration::from_millis(10).min(remaining));
+            }
+            Err(libssh_rs::Error::TryAgain) => {
+                break Err(libssh_rs::Error::fatal(format!(
+                    "connection timed out after {timeout:?}"
+                )));
+            }
+            Err(err) => break Err(err),
+        }
+    };
+    session.set_blocking(true);
+    result
 }
 
 /// A wrapper around [`libssh_rs::Channel`] to provide a SCP recv channel for [`LibSshSession`]
@@ -96,6 +121,7 @@ impl SshSession for LibSshSession {
     fn connect(opts: &SshOpts) -> remotefs::RemoteResult<Self> {
         // Resolve host
         debug!("Connecting to '{}'", opts.host);
+        let ssh_config = Config::try_from(opts)?;
 
         // Create session
         let mut session = match libssh_rs::Session::new() {
@@ -122,6 +148,13 @@ impl SshSession for LibSshSession {
                 .set_option(SshOption::Port(port))
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
         }
+        debug!(
+            "Using connection timeout: {:?}",
+            ssh_config.connection_timeout
+        );
+        session
+            .set_option(SshOption::Timeout(ssh_config.connection_timeout))
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
 
         // set methods
         for opt in opts.methods.iter().filter_map(|method| method.ssh_opts()) {
@@ -132,7 +165,7 @@ impl SshSession for LibSshSession {
         }
 
         // Open connection and initialize handshake
-        if let Err(err) = session.connect() {
+        if let Err(err) = connect_with_timeout(&session, ssh_config.connection_timeout) {
             error!("SSH handshake failed: {err}");
             return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
         }
@@ -949,10 +982,13 @@ fn wait_for_ack(channel: &libssh_rs::Channel) -> RemoteResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use ssh2_config::ParseRule;
     use tempfile::NamedTempFile;
 
     use super::*;
+    use crate::mock::ssh as ssh_mock;
     use crate::ssh::container::OpensshServer;
 
     #[test]
@@ -974,5 +1010,34 @@ mod tests {
         let session = LibSshSession::connect(&opts)
             .expect("the explicit port should override the SSH configuration");
         session.disconnect().expect("failed to disconnect");
+    }
+
+    #[test]
+    fn should_apply_explicit_connection_timeout() {
+        let (port, server) = ssh_mock::start_unresponsive_server(Duration::from_secs(2));
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host unresponsive\n    HostName 127.0.0.1\n    Port {port}\n    ConnectTimeout 5"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("unresponsive")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .connection_timeout(Duration::from_millis(100));
+
+        let started = Instant::now();
+        let result = LibSshSession::connect(&opts);
+        let elapsed = started.elapsed();
+        let server_elapsed = server.join().expect("test server panicked");
+
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "connection exceeded explicit timeout: {elapsed:?}"
+        );
+        assert!(
+            server_elapsed < Duration::from_secs(1),
+            "connection remained open after timeout: {server_elapsed:?}"
+        );
     }
 }
