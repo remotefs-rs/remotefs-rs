@@ -53,13 +53,15 @@ impl Handler for NoCheckServerKey {
 struct CaSignaturePolicyHandler<T> {
     inner: T,
     allowed_algorithms: Vec<String>,
+    forward_agent: bool,
 }
 
 impl<T> CaSignaturePolicyHandler<T> {
-    fn new(inner: T, allowed_algorithms: Vec<String>) -> Self {
+    fn new(inner: T, allowed_algorithms: Vec<String>, forward_agent: bool) -> Self {
         Self {
             inner,
             allowed_algorithms,
+            forward_agent,
         }
     }
 }
@@ -191,14 +193,21 @@ where
             .server_channel_open_forwarded_streamlocal(channel, socket_path, reply, session)
     }
 
-    fn server_channel_open_agent_forward(
+    async fn server_channel_open_agent_forward(
         &mut self,
         channel: Channel<Msg>,
         reply: ChannelOpenHandle,
         session: &mut Session,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        self.inner
-            .server_channel_open_agent_forward(channel, reply, session)
+    ) -> Result<(), Self::Error> {
+        if !self.forward_agent {
+            return self
+                .inner
+                .server_channel_open_agent_forward(channel, reply, session)
+                .await;
+        }
+
+        forward_agent_channel(channel, reply).await;
+        Ok(())
     }
 
     fn should_accept_unknown_server_channel(
@@ -364,6 +373,31 @@ where
     }
 }
 
+#[cfg(unix)]
+async fn forward_agent_channel(channel: Channel<Msg>, reply: ChannelOpenHandle) {
+    let agent = match russh::keys::agent::client::AgentClient::connect_env().await {
+        Ok(agent) => agent,
+        Err(err) => {
+            warn!("Could not connect to the configured SSH agent: {err}");
+            return;
+        }
+    };
+
+    reply.accept().await;
+    tokio::spawn(async move {
+        let mut channel = channel.into_stream();
+        let mut agent = agent.into_inner();
+        if let Err(err) = tokio::io::copy_bidirectional(&mut channel, &mut agent).await {
+            debug!("SSH agent forwarding channel closed with an error: {err}");
+        }
+    });
+}
+
+#[cfg(not(unix))]
+async fn forward_agent_channel(_channel: Channel<Msg>, _reply: ChannelOpenHandle) {
+    warn!("SSH agent forwarding is unavailable on this platform");
+}
+
 /// [`russh`](https://docs.rs/russh/latest/russh) session.
 pub struct RusshSession<T>
 where
@@ -371,6 +405,7 @@ where
 {
     runtime: Arc<Runtime>,
     session: Handle<CaSignaturePolicyHandler<T>>,
+    forward_agent: bool,
 }
 
 /// SFTP handle for russh.
@@ -623,7 +658,11 @@ where
         };
         auth::authenticate(&mut session, &runtime, opts, &ssh_config)?;
 
-        Ok(Self { runtime, session })
+        Ok(Self {
+            runtime,
+            session,
+            forward_agent: ssh_config.params.forward_agent.unwrap_or(false),
+        })
     }
 
     fn disconnect(&self) -> RemoteResult<()> {
@@ -664,13 +703,14 @@ where
         let escaped = cmd.replace('\'', r#"'\''"#);
         let wrapped = format!("sh -c '{escaped}'");
 
-        self.runtime
-            .block_on(async { perform_shell_cmd(&self.session, &wrapped).await })
+        self.runtime.block_on(async {
+            perform_shell_cmd(&self.session, &wrapped, self.forward_agent).await
+        })
     }
 
     fn scp_recv(&self, path: &Path) -> RemoteResult<Box<dyn Read + Send>> {
         self.runtime
-            .block_on(async { scp::recv(&self.session, path).await })
+            .block_on(async { scp::recv(&self.session, path, self.forward_agent).await })
     }
 
     fn scp_send(
@@ -681,8 +721,17 @@ where
         _times: Option<(u64, u64)>,
     ) -> RemoteResult<Box<dyn Write + Send>> {
         let runtime = self.runtime.clone();
-        self.runtime
-            .block_on(async { scp::send(&self.session, remote_path, mode, size, runtime).await })
+        self.runtime.block_on(async {
+            scp::send(
+                &self.session,
+                remote_path,
+                mode,
+                size,
+                runtime,
+                self.forward_agent,
+            )
+            .await
+        })
     }
 
     fn sftp(&self) -> RemoteResult<Self::Sftp> {
@@ -690,6 +739,9 @@ where
             .runtime
             .block_on(async {
                 let channel = self.session.channel_open_session().await?;
+                if self.forward_agent {
+                    channel.agent_forward(true).await?;
+                }
                 channel.request_subsystem(true, "sftp").await?;
                 Ok(channel)
             })
@@ -741,7 +793,11 @@ where
         .to_vec();
     let mut attempt = 1;
     loop {
-        let handler = CaSignaturePolicyHandler::new(T::default(), ca_signature_algorithms.clone());
+        let handler = CaSignaturePolicyHandler::new(
+            T::default(),
+            ca_signature_algorithms.clone(),
+            ssh_config.params.forward_agent.unwrap_or(false),
+        );
         match connect_with_timeout(
             runtime,
             config.clone(),
@@ -777,7 +833,11 @@ where
     let ca_signature_algorithms = target.params.ca_signature_algorithms.algorithms().to_vec();
     let mut attempt = 1;
     loop {
-        let handler = CaSignaturePolicyHandler::new(T::default(), ca_signature_algorithms.clone());
+        let handler = CaSignaturePolicyHandler::new(
+            T::default(),
+            ca_signature_algorithms.clone(),
+            target.params.forward_agent.unwrap_or(false),
+        );
         let result = runtime.block_on(async {
             tokio::time::timeout(target.connection_timeout, async {
                 let channel = jump_session
@@ -1600,11 +1660,15 @@ fn parse_host_key_algorithms<'a>(
 ///
 /// Opens a session channel, executes the command, collects stdout,
 /// and returns the exit code with the output.
-async fn perform_shell_cmd<T>(session: &Handle<T>, cmd: &str) -> RemoteResult<(u32, String)>
+async fn perform_shell_cmd<T>(
+    session: &Handle<T>,
+    cmd: &str,
+    forward_agent: bool,
+) -> RemoteResult<(u32, String)>
 where
     T: Handler,
 {
-    let mut channel = open_channel(session).await?;
+    let mut channel = open_channel(session, forward_agent).await?;
 
     channel.exec(true, cmd).await.map_err(|err| {
         RemoteError::new_ex(
@@ -1642,26 +1706,34 @@ where
 }
 
 /// Open a session channel on the given handle.
-async fn open_channel<T>(session: &Handle<T>) -> RemoteResult<russh::Channel<russh::client::Msg>>
+async fn open_channel<T>(
+    session: &Handle<T>,
+    forward_agent: bool,
+) -> RemoteResult<russh::Channel<russh::client::Msg>>
 where
     T: Handler,
 {
-    session.channel_open_session().await.map_err(|err| {
+    let channel = session.channel_open_session().await.map_err(|err| {
         RemoteError::new_ex(
             RemoteErrorType::ProtocolError,
             format!("Could not open channel: {err}"),
         )
-    })
+    })?;
+    if forward_agent {
+        channel.agent_forward(true).await.map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not request SSH agent forwarding: {err}"),
+            )
+        })?;
+    }
+    Ok(channel)
 }
 
 #[cfg(test)]
 mod test {
 
-    #[cfg(unix)]
-    use std::ffi::OsString;
     use std::sync::Arc;
-    #[cfg(unix)]
-    use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
     use ssh2_config::ParseRule;
@@ -1670,61 +1742,6 @@ mod test {
     use super::*;
     use crate::KeyMethod;
     use crate::mock::ssh as ssh_mock;
-
-    #[cfg(unix)]
-    static SSH_AGENT_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    #[cfg(unix)]
-    struct TestSshAgent {
-        auth_sock: String,
-        pid: String,
-        previous_auth_sock: Option<OsString>,
-    }
-
-    #[cfg(unix)]
-    impl TestSshAgent {
-        fn start() -> Self {
-            use std::process::Command;
-
-            let output = Command::new("ssh-agent")
-                .arg("-s")
-                .output()
-                .expect("failed to spawn ssh-agent (is openssh installed?)");
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let auth_sock = parse_agent_var(&stdout, "SSH_AUTH_SOCK")
-                .expect("ssh-agent did not report SSH_AUTH_SOCK");
-            let pid = parse_agent_var(&stdout, "SSH_AGENT_PID")
-                .expect("ssh-agent did not report SSH_AGENT_PID");
-            let previous_auth_sock = std::env::var_os("SSH_AUTH_SOCK");
-            // SAFETY: agent tests serialize access with `SSH_AGENT_ENV_LOCK`.
-            unsafe {
-                std::env::set_var("SSH_AUTH_SOCK", &auth_sock);
-            }
-
-            Self {
-                auth_sock,
-                pid,
-                previous_auth_sock,
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for TestSshAgent {
-        fn drop(&mut self) {
-            use std::process::Command;
-
-            // SAFETY: agent tests serialize access with `SSH_AGENT_ENV_LOCK`.
-            unsafe {
-                if let Some(previous_auth_sock) = self.previous_auth_sock.as_ref() {
-                    std::env::set_var("SSH_AUTH_SOCK", previous_auth_sock);
-                } else {
-                    std::env::remove_var("SSH_AUTH_SOCK");
-                }
-            }
-            let _ = Command::new("kill").arg(&self.pid).status();
-        }
-    }
 
     fn test_runtime() -> Arc<Runtime> {
         Arc::new(
@@ -1742,8 +1759,11 @@ mod test {
         let server_key = PublicKeyOrCertificate::Certificate(certificate);
         let runtime = test_runtime();
 
-        let mut rejected =
-            CaSignaturePolicyHandler::new(NoCheckServerKey, vec!["rsa-sha2-256".to_string()]);
+        let mut rejected = CaSignaturePolicyHandler::new(
+            NoCheckServerKey,
+            vec!["rsa-sha2-256".to_string()],
+            false,
+        );
         assert!(
             !runtime
                 .block_on(rejected.check_server_key(&server_key))
@@ -1751,7 +1771,7 @@ mod test {
         );
 
         let mut accepted =
-            CaSignaturePolicyHandler::new(NoCheckServerKey, vec!["ssh-ed25519".to_string()]);
+            CaSignaturePolicyHandler::new(NoCheckServerKey, vec!["ssh-ed25519".to_string()], false);
         assert!(
             runtime
                 .block_on(accepted.check_server_key(&server_key))
@@ -2041,29 +2061,15 @@ mod test {
     #[test]
     #[cfg(unix)]
     fn should_connect_to_ssh_server_auth_ssh_agent() {
-        use std::process::Command;
-
         use crate::SshAgentIdentity;
         use crate::ssh::container::OpensshServer;
 
         crate::mock::logger();
-        let _env_lock = SSH_AGENT_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let agent = TestSshAgent::start();
+        let agent = ssh_mock::TestSshAgent::start();
 
         let key_file = ssh_mock::create_key_file();
         // ssh-add refuses keys with loose permissions.
-        Command::new("chmod")
-            .args(["600", &key_file.path().display().to_string()])
-            .status()
-            .expect("chmod failed");
-        let added = Command::new("ssh-add")
-            .arg(key_file.path())
-            .env("SSH_AUTH_SOCK", &agent.auth_sock)
-            .status()
-            .expect("ssh-add failed to run");
-        assert!(added.success(), "ssh-add could not load the mock key");
+        agent.add_key(key_file.path());
 
         // Point the russh agent client at our agent. No key storage, no password:
         // authentication must succeed through the agent alone.
@@ -2088,10 +2094,7 @@ mod test {
 
         use crate::ssh::container::OpensshServer;
 
-        let _env_lock = SSH_AGENT_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let agent = TestSshAgent::start();
+        let agent = ssh_mock::TestSshAgent::start();
         let container = OpensshServer::start();
         // This Ed25519 key is not authorized by the server. OpenSSH still adds a
         // file key to the agent when it is loaded, before password fallback.
@@ -2116,7 +2119,7 @@ mod test {
         let identities = runtime
             .block_on(async {
                 let mut client =
-                    russh::keys::agent::client::AgentClient::connect_uds(&agent.auth_sock).await?;
+                    russh::keys::agent::client::AgentClient::connect_uds(agent.auth_sock()).await?;
                 client.request_identities().await
             })
             .expect("failed to list agent identities");
@@ -2131,16 +2134,6 @@ mod test {
                 .fingerprint(russh::keys::HashAlg::Sha256)
                 == expected_key
         }));
-    }
-
-    /// Parse a `NAME=value;` assignment from `ssh-agent -s` output.
-    #[cfg(unix)]
-    fn parse_agent_var(output: &str, name: &str) -> Option<String> {
-        let needle = format!("{name}=");
-        let start = output.find(&needle)? + needle.len();
-        let rest = &output[start..];
-        let end = rest.find(';')?;
-        Some(rest[..end].to_string())
     }
 
     #[test]
@@ -2158,6 +2151,35 @@ mod test {
         let mut session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
         assert!(session.authenticated().unwrap());
         assert!(session.cmd("pwd").is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn should_forward_configured_ssh_agent() {
+        let agent = ssh_mock::TestSshAgent::start();
+        let key_file = ssh_mock::create_key_file();
+        agent.add_key(key_file.path());
+        let container = crate::ssh::container::OpensshServer::start();
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ForwardAgent yes",
+            port = container.port(),
+        )
+        .expect("failed to write SSH config");
+        let runtime = test_runtime();
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(runtime);
+        let mut session =
+            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
+
+        let (status, output) = session
+            .cmd("ssh-add -L")
+            .expect("failed to query remote agent");
+        assert_eq!(status, 0, "remote ssh-add failed: {output}");
+        assert!(output.contains("ssh-rsa"));
     }
 
     #[test]

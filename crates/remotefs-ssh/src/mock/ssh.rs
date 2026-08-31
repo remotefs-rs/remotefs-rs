@@ -11,6 +11,89 @@ use tempfile::NamedTempFile;
 
 use crate::SshKeyStorage;
 
+#[cfg(unix)]
+static SSH_AGENT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Isolated SSH agent for tests that mutate `SSH_AUTH_SOCK`.
+#[cfg(unix)]
+pub struct TestSshAgent {
+    _env_lock: std::sync::MutexGuard<'static, ()>,
+    auth_sock: String,
+    pid: String,
+    previous_auth_sock: Option<std::ffi::OsString>,
+}
+
+#[cfg(unix)]
+impl TestSshAgent {
+    pub fn start() -> Self {
+        let env_lock = SSH_AGENT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let output = std::process::Command::new("ssh-agent")
+            .arg("-s")
+            .output()
+            .expect("failed to spawn ssh-agent (is openssh installed?)");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let auth_sock = parse_agent_var(&stdout, "SSH_AUTH_SOCK")
+            .expect("ssh-agent did not report SSH_AUTH_SOCK");
+        let pid = parse_agent_var(&stdout, "SSH_AGENT_PID")
+            .expect("ssh-agent did not report SSH_AGENT_PID");
+        let previous_auth_sock = std::env::var_os("SSH_AUTH_SOCK");
+        // SAFETY: `TestSshAgent` holds the global agent environment lock.
+        unsafe {
+            std::env::set_var("SSH_AUTH_SOCK", &auth_sock);
+        }
+
+        Self {
+            _env_lock: env_lock,
+            auth_sock,
+            pid,
+            previous_auth_sock,
+        }
+    }
+
+    pub fn auth_sock(&self) -> &str {
+        &self.auth_sock
+    }
+
+    pub fn add_key(&self, key: &std::path::Path) {
+        std::process::Command::new("chmod")
+            .args(["600", &key.display().to_string()])
+            .status()
+            .expect("chmod failed");
+        let added = std::process::Command::new("ssh-add")
+            .arg(key)
+            .env("SSH_AUTH_SOCK", &self.auth_sock)
+            .status()
+            .expect("ssh-add failed to run");
+        assert!(added.success(), "ssh-add could not load the test key");
+    }
+}
+
+#[cfg(unix)]
+impl Drop for TestSshAgent {
+    fn drop(&mut self) {
+        // SAFETY: `TestSshAgent` holds the global agent environment lock.
+        unsafe {
+            if let Some(previous_auth_sock) = self.previous_auth_sock.as_ref() {
+                std::env::set_var("SSH_AUTH_SOCK", previous_auth_sock);
+            } else {
+                std::env::remove_var("SSH_AUTH_SOCK");
+            }
+        }
+        let _ = std::process::Command::new("kill").arg(&self.pid).status();
+    }
+}
+
+#[cfg(unix)]
+fn parse_agent_var(output: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=");
+    let start = output.find(&needle)? + needle.len();
+    let rest = &output[start..];
+    let end = rest.find(';')?;
+    Some(rest[..end].to_string())
+}
+
 /// Return the name of an interface with an IPv4 loopback address.
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 pub fn ipv4_loopback_interface() -> String {

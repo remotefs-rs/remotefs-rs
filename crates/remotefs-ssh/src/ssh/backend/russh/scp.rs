@@ -22,12 +22,13 @@ fn shell_escape_arg(value: &str) -> String {
 pub(super) async fn recv<T>(
     session: &russh::client::Handle<T>,
     path: &Path,
+    forward_agent: bool,
 ) -> RemoteResult<Box<dyn std::io::Read + Send>>
 where
     T: Handler,
 {
     debug!("Opening channel for scp recv");
-    let mut channel = open_channel(session).await?;
+    let mut channel = open_channel(session, forward_agent).await?;
 
     let cmd = format!("scp -f {}", shell_escape_arg(&path.to_string_lossy()));
     channel.exec(true, cmd.as_bytes()).await.map_err(|err| {
@@ -107,12 +108,13 @@ pub(super) async fn send<T>(
     mode: i32,
     size: u64,
     runtime: Arc<Runtime>,
+    forward_agent: bool,
 ) -> RemoteResult<Box<dyn Write + Send>>
 where
     T: Handler,
 {
     debug!("Opening channel for scp send");
-    let mut channel = open_channel(session).await?;
+    let mut channel = open_channel(session, forward_agent).await?;
 
     let cmd = format!(
         "scp -t {}",

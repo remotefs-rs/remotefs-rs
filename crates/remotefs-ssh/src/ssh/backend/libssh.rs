@@ -1,5 +1,9 @@
 use std::io::{Cursor, Read, Seek, Write};
+#[cfg(unix)]
+use std::net::Shutdown;
 use std::net::ToSocketAddrs as _;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -19,6 +23,7 @@ use crate::ssh::config::Config;
 /// See <https://docs.rs/libssh-rs/0.3.6/libssh_rs/struct.Session.html>
 pub struct LibSshSession {
     session: libssh_rs::Session,
+    forward_agent: bool,
 }
 
 /// A wrapper around [`libssh_rs::Sftp`] to provide a SFTP client for [`LibSshSession`]
@@ -234,7 +239,13 @@ impl SshSession for LibSshSession {
         // try to authenticate userauth_none
         authenticate(&mut session, opts)?;
 
-        Ok(Self { session })
+        let forward_agent = ssh_config.params.forward_agent.unwrap_or(false);
+        session.enable_accept_agent_forward(forward_agent);
+
+        Ok(Self {
+            session,
+            forward_agent,
+        })
     }
 
     fn authenticated(&self) -> RemoteResult<bool> {
@@ -260,7 +271,11 @@ impl SshSession for LibSshSession {
     where
         S: AsRef<str>,
     {
-        let output = perform_shell_cmd(&mut self.session, format!("{}; echo $?", cmd.as_ref()))?;
+        let output = perform_shell_cmd(
+            &mut self.session,
+            format!("{}; echo $?", cmd.as_ref()),
+            self.forward_agent,
+        )?;
         if let Some(index) = output.trim().rfind('\n') {
             trace!("Read from stdout: '{output}'");
             let actual_output = (output[0..index + 1]).to_string();
@@ -932,6 +947,7 @@ fn key_storage_auth(
 fn perform_shell_cmd<S: AsRef<str>>(
     session: &mut libssh_rs::Session,
     cmd: S,
+    forward_agent: bool,
 ) -> RemoteResult<String> {
     // Create channel
     trace!("Running command: {}", cmd.as_ref());
@@ -952,6 +968,14 @@ fn perform_shell_cmd<S: AsRef<str>>(
             format!("Could not open session: {err}"),
         )
     })?;
+    if forward_agent {
+        channel.request_auth_agent().map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Could not request SSH agent forwarding: {err}"),
+            )
+        })?;
+    }
 
     // escape single quotes in command
     let cmd = cmd.as_ref().replace('\'', r#"'\''"#); // close, escape, and reopen
@@ -974,20 +998,234 @@ fn perform_shell_cmd<S: AsRef<str>>(
         )
     })?;
 
-    // Read output
-    let mut output: String = String::new();
-    match channel.stdout().read_to_string(&mut output) {
-        Ok(_) => {
-            // Wait close
-            let res = channel.get_exit_status();
-            trace!("Command output (res: {res:?}): {output}");
-            Ok(output)
-        }
-        Err(err) => Err(RemoteError::new_ex(
-            RemoteErrorType::ProtocolError,
-            format!("Could not read output: {err}"),
-        )),
+    let output = if forward_agent {
+        read_command_with_agent_forwarding(session, &channel)?
+    } else {
+        let mut output = String::new();
+        channel
+            .stdout()
+            .read_to_string(&mut output)
+            .map_err(|err| {
+                RemoteError::new_ex(
+                    RemoteErrorType::ProtocolError,
+                    format!("Could not read output: {err}"),
+                )
+            })?;
+        output
+    };
+
+    let res = channel.get_exit_status();
+    trace!("Command output (res: {res:?}): {output}");
+    Ok(output)
+}
+
+#[cfg(unix)]
+struct AgentForwardRelay {
+    channel: libssh_rs::Channel,
+    socket: UnixStream,
+    to_agent: Vec<u8>,
+    to_remote: Vec<u8>,
+    remote_eof: bool,
+    local_eof: bool,
+    agent_write_shutdown: bool,
+    sent_eof: bool,
+}
+
+#[cfg(unix)]
+impl AgentForwardRelay {
+    fn connect(channel: libssh_rs::Channel) -> std::io::Result<Self> {
+        let socket_path = std::env::var_os("SSH_AUTH_SOCK").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "SSH_AUTH_SOCK is not configured",
+            )
+        })?;
+        let socket = UnixStream::connect(socket_path)?;
+        socket.set_nonblocking(true)?;
+        Ok(Self {
+            channel,
+            socket,
+            to_agent: Vec::new(),
+            to_remote: Vec::new(),
+            remote_eof: false,
+            local_eof: false,
+            agent_write_shutdown: false,
+            sent_eof: false,
+        })
     }
+
+    fn pump(&mut self) -> Result<(bool, bool), String> {
+        let mut progressed = false;
+        let mut buffer = [0u8; 8192];
+
+        if !self.remote_eof && self.to_agent.len() < 64 * 1024 {
+            match self
+                .channel
+                .read_timeout(&mut buffer, false, Some(Duration::ZERO))
+            {
+                Ok(0) => self.remote_eof = self.channel.is_eof(),
+                Ok(bytes) => {
+                    self.to_agent.extend_from_slice(&buffer[..bytes]);
+                    progressed = true;
+                }
+                Err(libssh_rs::Error::TryAgain) => {
+                    self.remote_eof = self.channel.is_eof();
+                }
+                Err(err) => return Err(format!("Could not read forwarded agent request: {err}")),
+            }
+        }
+
+        if !self.to_agent.is_empty() {
+            match self.socket.write(&self.to_agent) {
+                Ok(0) => return Err("Local SSH agent closed while writing".to_string()),
+                Ok(bytes) => {
+                    self.to_agent.drain(..bytes);
+                    progressed = true;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(err) => return Err(format!("Could not write to local SSH agent: {err}")),
+            }
+        }
+
+        if self.remote_eof && self.to_agent.is_empty() && !self.agent_write_shutdown {
+            self.socket
+                .shutdown(Shutdown::Write)
+                .map_err(|err| format!("Could not half-close local SSH agent socket: {err}"))?;
+            self.agent_write_shutdown = true;
+            progressed = true;
+        }
+
+        if !self.local_eof && self.to_remote.len() < 64 * 1024 {
+            match self.socket.read(&mut buffer) {
+                Ok(0) => self.local_eof = true,
+                Ok(bytes) => {
+                    self.to_remote.extend_from_slice(&buffer[..bytes]);
+                    progressed = true;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(err) => return Err(format!("Could not read from local SSH agent: {err}")),
+            }
+        }
+
+        if !self.to_remote.is_empty() {
+            match self.channel.stdin().write(&self.to_remote) {
+                Ok(0) => return Err("Forwarded SSH agent channel closed while writing".to_string()),
+                Ok(bytes) => {
+                    self.to_remote.drain(..bytes);
+                    progressed = true;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(err) => {
+                    return Err(format!("Could not write forwarded agent response: {err}"));
+                }
+            }
+        }
+
+        if self.local_eof && self.to_remote.is_empty() && !self.sent_eof {
+            match self.channel.send_eof() {
+                Ok(()) => {
+                    self.sent_eof = true;
+                    progressed = true;
+                }
+                Err(libssh_rs::Error::TryAgain) => {}
+                Err(err) => return Err(format!("Could not close forwarded agent channel: {err}")),
+            }
+        }
+
+        let keep = !(self.remote_eof
+            && self.to_agent.is_empty()
+            && self.local_eof
+            && self.to_remote.is_empty()
+            && self.sent_eof);
+        if !keep {
+            let _ = self.socket.shutdown(Shutdown::Both);
+        }
+        Ok((keep, progressed))
+    }
+}
+
+#[cfg(unix)]
+fn read_command_with_agent_forwarding(
+    session: &libssh_rs::Session,
+    channel: &libssh_rs::Channel,
+) -> RemoteResult<String> {
+    session.set_blocking(false);
+    let result = (|| {
+        let mut output = Vec::new();
+        let mut relays = Vec::<AgentForwardRelay>::new();
+        let mut buffer = [0u8; 8192];
+
+        loop {
+            let mut progressed = false;
+            match channel.read_timeout(&mut buffer, false, Some(Duration::ZERO)) {
+                Ok(0) => {}
+                Ok(bytes) => {
+                    output.extend_from_slice(&buffer[..bytes]);
+                    progressed = true;
+                }
+                Err(libssh_rs::Error::TryAgain) => {}
+                Err(err) => {
+                    return Err(RemoteError::new_ex(
+                        RemoteErrorType::ProtocolError,
+                        format!("Could not read command output: {err}"),
+                    ));
+                }
+            }
+
+            while let Some(agent_channel) = session.accept_agent_forward() {
+                match AgentForwardRelay::connect(agent_channel) {
+                    Ok(relay) => relays.push(relay),
+                    Err(err) => warn!("Could not connect forwarded SSH agent channel: {err}"),
+                }
+                progressed = true;
+            }
+
+            let mut index = 0;
+            while index < relays.len() {
+                match relays[index].pump() {
+                    Ok((true, relay_progressed)) => {
+                        progressed |= relay_progressed;
+                        index += 1;
+                    }
+                    Ok((false, relay_progressed)) => {
+                        progressed |= relay_progressed;
+                        relays.swap_remove(index);
+                    }
+                    Err(err) => {
+                        warn!("SSH agent forwarding failed: {err}");
+                        relays.swap_remove(index);
+                    }
+                }
+            }
+
+            if channel.is_eof() {
+                break;
+            }
+            if !progressed {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+
+        String::from_utf8(output).map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!("Command output is not valid UTF-8: {err}"),
+            )
+        })
+    })();
+    session.set_blocking(true);
+    result
+}
+
+#[cfg(not(unix))]
+fn read_command_with_agent_forwarding(
+    _session: &libssh_rs::Session,
+    _channel: &libssh_rs::Channel,
+) -> RemoteResult<String> {
+    Err(RemoteError::new_ex(
+        RemoteErrorType::UnsupportedFeature,
+        "SSH agent forwarding is unavailable on this platform",
+    ))
 }
 
 /// Read filesize from scp header
@@ -1246,5 +1484,31 @@ mod tests {
                 .expect("failed to read default SO_KEEPALIVE")
         );
         session.disconnect().expect("failed to disconnect");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn should_forward_configured_ssh_agent() {
+        let agent = ssh_mock::TestSshAgent::start();
+        let key_file = ssh_mock::create_key_file();
+        agent.add_key(key_file.path());
+        let container = OpensshServer::start();
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ForwardAgent yes",
+            port = container.port(),
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password");
+        let mut session = LibSshSession::connect(&opts).expect("failed to connect");
+
+        let (status, output) = session
+            .cmd("ssh-add -L")
+            .expect("failed to query remote agent");
+        assert_eq!(status, 0, "remote ssh-add failed: {output}");
+        assert!(output.contains("ssh-rsa"));
     }
 }
