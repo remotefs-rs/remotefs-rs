@@ -525,13 +525,8 @@ impl Sftp for LibSshSftp {
     }
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        // libssh-rs `symlink(target, dest)`: `dest` is the link to create, `target`
-        // is what it points to. The `RemoteFs` trait passes them the other way
-        // (`path` = link, `target` = pointee), so map accordingly. Older OpenSSH
-        // sftp-server reversed the SSH_FXP_SYMLINK args, which masked this; 10.x
-        // no longer does, so the arguments must be ordered correctly here.
         self.inner
-            .symlink(conv_path_to_str(target), conv_path_to_str(path))
+            .symlink(conv_path_to_str(path), conv_path_to_str(target))
             .map_err(|err| {
                 RemoteError::new_ex(
                     RemoteErrorType::FileCreateDenied,
