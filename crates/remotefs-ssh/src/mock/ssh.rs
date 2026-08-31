@@ -294,7 +294,7 @@ pub fn create_ssh_config_with_proxy_jump(
     let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
     writeln!(
         temp,
-        "Host target\n    HostName {target_host}\n    Port {target_port}\n    User sftp\n    ProxyJump jump1,jump2\nHost jump1\n    HostName 127.0.0.1\n    Port {first_jump_port}\n    User sftp\nHost jump2\n    HostName {second_jump_host}\n    Port 2222\n    User sftp",
+        "Host target\n    HostName {target_host}\n    Port {target_port}\n    User sftp\n    ProxyJump jump1,jump2\nHost jump1\n    HostName 127.0.0.1\n    Port {first_jump_port}\n    User sftp\n    ServerAliveInterval 30\nHost jump2\n    HostName {second_jump_host}\n    Port 2222\n    User sftp\n    ServerAliveInterval 30",
     )
     .expect("Failed to write proxy jump SSH config");
     temp

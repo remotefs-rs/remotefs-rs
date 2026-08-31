@@ -14,12 +14,19 @@ use ssh2::{FileStat, OpenType, RenameFlags};
 
 use super::{SshSession, interface, socket};
 use crate::ssh::backend::Sftp;
+use crate::ssh::backend::keepalive::ServerKeepalive;
 use crate::ssh::config::Config;
 use crate::{SshAgentIdentity, SshOpts};
 
 /// An implementation of [`SshSession`] using libssh2 as the backend.
 pub struct LibSsh2Session {
+    server_keepalives: Vec<ServerKeepalive>,
     session: ssh2::Session,
+}
+
+struct LibSsh2Transport {
+    session: ssh2::Session,
+    socket: TcpStream,
 }
 
 /// A wrapper around [`ssh2::Sftp`] to provide a SFTP client for [`LibSsh2Session`]
@@ -43,12 +50,29 @@ impl SshSession for LibSsh2Session {
     fn connect(opts: &SshOpts) -> RemoteResult<Self> {
         let ssh_config = Config::try_from(opts)?;
         debug!("Connecting to '{}'", ssh_config.address);
-        let mut session = connect_libssh2_transport(opts, &ssh_config)?;
-        authenticate_libssh2_session(&mut session, opts, &ssh_config)?;
-        Ok(Self { session })
+        let (mut transport, mut server_keepalives) = connect_libssh2_transport(opts, &ssh_config)?;
+        authenticate_libssh2_session(&mut transport.session, opts, &ssh_config)?;
+        if let Some(server_keepalive) = libssh2_server_keepalive(&transport, &ssh_config)? {
+            server_keepalives.push(server_keepalive);
+        }
+        // Stop the destination first, then each preceding jump host.
+        server_keepalives.reverse();
+        let session = transport.session;
+        Ok(Self {
+            session,
+            server_keepalives,
+        })
     }
 
     fn disconnect(&self) -> RemoteResult<()> {
+        let mut interrupted = false;
+        for server_keepalive in &self.server_keepalives {
+            interrupted |= server_keepalive.stop();
+        }
+        if interrupted {
+            let _ = self.session.disconnect(None, "Mandi!", None);
+            return Ok(());
+        }
         self.session
             .disconnect(None, "Mandi!", None)
             .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))
@@ -142,28 +166,72 @@ impl SshSession for LibSsh2Session {
     }
 }
 
-fn connect_libssh2_transport(opts: &SshOpts, destination: &Config) -> RemoteResult<ssh2::Session> {
+fn connect_libssh2_transport(
+    opts: &SshOpts,
+    destination: &Config,
+) -> RemoteResult<(LibSsh2Transport, Vec<ServerKeepalive>)> {
     let proxy_jumps = destination.proxy_jump_configs(opts)?;
     let Some(first_jump) = proxy_jumps.first() else {
-        return connect_libssh2_direct(opts, destination);
+        return connect_libssh2_direct(opts, destination).map(|transport| (transport, Vec::new()));
     };
 
-    let mut session = connect_libssh2_direct(opts, first_jump)?;
-    authenticate_libssh2_session(&mut session, opts, first_jump)?;
+    let mut server_keepalives = Vec::new();
+    let mut transport = connect_libssh2_direct(opts, first_jump)?;
+    authenticate_libssh2_session(&mut transport.session, opts, first_jump)?;
+    if let Some(server_keepalive) = libssh2_server_keepalive(&transport, first_jump)? {
+        server_keepalives.push(server_keepalive);
+    }
     for next_hop in proxy_jumps
         .iter()
         .skip(1)
         .chain(std::iter::once(destination))
     {
-        session = connect_libssh2_through_jump(opts, &session, next_hop)?;
+        transport = connect_libssh2_through_jump(opts, &transport.session, next_hop)?;
         if !std::ptr::eq(next_hop, destination) {
-            authenticate_libssh2_session(&mut session, opts, next_hop)?;
+            authenticate_libssh2_session(&mut transport.session, opts, next_hop)?;
+            if let Some(server_keepalive) = libssh2_server_keepalive(&transport, next_hop)? {
+                server_keepalives.push(server_keepalive);
+            }
         }
     }
-    Ok(session)
+    Ok((transport, server_keepalives))
 }
 
-fn connect_libssh2_direct(opts: &SshOpts, config: &Config) -> RemoteResult<ssh2::Session> {
+fn libssh2_server_keepalive(
+    transport: &LibSsh2Transport,
+    config: &Config,
+) -> RemoteResult<Option<ServerKeepalive>> {
+    let Some(interval) = config
+        .params
+        .server_alive_interval
+        .filter(|interval| !interval.is_zero())
+    else {
+        return Ok(None);
+    };
+    transport
+        .session
+        .set_keepalive(true, interval.as_secs().min(u64::from(u32::MAX)) as u32);
+    let socket = transport
+        .socket
+        .try_clone()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    let session = transport.session.clone();
+    Ok(ServerKeepalive::spawn(
+        interval,
+        move || {
+            let _ = socket.shutdown(Shutdown::Both);
+        },
+        move || match session.keepalive_send() {
+            Ok(_) => true,
+            Err(err) => {
+                warn!("failed to send SSH server keepalive: {err}");
+                false
+            }
+        },
+    ))
+}
+
+fn connect_libssh2_direct(opts: &SshOpts, config: &Config) -> RemoteResult<LibSsh2Transport> {
     let socket_addresses: Vec<SocketAddr> = config
         .address
         .to_socket_addrs()
@@ -211,7 +279,7 @@ fn connect_libssh2_through_jump(
     opts: &SshOpts,
     jump_session: &ssh2::Session,
     target: &Config,
-) -> RemoteResult<ssh2::Session> {
+) -> RemoteResult<LibSsh2Transport> {
     let mut last_error = None;
     for attempt in 1..=target.connection_attempts.max(1) {
         let (stream, cancelled, relay) = match libssh2_tunnel_stream(
@@ -254,7 +322,10 @@ fn connect_libssh2_stream(
     opts: &SshOpts,
     config: &Config,
     stream: TcpStream,
-) -> RemoteResult<ssh2::Session> {
+) -> RemoteResult<LibSsh2Transport> {
+    let socket = stream
+        .try_clone()
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
     let mut session = ssh2::Session::new()
         .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
     session.set_timeout(config.connection_timeout.as_millis().min(u32::MAX.into()) as u32);
@@ -264,7 +335,7 @@ fn connect_libssh2_stream(
         error!("SSH handshake failed: {err}");
         RemoteError::new_ex(RemoteErrorType::ProtocolError, err)
     })?;
-    Ok(session)
+    Ok(LibSsh2Transport { session, socket })
 }
 
 fn authenticate_libssh2_session(
@@ -1470,6 +1541,7 @@ mod test {
                 .authenticated()
                 .expect("failed to query session state")
         );
+        assert_eq!(session.server_keepalives.len(), 2);
         assert_eq!(
             session.cmd("pwd").expect("command through proxy failed").0,
             0
@@ -1640,6 +1712,27 @@ mod test {
                 .expect("failed to read default SO_KEEPALIVE")
         );
         session.disconnect().expect("failed to disconnect");
+    }
+
+    #[test]
+    fn should_apply_configured_server_alive_interval() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+        for (interval, enabled) in [(2, true), (0, false)] {
+            let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+            writeln!(
+                config_file,
+                "Host keepalive\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ServerAliveInterval {interval}"
+            )
+            .expect("failed to write SSH config");
+            let opts = SshOpts::new("keepalive")
+                .config_file(config_file.path(), ParseRule::STRICT)
+                .password("password");
+            let session = LibSsh2Session::connect(&opts).expect("failed to connect");
+
+            assert_eq!(!session.server_keepalives.is_empty(), enabled);
+            session.disconnect().expect("failed to disconnect");
+        }
     }
 
     #[test]

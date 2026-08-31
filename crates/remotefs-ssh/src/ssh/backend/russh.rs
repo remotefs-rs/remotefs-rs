@@ -712,7 +712,13 @@ where
 }
 
 fn russh_client_config(opts: &SshOpts, ssh_config: &Config) -> Arc<client::Config> {
-    let mut config = client::Config::default();
+    let mut config = client::Config {
+        keepalive_interval: ssh_config
+            .params
+            .server_alive_interval
+            .filter(|interval| !interval.is_zero()),
+        ..client::Config::default()
+    };
     apply_config_algo_prefs(&mut config, ssh_config);
     apply_opts_algo_prefs(&mut config, opts);
     Arc::new(config)
@@ -2245,6 +2251,34 @@ mod test {
         );
         drop(stream);
         server.join().expect("test server panicked");
+    }
+
+    #[test]
+    fn should_apply_configured_server_alive_interval() {
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(config_file, "Host keepalive\n    ServerAliveInterval 17")
+            .expect("failed to write SSH config");
+        let opts = SshOpts::new("keepalive")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .runtime(test_runtime());
+        let ssh_config = Config::try_from(&opts).expect("failed to parse SSH config");
+
+        assert_eq!(
+            russh_client_config(&opts, &ssh_config).keepalive_interval,
+            Some(Duration::from_secs(17))
+        );
+
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(config_file, "Host keepalive\n    ServerAliveInterval 0")
+            .expect("failed to write SSH config");
+        let opts = SshOpts::new("keepalive")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .runtime(test_runtime());
+        let ssh_config = Config::try_from(&opts).expect("failed to parse SSH config");
+        assert_eq!(
+            russh_client_config(&opts, &ssh_config).keepalive_interval,
+            None
+        );
     }
 
     #[test]

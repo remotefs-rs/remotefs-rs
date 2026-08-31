@@ -3,6 +3,8 @@
 
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 mod interface;
+#[cfg(feature = "libssh2")]
+mod keepalive;
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 mod socket;
 
