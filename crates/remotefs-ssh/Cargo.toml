@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-ssh"
-version = "0.8.5"
+version = "0.8.6"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-ssh"
