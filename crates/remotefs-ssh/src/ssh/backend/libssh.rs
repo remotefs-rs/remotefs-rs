@@ -110,18 +110,18 @@ impl SshSession for LibSshSession {
         session
             .set_option(SshOption::Hostname(opts.host.clone()))
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
+        let config_file_str = opts.config_file.as_ref().map(|p| p.display().to_string());
+        debug!("Using config file: {:?}", config_file_str);
+        session
+            .options_parse_config(config_file_str.as_deref())
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
+
         if let Some(port) = opts.port {
             debug!("Using port: {port}");
             session
                 .set_option(SshOption::Port(port))
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
         }
-
-        let config_file_str = opts.config_file.as_ref().map(|p| p.display().to_string());
-        debug!("Using config file: {:?}", config_file_str);
-        session
-            .options_parse_config(config_file_str.as_deref())
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
 
         // set methods
         for opt in opts.methods.iter().filter_map(|method| method.ssh_opts()) {
@@ -944,5 +944,35 @@ fn wait_for_ack(channel: &libssh_rs::Channel) -> RemoteResult<()> {
         ))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ssh2_config::ParseRule;
+    use tempfile::NamedTempFile;
+
+    use super::*;
+    use crate::ssh::container::OpensshServer;
+
+    #[test]
+    fn should_prefer_explicit_port_over_ssh_config() {
+        let container = OpensshServer::start();
+        let port = container.port();
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host sftp\n    HostName 127.0.0.1\n    Port 1\n    User sftp"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("sftp")
+            .port(port)
+            .username("sftp")
+            .password("password")
+            .config_file(config_file.path(), ParseRule::STRICT);
+
+        let session = LibSshSession::connect(&opts)
+            .expect("the explicit port should override the SSH configuration");
+        session.disconnect().expect("failed to disconnect");
     }
 }
