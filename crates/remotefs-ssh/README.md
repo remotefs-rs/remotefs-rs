@@ -7,7 +7,7 @@
 [![ko-fi](https://img.shields.io/badge/donate-ko--fi-red)](https://ko-fi.com/veeso)
 [![conventional-commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://conventionalcommits.org)
 
-[![Build](https://github.com/remotefs-rs/remotefs-rs-ssh/actions/workflows/test.yml/badge.svg)](https://github.com/veeso/remotefs-rs-ssh/actions/workflows/test.yml)
+[![Build](https://github.com/remotefs-rs/remotefs-rs-ssh/actions/workflows/ci.yml/badge.svg)](https://github.com/veeso/remotefs-rs-ssh/actions/workflows/ci.yml)
 [![coveralls](https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ssh/badge.svg)](https://coveralls.io/github/veeso/remotefs-rs-ssh)
 [![docs](https://docs.rs/remotefs-ssh/badge.svg)](https://docs.rs/remotefs-ssh)
 
@@ -58,7 +58,7 @@ machine.
 
 these features are supported:
 
-- `find`: enable `find()` method on client (*enabled by default*)
+- `find`: enable `find()` method on client (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ## Ssh client
@@ -139,7 +139,7 @@ The following table states the compatibility for the client client and the remot
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | Scp | Sftp |
-|----------------|-----|------|
+| -------------- | --- | ---- |
 | append_file    | No  | Yes  |
 | append         | No  | Yes  |
 | change_dir     | Yes | Yes  |
@@ -160,6 +160,42 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | setstat        | Yes | Yes  |
 | stat           | Yes | Yes  |
 | symlink        | Yes | Yes  |
+
+---
+
+## Development 🛠️
+
+Every task runs through a [`just`](https://just.systems) recipe. Run `just`
+to list them all.
+
+```sh
+just build                 # cargo build --all-targets
+just test                  # cargo test --all-targets, then --doc
+just coverage              # cargo llvm-cov, writes lcov.info
+just fmt                   # dprint fmt (Markdown, Rust, TOML, YAML)
+just fmt_check             # dprint check
+just lint "-- -D warnings" # clippy with all features
+just doc                   # cargo doc --all-features
+just deny                  # cargo deny check
+just scan_secrets          # trufflehog filesystem
+just check                 # the full local quality gate
+```
+
+None of the SSH backend features are enabled by default beyond `find` and
+`libssh2`. Backend-gated code and its examples/benches only build with the
+matching feature passed explicitly:
+
+```sh
+just build "--features russh"
+just test "--features libssh,russh"
+```
+
+`just check` chains `fmt_check`, Clippy with warnings denied, `doc`, `deny`,
+and `test`, and is the required gate before opening a pull request. Some
+tests start real SSH/SFTP containers via `testcontainers`, so Docker must be
+available locally.
+
+See [AGENTS.md](AGENTS.md) for the full contract.
 
 ---
 
