@@ -139,6 +139,9 @@ impl SshSession for LibSsh2Session {
             }) {
                 methods.push(Authentication::RsaKey(rsa_key.clone()));
             }
+            if let Some(identity_files) = ssh_config.params.identity_file.as_deref() {
+                methods.extend(identity_files.iter().cloned().map(Authentication::RsaKey));
+            }
             // then try with password
             if let Some(password) = opts.password.as_ref() {
                 methods.push(Authentication::Password(password.clone()));
@@ -772,31 +775,19 @@ fn session_auth_with_rsakey(
     username: &str,
     private_key: &Path,
     password: Option<&str>,
-    identity_file: Option<&[PathBuf]>,
 ) -> RemoteResult<()> {
     debug!("Authenticating with username '{username}' and RSA key");
-    let mut keys = vec![private_key];
-    if let Some(identity_file) = identity_file {
-        let other_keys: Vec<&Path> = identity_file.iter().map(|x| x.as_path()).collect();
-        keys.extend(other_keys);
-    }
-    // iterate over keys
-    for key in keys.into_iter() {
-        trace!("Trying to authenticate with RSA key at '{}'", key.display());
-        match session.userauth_pubkey_file(username, None, key, password) {
-            Ok(_) => {
-                debug!("Authenticated with key at '{}'", key.display());
-                return Ok(());
-            }
-            Err(err) => {
-                error!("Authentication failed: {err}");
-            }
-        }
-    }
-    Err(RemoteError::new_ex(
-        RemoteErrorType::AuthenticationFailed,
-        "could not find any suitable RSA key to authenticate with",
-    ))
+    trace!(
+        "Trying to authenticate with RSA key at '{}'",
+        private_key.display()
+    );
+    session
+        .userauth_pubkey_file(username, None, private_key, password)
+        .map(|()| debug!("Authenticated with key at '{}'", private_key.display()))
+        .map_err(|err| {
+            error!("Authentication failed: {err}");
+            RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err)
+        })
 }
 
 /// Authenticate on session with the provided [`Authentication`] method.
@@ -812,7 +803,6 @@ fn session_auth(
             &ssh_config.username,
             private_key.as_path(),
             opts.password.as_deref(),
-            ssh_config.params.identity_file.as_deref(),
         ),
         Authentication::Password(password) => {
             session_auth_with_password(session, &ssh_config.username, &password)
@@ -847,6 +837,51 @@ mod test {
 
     use super::*;
     use crate::mock::ssh as ssh_mock;
+
+    #[test]
+    fn should_connect_with_identity_file_from_ssh_config() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let config_file =
+            ssh_mock::create_ssh_config_with_identity(container.port(), key_file.path());
+        let opts =
+            SshOpts::new("sftp").config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+
+        let session = LibSsh2Session::connect(&opts)
+            .expect("failed to authenticate with IdentityFile from SSH config");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
+    fn should_try_each_identity_file_from_ssh_config() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let missing_key = key_file.path().with_extension("missing");
+        assert!(!missing_key.exists());
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host sftp\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    IdentityFile {missing}\n    IdentityFile {valid}",
+            port = container.port(),
+            missing = missing_key.display(),
+            valid = key_file.path().display(),
+        )
+        .expect("failed to write SSH config");
+        let opts =
+            SshOpts::new("sftp").config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+
+        let session = LibSsh2Session::connect(&opts)
+            .expect("failed to fall back to the second configured IdentityFile");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
 
     #[test]
     fn should_connect_to_ssh_server_auth_user_password() {

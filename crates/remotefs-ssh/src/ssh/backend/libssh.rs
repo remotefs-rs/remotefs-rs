@@ -1053,6 +1053,24 @@ mod tests {
     use crate::ssh::container::OpensshServer;
 
     #[test]
+    fn should_connect_with_identity_file_from_ssh_config() {
+        let container = OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let config_file =
+            ssh_mock::create_ssh_config_with_identity(container.port(), key_file.path());
+        let opts =
+            SshOpts::new("sftp").config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+
+        let session = LibSshSession::connect(&opts)
+            .expect("failed to authenticate with IdentityFile from SSH config");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
     fn should_prefer_explicit_port_over_ssh_config() {
         let container = OpensshServer::start();
         let port = container.port();
