@@ -10,7 +10,7 @@ use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use socket2::{Domain, Protocol, Socket, Type};
 use ssh2::{FileStat, OpenType, RenameFlags};
 
-use super::SshSession;
+use super::{SshSession, interface};
 use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
 use crate::{SshAgentIdentity, SshOpts};
@@ -63,6 +63,7 @@ impl SshSession for LibSsh2Session {
                     socket_addr,
                     ssh_config.connection_timeout,
                     ssh_config.params.bind_address.as_deref(),
+                    ssh_config.params.bind_interface.as_deref(),
                 ) {
                     Ok(tcp_stream) => {
                         debug!("Connection established with address {socket_addr}");
@@ -591,18 +592,27 @@ fn tcp_connect(
     address: &SocketAddr,
     timeout: Duration,
     bind_address: Option<&str>,
+    bind_interface: Option<&str>,
 ) -> std::io::Result<TcpStream> {
-    let Some(bind_address) = bind_address else {
+    if bind_address.is_none() && bind_interface.is_none() {
         return if timeout.is_zero() {
             TcpStream::connect(address)
         } else {
             TcpStream::connect_timeout(address, timeout)
         };
+    }
+
+    let source_addresses = if let Some(bind_address) = bind_address {
+        (bind_address, 0).to_socket_addrs()?.collect::<Vec<_>>()
+    } else {
+        interface::addresses(bind_interface.expect("checked above"))?
+            .into_iter()
+            .collect()
     };
 
     let mut last_error = None;
-    for source_address in (bind_address, 0)
-        .to_socket_addrs()?
+    for source_address in source_addresses
+        .into_iter()
         .filter(|source| source.is_ipv4() == address.is_ipv4())
     {
         let result = (|| {
@@ -624,10 +634,14 @@ fn tcp_connect(
             Err(err) => last_error = Some(err),
         }
     }
+    let source = bind_address.map_or_else(
+        || format!("BindInterface {}", bind_interface.expect("checked above")),
+        |address| format!("BindAddress {address}"),
+    );
     Err(last_error.unwrap_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
-            format!("no {address} address family found for BindAddress {bind_address}"),
+            format!("no {address} address family found for {source}"),
         )
     }))
 }
@@ -949,6 +963,49 @@ mod test {
         writeln!(
             invalid_config,
             "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 192.0.2.1"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(invalid_config.path(), ParseRule::STRICT)
+            .password("password");
+        assert!(LibSsh2Session::connect(&opts).is_err());
+
+        let mut precedence_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            precedence_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 127.0.0.1\n    BindInterface remotefs-ssh-missing-interface"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(precedence_config.path(), ParseRule::STRICT)
+            .password("password");
+        let session = LibSsh2Session::connect(&opts)
+            .expect("BindAddress should take precedence over BindInterface");
+        session.disconnect().expect("failed to disconnect");
+    }
+
+    #[test]
+    fn should_apply_configured_bind_interface() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let port = container.port();
+        let interface = ssh_mock::ipv4_loopback_interface();
+        let mut valid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            valid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindInterface {interface}"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(valid_config.path(), ParseRule::STRICT)
+            .password("password");
+        let session = LibSsh2Session::connect(&opts)
+            .expect("failed to connect through the configured interface");
+        session.disconnect().expect("failed to disconnect");
+
+        let mut invalid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            invalid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindInterface remotefs-ssh-missing-interface"
         )
         .expect("failed to write SSH config");
         let opts = SshOpts::new("bound")

@@ -1,6 +1,9 @@
 //! Defines the main trait for SSH Backends to be used with the clients and the backend implementations
 //! to support different SSH libraries (e.g. libssh2, libssh)
 
+#[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
+mod interface;
+
 #[cfg(feature = "libssh")]
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh")))]
 mod libssh;

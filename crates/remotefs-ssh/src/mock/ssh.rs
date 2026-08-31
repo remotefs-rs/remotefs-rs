@@ -11,6 +11,17 @@ use tempfile::NamedTempFile;
 
 use crate::SshKeyStorage;
 
+/// Return the name of an interface with an IPv4 loopback address.
+#[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
+pub fn ipv4_loopback_interface() -> String {
+    if_addrs::get_if_addrs()
+        .expect("failed to enumerate network interfaces")
+        .into_iter()
+        .find(|interface| interface.ip().is_ipv4() && interface.ip().is_loopback())
+        .expect("missing IPv4 loopback interface")
+        .name
+}
+
 /// Start a TCP server that accepts one connection without completing an SSH handshake.
 pub fn start_unresponsive_server(hold: Duration) -> (u16, JoinHandle<Duration>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind test server");

@@ -1,4 +1,5 @@
 use std::io::{Cursor, Read, Seek, Write};
+use std::net::ToSocketAddrs as _;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -8,7 +9,7 @@ use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
 use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 
-use super::SshSession;
+use super::{SshSession, interface};
 use crate::SshOpts;
 use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
@@ -148,6 +149,39 @@ impl SshSession for LibSshSession {
                 .set_option(SshOption::Port(port))
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
         }
+        let bind_addresses = if ssh_config.params.bind_address.is_none()
+            && let Some(bind_interface) = ssh_config.params.bind_interface.as_deref()
+        {
+            let interface_addresses = interface::addresses(bind_interface)
+                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
+            let target_addresses = ssh_config
+                .address
+                .to_socket_addrs()
+                .map_err(|e| RemoteError::new_ex(RemoteErrorType::BadAddress, e.to_string()))?;
+            let target_addresses = target_addresses.collect::<Vec<_>>();
+            let bind_addresses = interface_addresses
+                .into_iter()
+                .filter(|source| {
+                    target_addresses
+                        .iter()
+                        .any(|target| source.is_ipv4() == target.is_ipv4())
+                })
+                .map(|source| interface::host(&source))
+                .collect::<Vec<_>>();
+            if bind_addresses.is_empty() {
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::ConnectionError,
+                    format!(
+                        "BindInterface {bind_interface} has no address compatible with {}",
+                        ssh_config.address
+                    ),
+                ));
+            }
+            debug!("Using bind interface {bind_interface} addresses {bind_addresses:?}");
+            bind_addresses
+        } else {
+            Vec::new()
+        };
         debug!(
             "Using connection timeout: {:?}",
             ssh_config.connection_timeout
@@ -166,18 +200,33 @@ impl SshSession for LibSshSession {
 
         // Open connection and initialize handshake
         let connection_attempts = ssh_config.connection_attempts.max(1);
-        for attempt in 1..=connection_attempts {
-            match connect_with_timeout(&session, ssh_config.connection_timeout) {
-                Ok(()) => break,
-                Err(err) if attempt < connection_attempts => {
-                    warn!("SSH connection attempt {attempt} failed: {err}");
-                    session.disconnect();
+        let source_attempts = bind_addresses.len().max(1);
+        let mut last_error = None;
+        let mut connected = false;
+        'connection: for attempt in 1..=connection_attempts {
+            for source_attempt in 0..source_attempts {
+                if let Some(bind_address) = bind_addresses.get(source_attempt) {
+                    session
+                        .set_option(SshOption::BindAddress(bind_address.clone()))
+                        .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
                 }
-                Err(err) => {
-                    error!("SSH handshake failed: {err}");
-                    return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+                match connect_with_timeout(&session, ssh_config.connection_timeout) {
+                    Ok(()) => {
+                        connected = true;
+                        break 'connection;
+                    }
+                    Err(err) => {
+                        warn!("SSH connection attempt {attempt} failed: {err}");
+                        last_error = Some(err);
+                        session.disconnect();
+                    }
                 }
             }
+        }
+        if !connected {
+            let err = last_error.expect("at least one connection was attempted");
+            error!("SSH handshake failed: {err}");
+            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
         }
 
         // try to authenticate userauth_none
@@ -1070,5 +1119,48 @@ mod tests {
         session.disconnect().expect("failed to disconnect");
         drop(session);
         proxy.join().expect("test proxy panicked");
+    }
+
+    #[test]
+    fn should_apply_configured_bind_interface() {
+        let container = OpensshServer::start();
+        let port = container.port();
+        let interface = ssh_mock::ipv4_loopback_interface();
+        let mut valid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            valid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindInterface {interface}"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(valid_config.path(), ParseRule::STRICT)
+            .password("password");
+        let session = LibSshSession::connect(&opts)
+            .expect("failed to connect through the configured interface");
+        session.disconnect().expect("failed to disconnect");
+
+        let mut invalid_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            invalid_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindInterface remotefs-ssh-missing-interface"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(invalid_config.path(), ParseRule::STRICT)
+            .password("password");
+        assert!(LibSshSession::connect(&opts).is_err());
+
+        let mut precedence_config = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            precedence_config,
+            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 127.0.0.1\n    BindInterface remotefs-ssh-missing-interface"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("bound")
+            .config_file(precedence_config.path(), ParseRule::STRICT)
+            .password("password");
+        let session = LibSshSession::connect(&opts)
+            .expect("BindAddress should take precedence over BindInterface");
+        session.disconnect().expect("failed to disconnect");
     }
 }

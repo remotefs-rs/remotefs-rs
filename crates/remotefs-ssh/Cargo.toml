@@ -23,15 +23,16 @@ description = "remotefs SSH client library"
 [features]
 default = ["find", "libssh2"]
 find = ["remotefs/find"]
-libssh = ["dep:libssh-rs"]
+libssh = ["dep:if-addrs", "dep:libssh-rs"]
 libssh-vendored = ["libssh", "libssh-rs/vendored", "libssh-rs/vendored-openssl"]
-libssh2 = ["dep:socket2", "dep:ssh2"]
+libssh2 = ["dep:if-addrs", "dep:socket2", "dep:ssh2"]
 libssh2-vendored = ["libssh2", "ssh2/vendored-openssl"]
 no-log = ["log/max_level_off"]
-russh = ["dep:russh", "dep:russh-sftp", "dep:tokio"]
+russh = ["dep:if-addrs", "dep:russh", "dep:russh-sftp", "dep:tokio"]
 
 [dependencies]
 chrono = "0.4"
+if-addrs = { version = "0.15", optional = true }
 lazy-regex = "3"
 libssh-rs = { version = "0.3", optional = true }
 log = "0.4"
