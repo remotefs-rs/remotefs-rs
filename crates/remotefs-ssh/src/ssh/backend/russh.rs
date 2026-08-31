@@ -1421,6 +1421,37 @@ mod test {
     }
 
     #[test]
+    fn should_disable_public_key_authentication_from_ssh_config() {
+        use crate::ssh::container::OpensshServer;
+
+        let container = OpensshServer::start();
+        let runtime = test_runtime();
+        let key_file = ssh_mock::create_key_file();
+        let config_file = ssh_mock::create_ssh_config_with_identity_and_pubkey_authentication(
+            container.port(),
+            key_file.path(),
+            false,
+        );
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .runtime(runtime);
+
+        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
+
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .password("password")
+            .runtime(test_runtime());
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("password authentication should remain enabled");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
     #[cfg(unix)]
     fn should_connect_to_ssh_server_auth_ssh_agent() {
         use std::process::Command;

@@ -221,8 +221,18 @@ pub fn create_ssh_config_with_identity(
     port: u16,
     identity_file: &std::path::Path,
 ) -> NamedTempFile {
+    create_ssh_config_with_identity_and_pubkey_authentication(port, identity_file, true)
+}
+
+/// Create an ssh config file with `IdentityFile` and `PubkeyAuthentication`.
+pub fn create_ssh_config_with_identity_and_pubkey_authentication(
+    port: u16,
+    identity_file: &std::path::Path,
+    pubkey_authentication: bool,
+) -> NamedTempFile {
     let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
     let identity = identity_file.display();
+    let pubkey_authentication = if pubkey_authentication { "yes" } else { "no" };
     let config = format!(
         r##"
 # ssh config
@@ -236,11 +246,13 @@ Host sftp
     Port         {port}
     User         sftp
     IdentityFile {identity}
+    PubkeyAuthentication {pubkey_authentication}
 Host scp
     HostName     127.0.0.1
     Port         {port}
     User         sftp
     IdentityFile {identity}
+    PubkeyAuthentication {pubkey_authentication}
 "##
     );
     temp.write_all(config.as_bytes()).unwrap();

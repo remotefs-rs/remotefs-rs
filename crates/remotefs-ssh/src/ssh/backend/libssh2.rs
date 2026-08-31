@@ -113,8 +113,10 @@ impl SshSession for LibSsh2Session {
             return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
         }
 
+        let pubkey_authentication = ssh_config.params.pubkey_authentication.unwrap_or(true);
+
         // if use_ssh_agent is enabled, try to authenticate with ssh agent
-        if let Some(ssh_agent_config) = &opts.ssh_agent_identity {
+        if pubkey_authentication && let Some(ssh_agent_config) = &opts.ssh_agent_identity {
             match session_auth_with_agent(&mut session, &ssh_config.username, ssh_agent_config) {
                 Ok(_) => {
                     info!("Authenticated with ssh agent");
@@ -130,17 +132,19 @@ impl SshSession for LibSsh2Session {
         if !session.authenticated() {
             let mut methods = vec![];
             // first try with ssh agent
-            if let Some(rsa_key) = opts.key_storage.as_ref().and_then(|x| {
-                x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
-                    .or(x.resolve(
-                        ssh_config.resolved_host.as_str(),
-                        ssh_config.username.as_str(),
-                    ))
-            }) {
-                methods.push(Authentication::RsaKey(rsa_key.clone()));
-            }
-            if let Some(identity_files) = ssh_config.params.identity_file.as_deref() {
-                methods.extend(identity_files.iter().cloned().map(Authentication::RsaKey));
+            if pubkey_authentication {
+                if let Some(rsa_key) = opts.key_storage.as_ref().and_then(|x| {
+                    x.resolve(ssh_config.host.as_str(), ssh_config.username.as_str())
+                        .or(x.resolve(
+                            ssh_config.resolved_host.as_str(),
+                            ssh_config.username.as_str(),
+                        ))
+                }) {
+                    methods.push(Authentication::RsaKey(rsa_key.clone()));
+                }
+                if let Some(identity_files) = ssh_config.params.identity_file.as_deref() {
+                    methods.extend(identity_files.iter().cloned().map(Authentication::RsaKey));
+                }
             }
             // then try with password
             if let Some(password) = opts.password.as_ref() {
@@ -849,6 +853,32 @@ mod test {
 
         let session = LibSsh2Session::connect(&opts)
             .expect("failed to authenticate with IdentityFile from SSH config");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
+    fn should_disable_public_key_authentication_from_ssh_config() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let config_file = ssh_mock::create_ssh_config_with_identity_and_pubkey_authentication(
+            container.port(),
+            key_file.path(),
+            false,
+        );
+        let opts =
+            SshOpts::new("sftp").config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+
+        assert!(LibSsh2Session::connect(&opts).is_err());
+
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .password("password");
+        let session =
+            LibSsh2Session::connect(&opts).expect("password authentication should remain enabled");
         assert!(
             session
                 .authenticated()

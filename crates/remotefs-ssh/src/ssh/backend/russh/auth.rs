@@ -28,10 +28,11 @@ where
     T: Handler,
 {
     let username = &ssh_config.username;
+    let pubkey_authentication = ssh_config.params.pubkey_authentication.unwrap_or(true);
 
     // Authentication order mirrors the libssh2/libssh backends: SSH agent first,
     // then key, then password.
-    if let Some(agent_identity) = opts.ssh_agent_identity.as_ref() {
+    if pubkey_authentication && let Some(agent_identity) = opts.ssh_agent_identity.as_ref() {
         match auth_with_agent(session, runtime, username, agent_identity) {
             Ok(()) => {
                 info!("Authenticated with ssh agent");
@@ -46,17 +47,19 @@ where
     // Collect authentication methods in priority order: RSA key, then password
     let mut methods = vec![];
 
-    if let Some(rsa_key) = opts.key_storage.as_ref().and_then(|x| {
-        x.resolve(ssh_config.host.as_str(), username.as_str())
-            .or(x.resolve(ssh_config.resolved_host.as_str(), username.as_str()))
-    }) {
-        methods.push(Authentication::RsaKey(rsa_key.clone()));
-    }
+    if pubkey_authentication {
+        if let Some(rsa_key) = opts.key_storage.as_ref().and_then(|x| {
+            x.resolve(ssh_config.host.as_str(), username.as_str())
+                .or(x.resolve(ssh_config.resolved_host.as_str(), username.as_str()))
+        }) {
+            methods.push(Authentication::RsaKey(rsa_key.clone()));
+        }
 
-    // Add identity files from config
-    if let Some(identity_files) = ssh_config.params.identity_file.as_ref() {
-        for identity_file in identity_files {
-            methods.push(Authentication::RsaKey(identity_file.clone()));
+        // Add identity files from config
+        if let Some(identity_files) = ssh_config.params.identity_file.as_ref() {
+            for identity_file in identity_files {
+                methods.push(Authentication::RsaKey(identity_file.clone()));
+            }
         }
     }
 

@@ -825,7 +825,9 @@ fn authenticate(session: &mut libssh_rs::Session, opts: &SshOpts) -> RemoteResul
         .map_err(|e| RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, e))?;
     debug!("Available authentication methods: {auth_methods:?}");
 
-    if auth_methods.contains(AuthMethods::PUBLIC_KEY) {
+    if ssh_config.params.pubkey_authentication.unwrap_or(true)
+        && auth_methods.contains(AuthMethods::PUBLIC_KEY)
+    {
         debug!("Trying public key authentication");
         // try with known key to config
         match session.userauth_public_key_auto(None, None) {
@@ -1063,6 +1065,32 @@ mod tests {
 
         let session = LibSshSession::connect(&opts)
             .expect("failed to authenticate with IdentityFile from SSH config");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
+    fn should_disable_public_key_authentication_from_ssh_config() {
+        let container = OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let config_file = ssh_mock::create_ssh_config_with_identity_and_pubkey_authentication(
+            container.port(),
+            key_file.path(),
+            false,
+        );
+        let opts =
+            SshOpts::new("sftp").config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+
+        assert!(LibSshSession::connect(&opts).is_err());
+
+        let opts = SshOpts::new("sftp")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .password("password");
+        let session =
+            LibSshSession::connect(&opts).expect("password authentication should remain enabled");
         assert!(
             session
                 .authenticated()
