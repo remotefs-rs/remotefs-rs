@@ -1018,6 +1018,16 @@ impl Read for PipelinedSftpReader {
 fn apply_config_algo_prefs(config: &mut client::Config, ssh_config: &Config) {
     let params = &ssh_config.params;
 
+    config.preferred.compression = if params.compression.unwrap_or(false) {
+        Cow::Owned(vec![
+            russh::compression::ZLIB_LEGACY,
+            russh::compression::ZLIB,
+            russh::compression::NONE,
+        ])
+    } else {
+        Cow::Owned(vec![russh::compression::NONE])
+    };
+
     // KEX algorithms
     let kex: Vec<russh::kex::Name> = params
         .kex_algorithms
@@ -1227,6 +1237,30 @@ mod test {
                 .build()
                 .unwrap(),
         )
+    }
+
+    #[test]
+    fn should_apply_configured_compression() {
+        for (configured, expected) in [
+            (Some(true), vec!["zlib@openssh.com", "zlib", "none"]),
+            (Some(false), vec!["none"]),
+            (None, vec!["none"]),
+        ] {
+            let mut ssh_config =
+                Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
+            ssh_config.params.compression = configured;
+            let mut config = client::Config::default();
+
+            apply_config_algo_prefs(&mut config, &ssh_config);
+
+            let actual = config
+                .preferred
+                .compression
+                .iter()
+                .map(AsRef::as_ref)
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
