@@ -6,16 +6,23 @@ use std::net::ToSocketAddrs as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use libssh_rs::{AuthMethods, AuthStatus, OpenFlags, SshKey, SshOption};
 use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
 use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
+use ssh2_config::{RemoteForwardDestination, RemoteForwardListen};
 
 use super::{SshSession, interface, socket};
 use crate::SshOpts;
 use crate::ssh::backend::Sftp;
+use crate::ssh::backend::forward::{
+    ChannelIo, ForwardConnection, ForwardWorker, MAX_FORWARD_CONNECTIONS,
+    tcp_remote_forward_endpoint,
+};
 use crate::ssh::config::Config;
 
 /// An implementation of [`SshSession`] using libssh as the backend.
@@ -24,6 +31,8 @@ use crate::ssh::config::Config;
 pub struct LibSshSession {
     session: libssh_rs::Session,
     forward_agent: bool,
+    remote_forward_ports: Vec<u16>,
+    remote_forward_worker: Option<ForwardWorker>,
 }
 
 /// A wrapper around [`libssh_rs::Sftp`] to provide a SFTP client for [`LibSshSession`]
@@ -56,6 +65,299 @@ fn connect_with_timeout(
     };
     session.set_blocking(true);
     result
+}
+
+fn connect_libssh_session(opts: &SshOpts, ssh_config: &Config) -> RemoteResult<libssh_rs::Session> {
+    let mut session = libssh_rs::Session::new().map_err(|err| {
+        error!("Could not create session: {err}");
+        RemoteError::new_ex(RemoteErrorType::ConnectionError, err)
+    })?;
+    session
+        .set_option(SshOption::Hostname(opts.host.clone()))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    let config_file = opts
+        .config_file
+        .as_ref()
+        .map(|path| path.display().to_string());
+    debug!("Using config file: {config_file:?}");
+    session
+        .options_parse_config(config_file.as_deref())
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    if let Some(port) = opts.port {
+        debug!("Using port: {port}");
+        session
+            .set_option(SshOption::Port(port))
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    }
+
+    let bind_addresses = if ssh_config.params.bind_address.is_none()
+        && let Some(bind_interface) = ssh_config.params.bind_interface.as_deref()
+    {
+        let interface_addresses = interface::addresses(bind_interface)
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        let target_addresses = ssh_config
+            .address
+            .to_socket_addrs()
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::BadAddress, err.to_string()))?
+            .collect::<Vec<_>>();
+        let bind_addresses = interface_addresses
+            .into_iter()
+            .filter(|source| {
+                target_addresses
+                    .iter()
+                    .any(|target| source.is_ipv4() == target.is_ipv4())
+            })
+            .map(|source| interface::host(&source))
+            .collect::<Vec<_>>();
+        if bind_addresses.is_empty() {
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::ConnectionError,
+                format!(
+                    "BindInterface {bind_interface} has no address compatible with {}",
+                    ssh_config.address
+                ),
+            ));
+        }
+        debug!("Using bind interface {bind_interface} addresses {bind_addresses:?}");
+        bind_addresses
+    } else {
+        Vec::new()
+    };
+    session
+        .set_option(SshOption::Timeout(ssh_config.connection_timeout))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    for option in opts.methods.iter().filter_map(|method| method.ssh_opts()) {
+        debug!("Setting SSH option: {option:?}");
+        session
+            .set_option(option)
+            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    }
+
+    let connection_attempts = ssh_config.connection_attempts.max(1);
+    let source_attempts = bind_addresses.len().max(1);
+    let mut last_error = None;
+    let mut connected = false;
+    'connection: for attempt in 1..=connection_attempts {
+        for source_attempt in 0..source_attempts {
+            if let Some(bind_address) = bind_addresses.get(source_attempt) {
+                session
+                    .set_option(SshOption::BindAddress(bind_address.clone()))
+                    .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+            }
+            match connect_with_timeout(&session, ssh_config.connection_timeout) {
+                Ok(()) => {
+                    connected = true;
+                    break 'connection;
+                }
+                Err(err) => {
+                    warn!("SSH connection attempt {attempt} failed: {err}");
+                    last_error = Some(err);
+                    session.disconnect();
+                }
+            }
+        }
+    }
+    if !connected {
+        let err = last_error.expect("at least one connection was attempted");
+        error!("SSH handshake failed: {err}");
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+    }
+    socket::set_keepalive(&session, ssh_config.params.tcp_keep_alive.unwrap_or(true))
+        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    authenticate(&mut session, opts)?;
+    Ok(session)
+}
+
+#[derive(Clone)]
+struct LibSshForwardRoute {
+    port: u16,
+    destination: Option<RemoteForwardDestination>,
+    connect_timeout: Duration,
+}
+
+impl ChannelIo for libssh_rs::Channel {
+    fn read_channel(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.read_timeout(buffer, false, Some(Duration::ZERO))
+            .map_err(Into::into)
+    }
+
+    fn write_channel(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.stdin().write(buffer)
+    }
+
+    fn is_eof(&self) -> bool {
+        libssh_rs::Channel::is_eof(self)
+    }
+
+    fn send_eof(&mut self) -> std::io::Result<()> {
+        libssh_rs::Channel::send_eof(self).map_err(Into::into)
+    }
+
+    fn close(&mut self) {
+        let _ = libssh_rs::Channel::close(self);
+    }
+}
+
+fn setup_libssh_remote_forwards(
+    opts: &SshOpts,
+    config: &Config,
+) -> RemoteResult<(Option<ForwardWorker>, Vec<u16>)> {
+    if config.params.remote_forward.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    #[cfg(not(unix))]
+    if config.params.remote_forward.iter().any(|forward| {
+        matches!(
+            forward.destination,
+            Some(RemoteForwardDestination::UnixSocket(_))
+        )
+    }) {
+        return Err(RemoteError::new_ex(
+            RemoteErrorType::UnsupportedFeature,
+            "Unix socket RemoteForward destinations are unavailable on this platform",
+        ));
+    }
+    if let Some(forward) = config
+        .params
+        .remote_forward
+        .iter()
+        .find(|forward| matches!(forward.listen, RemoteForwardListen::UnixSocket(_)))
+    {
+        return Err(RemoteError::new_ex(
+            RemoteErrorType::UnsupportedFeature,
+            format!(
+                "libssh cannot create Unix socket RemoteForward listener {}",
+                forward.listen
+            ),
+        ));
+    }
+    for (index, forward) in config.params.remote_forward.iter().enumerate() {
+        let Some((_, port)) = tcp_remote_forward_endpoint(&forward.listen) else {
+            unreachable!("Unix socket listeners were rejected above");
+        };
+        if port != 0
+            && config.params.remote_forward[..index].iter().any(|other| {
+                tcp_remote_forward_endpoint(&other.listen)
+                    .is_some_and(|(_, other_port)| other_port == port)
+            })
+        {
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::UnsupportedFeature,
+                format!(
+                    "libssh cannot distinguish multiple RemoteForward listeners on port {port}"
+                ),
+            ));
+        }
+    }
+
+    let session = connect_libssh_session(opts, config)?;
+    let mut routes = Vec::<LibSshForwardRoute>::new();
+    for forward in &config.params.remote_forward {
+        let (mut bind_address, port) = tcp_remote_forward_endpoint(&forward.listen)
+            .expect("Unix socket listeners were rejected above");
+        if bind_address.is_some_and(|address| address.is_empty() || address == "*") {
+            bind_address = None;
+        }
+        let returned_port = session.listen_forward(bind_address, port).map_err(|err| {
+            RemoteError::new_ex(
+                RemoteErrorType::ProtocolError,
+                format!(
+                    "Could not configure RemoteForward {}: {err}",
+                    forward.listen
+                ),
+            )
+        })?;
+        let actual_port = if port == 0 { returned_port } else { port };
+        if routes.iter().any(|route| route.port == actual_port) {
+            session.disconnect();
+            return Err(RemoteError::new_ex(
+                RemoteErrorType::UnsupportedFeature,
+                format!(
+                    "libssh cannot distinguish multiple RemoteForward listeners on port {actual_port}"
+                ),
+            ));
+        }
+        debug!(
+            "RemoteForward {} listening on assigned port {actual_port}",
+            forward.listen
+        );
+        routes.push(LibSshForwardRoute {
+            port: actual_port,
+            destination: forward.destination.clone(),
+            connect_timeout: config.connection_timeout,
+        });
+    }
+
+    session.set_blocking(false);
+    let remote_forward_ports = routes.iter().map(|route| route.port).collect();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = cancelled.clone();
+    let worker = std::thread::spawn(move || {
+        let mut connections = Vec::<ForwardConnection<libssh_rs::Channel>>::new();
+        'forwarding: while !worker_cancelled.load(Ordering::Acquire) {
+            let mut progressed = false;
+            while connections.len() < MAX_FORWARD_CONNECTIONS {
+                match session.accept_forward(Duration::ZERO) {
+                    Ok((port, channel)) => {
+                        let Some(route) = routes.iter().find(|route| route.port == port) else {
+                            warn!("Received RemoteForward connection for unknown port {port}");
+                            continue;
+                        };
+                        let connection = match &route.destination {
+                            Some(destination) => ForwardConnection::fixed(
+                                channel,
+                                destination,
+                                route.connect_timeout,
+                                Arc::clone(&worker_cancelled),
+                            ),
+                            None => Ok(ForwardConnection::dynamic(
+                                channel,
+                                route.connect_timeout,
+                                Arc::clone(&worker_cancelled),
+                            )),
+                        };
+                        match connection {
+                            Ok(connection) => connections.push(connection),
+                            Err(err) => warn!("Could not queue RemoteForward destination: {err}"),
+                        }
+                        progressed = true;
+                    }
+                    Err(libssh_rs::Error::TryAgain) => break,
+                    Err(err) => {
+                        warn!("Could not accept RemoteForward connection: {err}");
+                        break 'forwarding;
+                    }
+                }
+            }
+
+            let mut index = 0;
+            while index < connections.len() {
+                match connections[index].pump() {
+                    Ok((true, connection_progressed)) => {
+                        progressed |= connection_progressed;
+                        index += 1;
+                    }
+                    Ok((false, connection_progressed)) => {
+                        progressed |= connection_progressed;
+                        connections.swap_remove(index);
+                    }
+                    Err(err) => {
+                        warn!("RemoteForward connection failed: {err}");
+                        connections.swap_remove(index);
+                    }
+                }
+            }
+            if !progressed {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        drop(connections);
+        session.disconnect();
+    });
+    Ok((
+        Some(ForwardWorker::new(cancelled, worker)),
+        remote_forward_ports,
+    ))
 }
 
 /// A wrapper around [`libssh_rs::Channel`] to provide a SCP recv channel for [`LibSshSession`]
@@ -128,123 +430,18 @@ impl SshSession for LibSshSession {
         // Resolve host
         debug!("Connecting to '{}'", opts.host);
         let ssh_config = Config::try_from(opts)?;
-
-        // Create session
-        let mut session = match libssh_rs::Session::new() {
-            Ok(s) => s,
-            Err(err) => {
-                error!("Could not create session: {err}");
-                return Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, err));
-            }
-        };
-
-        // set hostname
-        session
-            .set_option(SshOption::Hostname(opts.host.clone()))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-        let config_file_str = opts.config_file.as_ref().map(|p| p.display().to_string());
-        debug!("Using config file: {:?}", config_file_str);
-        session
-            .options_parse_config(config_file_str.as_deref())
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-
-        if let Some(port) = opts.port {
-            debug!("Using port: {port}");
-            session
-                .set_option(SshOption::Port(port))
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-        }
-        let bind_addresses = if ssh_config.params.bind_address.is_none()
-            && let Some(bind_interface) = ssh_config.params.bind_interface.as_deref()
-        {
-            let interface_addresses = interface::addresses(bind_interface)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-            let target_addresses = ssh_config
-                .address
-                .to_socket_addrs()
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::BadAddress, e.to_string()))?;
-            let target_addresses = target_addresses.collect::<Vec<_>>();
-            let bind_addresses = interface_addresses
-                .into_iter()
-                .filter(|source| {
-                    target_addresses
-                        .iter()
-                        .any(|target| source.is_ipv4() == target.is_ipv4())
-                })
-                .map(|source| interface::host(&source))
-                .collect::<Vec<_>>();
-            if bind_addresses.is_empty() {
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::ConnectionError,
-                    format!(
-                        "BindInterface {bind_interface} has no address compatible with {}",
-                        ssh_config.address
-                    ),
-                ));
-            }
-            debug!("Using bind interface {bind_interface} addresses {bind_addresses:?}");
-            bind_addresses
-        } else {
-            Vec::new()
-        };
-        debug!(
-            "Using connection timeout: {:?}",
-            ssh_config.connection_timeout
-        );
-        session
-            .set_option(SshOption::Timeout(ssh_config.connection_timeout))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-
-        // set methods
-        for opt in opts.methods.iter().filter_map(|method| method.ssh_opts()) {
-            debug!("Setting SSH option: {opt:?}");
-            session
-                .set_option(opt)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-        }
-
-        // Open connection and initialize handshake
-        let connection_attempts = ssh_config.connection_attempts.max(1);
-        let source_attempts = bind_addresses.len().max(1);
-        let mut last_error = None;
-        let mut connected = false;
-        'connection: for attempt in 1..=connection_attempts {
-            for source_attempt in 0..source_attempts {
-                if let Some(bind_address) = bind_addresses.get(source_attempt) {
-                    session
-                        .set_option(SshOption::BindAddress(bind_address.clone()))
-                        .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-                }
-                match connect_with_timeout(&session, ssh_config.connection_timeout) {
-                    Ok(()) => {
-                        connected = true;
-                        break 'connection;
-                    }
-                    Err(err) => {
-                        warn!("SSH connection attempt {attempt} failed: {err}");
-                        last_error = Some(err);
-                        session.disconnect();
-                    }
-                }
-            }
-        }
-        if !connected {
-            let err = last_error.expect("at least one connection was attempted");
-            error!("SSH handshake failed: {err}");
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-        }
-        socket::set_keepalive(&session, ssh_config.params.tcp_keep_alive.unwrap_or(true))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ConnectionError, e))?;
-
-        // try to authenticate userauth_none
-        authenticate(&mut session, opts)?;
+        let session = connect_libssh_session(opts, &ssh_config)?;
 
         let forward_agent = ssh_config.params.forward_agent.unwrap_or(false);
         session.enable_accept_agent_forward(forward_agent);
+        let (remote_forward_worker, remote_forward_ports) =
+            setup_libssh_remote_forwards(opts, &ssh_config)?;
 
         Ok(Self {
             session,
             forward_agent,
+            remote_forward_ports,
+            remote_forward_worker,
         })
     }
 
@@ -262,9 +459,16 @@ impl SshSession for LibSshSession {
     }
 
     fn disconnect(&self) -> RemoteResult<()> {
+        if let Some(worker) = &self.remote_forward_worker {
+            worker.stop();
+        }
         self.session.disconnect();
 
         Ok(())
+    }
+
+    fn remote_forward_ports(&self) -> &[u16] {
+        &self.remote_forward_ports
     }
 
     fn cmd<S>(&mut self, cmd: S) -> RemoteResult<(u32, String)>
@@ -1510,5 +1714,75 @@ mod tests {
             .expect("failed to query remote agent");
         assert_eq!(status, 0, "remote ssh-add failed: {output}");
         assert!(output.contains("ssh-rsa"));
+    }
+
+    #[test]
+    fn should_apply_configured_remote_forward() {
+        crate::mock::logger();
+        let container = OpensshServer::start_with_tcp_forwarding();
+        let (destination_port, destination) = ssh_mock::start_tcp_echo_server();
+        let (dynamic_destination_port, dynamic_destination) = ssh_mock::start_tcp_echo_server();
+        let remote_port = 43002;
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} 127.0.0.1:{destination_port}\n    RemoteForward 0",
+            port = container.port(),
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password");
+        let mut session = LibSshSession::connect(&opts).expect("failed to connect");
+        let dynamic_port = *session
+            .remote_forward_ports()
+            .get(1)
+            .expect("dynamic RemoteForward did not report its assigned port");
+
+        let (status, output) = session
+            .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))
+            .expect("failed to use configured remote forward");
+        assert_eq!(status, 0, "remote forwarding command failed: {output}");
+        assert_eq!(output, "pong\n");
+        destination.join().expect("TCP echo server panicked");
+
+        let (status, output) = session
+            .cmd(ssh_mock::socks5_test_command(
+                dynamic_port,
+                dynamic_destination_port,
+            ))
+            .expect("failed to use dynamic RemoteForward");
+        assert_eq!(status, 0, "dynamic forwarding command failed: {output}");
+        assert_eq!(output, "pong\n");
+        dynamic_destination
+            .join()
+            .expect("dynamic TCP echo server panicked");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn should_apply_remote_forward_to_unix_socket() {
+        let container = OpensshServer::start_with_tcp_forwarding();
+        let (_directory, destination_path, destination) = ssh_mock::start_unix_echo_server();
+        let remote_port = 43202;
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} {destination}",
+            port = container.port(),
+            destination = destination_path.display(),
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password");
+        let mut session = LibSshSession::connect(&opts).expect("failed to connect");
+
+        let (status, output) = session
+            .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))
+            .expect("failed to use Unix destination RemoteForward");
+        assert_eq!(status, 0, "remote forwarding command failed: {output}");
+        assert_eq!(output, "pong\n");
+        destination.join().expect("Unix echo server panicked");
     }
 }

@@ -11,6 +11,74 @@ use tempfile::NamedTempFile;
 
 use crate::SshKeyStorage;
 
+/// Start a one-shot TCP server that replies `pong\n` to `ping`.
+#[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
+pub fn start_tcp_echo_server() -> (u16, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .expect("failed to bind test TCP echo server");
+    let port = listener
+        .local_addr()
+        .expect("failed to read test TCP echo server address")
+        .port();
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("failed to accept forwarded TCP");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("failed to configure test TCP read timeout");
+        let mut request = [0u8; 4];
+        stream
+            .read_exact(&mut request)
+            .expect("failed to read forwarded TCP request");
+        assert_eq!(&request, b"ping");
+        stream
+            .write_all(b"pong\n")
+            .expect("failed to write forwarded TCP response");
+    });
+    (port, worker)
+}
+
+/// Build a remote shell command that reaches a destination through a SOCKS5 forward.
+#[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
+pub fn socks5_test_command(proxy_port: u16, destination_port: u16) -> String {
+    let port = destination_port.to_be_bytes();
+    format!(
+        "printf '\\005\\001\\000\\005\\001\\000\\001\\177\\000\\000\\001\\{high:03o}\\{low:03o}ping' | nc -w 5 127.0.0.1 {proxy_port} | tail -c 5",
+        high = port[0],
+        low = port[1],
+    )
+}
+
+/// Start a one-shot Unix socket server that replies `pong\n` to `ping`.
+#[cfg(unix)]
+pub fn start_unix_echo_server() -> (
+    tempfile::TempDir,
+    std::path::PathBuf,
+    std::thread::JoinHandle<()>,
+) {
+    use std::os::unix::net::UnixListener;
+
+    let directory = tempfile::tempdir().expect("failed to create Unix echo server directory");
+    let socket_path = directory.path().join("echo.sock");
+    let listener = UnixListener::bind(&socket_path).expect("failed to bind Unix echo server");
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener
+            .accept()
+            .expect("failed to accept forwarded Unix socket");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("failed to configure test Unix socket timeout");
+        let mut request = [0u8; 4];
+        stream
+            .read_exact(&mut request)
+            .expect("failed to read forwarded Unix socket request");
+        assert_eq!(&request, b"ping");
+        stream
+            .write_all(b"pong\n")
+            .expect("failed to write forwarded Unix socket response");
+    });
+    (directory, socket_path, worker)
+}
+
 #[cfg(unix)]
 static SSH_AGENT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

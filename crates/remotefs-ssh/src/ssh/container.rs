@@ -65,6 +65,12 @@ impl OpensshServer {
         Self::start_with_image(OpensshServerImage::default())
     }
 
+    pub fn start_with_tcp_forwarding() -> Self {
+        let server = Self::start();
+        server.enable_tcp_forwarding();
+        server
+    }
+
     pub fn start_with_public_key(public_key: &str) -> Self {
         Self::start_with_image(OpensshServerImage {
             public_key: public_key.to_string(),

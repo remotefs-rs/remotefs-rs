@@ -8,8 +8,8 @@ use std::future::Future as _;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
 use remotefs::fs::{Metadata, ReadStream, WriteStream};
@@ -18,6 +18,7 @@ use russh::client::{ChannelOpenHandle, DisconnectReason, Handle, Handler, Msg, S
 use russh::keys::{Algorithm, PublicKey, PublicKeyOrCertificate};
 use russh::{Channel, ChannelId, ChannelOpenFailure, Disconnect, Sig, client};
 use russh_sftp::client::SftpSession;
+use ssh2_config::{RemoteForwardDestination, RemoteForwardListen};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime::Runtime;
@@ -54,15 +55,98 @@ struct CaSignaturePolicyHandler<T> {
     inner: T,
     allowed_algorithms: Vec<String>,
     forward_agent: bool,
+    remote_forwards: Arc<RemoteForwardState>,
 }
 
 impl<T> CaSignaturePolicyHandler<T> {
-    fn new(inner: T, allowed_algorithms: Vec<String>, forward_agent: bool) -> Self {
+    fn new(
+        inner: T,
+        allowed_algorithms: Vec<String>,
+        forward_agent: bool,
+        remote_forwards: Arc<RemoteForwardState>,
+    ) -> Self {
         Self {
             inner,
             allowed_algorithms,
             forward_agent,
+            remote_forwards,
         }
+    }
+}
+
+#[derive(Clone)]
+enum RemoteForwardKey {
+    Tcp { address: String, port: Option<u32> },
+    StreamLocal(PathBuf),
+}
+
+#[derive(Clone)]
+struct RemoteForwardRoute {
+    key: RemoteForwardKey,
+    destination: Option<RemoteForwardDestination>,
+    connect_timeout: std::time::Duration,
+}
+
+#[derive(Default)]
+struct RemoteForwardState {
+    active: AtomicBool,
+    routes: RwLock<Vec<RemoteForwardRoute>>,
+}
+
+impl RemoteForwardState {
+    fn tcp_route(
+        &self,
+        connected_address: &str,
+        connected_port: u32,
+    ) -> Option<RemoteForwardRoute> {
+        if !self.active.load(Ordering::Acquire) {
+            return None;
+        }
+        let routes = self.routes.read().expect("remote forward routes poisoned");
+        let mut matching_port = routes.iter().filter(|route| {
+            matches!(route.key, RemoteForwardKey::Tcp { port: Some(port), .. } if port == connected_port)
+        });
+        if let Some(first) = matching_port.next().cloned() {
+            if matching_port.next().is_none() {
+                return Some(first);
+            }
+            if let Some(route) = routes.iter().find(|route| {
+                matches!(
+                    &route.key,
+                    RemoteForwardKey::Tcp { address, port: Some(port) }
+                        if *port == connected_port && address == connected_address
+                )
+            }) {
+                return Some(route.clone());
+            }
+        }
+        routes
+            .iter()
+            .find(|route| {
+                matches!(
+                    &route.key,
+                    RemoteForwardKey::Tcp { address, port: None }
+                        if address.is_empty() || address == connected_address
+                )
+            })
+            .cloned()
+    }
+
+    fn streamlocal_route(&self, socket_path: &str) -> Option<RemoteForwardRoute> {
+        if !self.active.load(Ordering::Acquire) {
+            return None;
+        }
+        self.routes
+            .read()
+            .expect("remote forward routes poisoned")
+            .iter()
+            .find(|route| {
+                matches!(
+                    &route.key,
+                    RemoteForwardKey::StreamLocal(path) if path == Path::new(socket_path)
+                )
+            })
+            .cloned()
     }
 }
 
@@ -161,7 +245,7 @@ where
             .channel_open_failure(channel, reason, description, language, session)
     }
 
-    fn server_channel_open_forwarded_tcpip(
+    async fn server_channel_open_forwarded_tcpip(
         &mut self,
         channel: Channel<Msg>,
         connected_address: &str,
@@ -170,27 +254,41 @@ where
         originator_port: u32,
         reply: ChannelOpenHandle,
         session: &mut Session,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
-        self.inner.server_channel_open_forwarded_tcpip(
-            channel,
-            connected_address,
-            connected_port,
-            originator_address,
-            originator_port,
-            reply,
-            session,
-        )
+    ) -> Result<(), Self::Error> {
+        if let Some(route) = self
+            .remote_forwards
+            .tcp_route(connected_address, connected_port)
+        {
+            forward_remote_channel(channel, reply, route).await;
+            return Ok(());
+        }
+        self.inner
+            .server_channel_open_forwarded_tcpip(
+                channel,
+                connected_address,
+                connected_port,
+                originator_address,
+                originator_port,
+                reply,
+                session,
+            )
+            .await
     }
 
-    fn server_channel_open_forwarded_streamlocal(
+    async fn server_channel_open_forwarded_streamlocal(
         &mut self,
         channel: Channel<Msg>,
         socket_path: &str,
         reply: ChannelOpenHandle,
         session: &mut Session,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+    ) -> Result<(), Self::Error> {
+        if let Some(route) = self.remote_forwards.streamlocal_route(socket_path) {
+            forward_remote_channel(channel, reply, route).await;
+            return Ok(());
+        }
         self.inner
             .server_channel_open_forwarded_streamlocal(channel, socket_path, reply, session)
+            .await
     }
 
     async fn server_channel_open_agent_forward(
@@ -398,6 +496,284 @@ async fn forward_agent_channel(_channel: Channel<Msg>, _reply: ChannelOpenHandle
     warn!("SSH agent forwarding is unavailable on this platform");
 }
 
+async fn forward_remote_channel(
+    channel: Channel<Msg>,
+    reply: ChannelOpenHandle,
+    route: RemoteForwardRoute,
+) {
+    match route.destination {
+        Some(RemoteForwardDestination::Host { host, port }) => {
+            reply.accept().await;
+            tokio::spawn(async move {
+                let destination = connect_remote_tcp(&host, port, route.connect_timeout).await;
+                match destination {
+                    Ok(destination) => relay_remote_channel(channel, destination).await,
+                    Err(err) => {
+                        warn!("Could not connect RemoteForward destination {host}:{port}: {err}");
+                        if let Err(close_err) = channel.close().await {
+                            debug!("Could not close failed RemoteForward channel: {close_err}");
+                        }
+                    }
+                }
+            });
+        }
+        Some(RemoteForwardDestination::UnixSocket(path)) => {
+            forward_remote_unix_channel(channel, reply, path, route.connect_timeout).await;
+        }
+        None => {
+            reply.accept().await;
+            tokio::spawn(async move {
+                let mut channel = channel.into_stream();
+                match socks_connect(&mut channel, route.connect_timeout).await {
+                    Ok(mut destination) => {
+                        if let Err(err) =
+                            tokio::io::copy_bidirectional(&mut channel, &mut destination).await
+                        {
+                            debug!("Dynamic RemoteForward channel closed with an error: {err}");
+                        }
+                    }
+                    Err(err) => warn!("Dynamic RemoteForward failed: {err}"),
+                }
+            });
+        }
+    }
+}
+
+async fn connect_remote_tcp(
+    host: &str,
+    port: u16,
+    connect_timeout: std::time::Duration,
+) -> std::io::Result<TcpStream> {
+    if connect_timeout.is_zero() {
+        TcpStream::connect((host, port)).await
+    } else {
+        tokio::time::timeout(connect_timeout, TcpStream::connect((host, port)))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "RemoteForward destination connect timed out",
+                )
+            })?
+    }
+}
+
+async fn relay_remote_channel<S>(channel: Channel<Msg>, mut destination: S)
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut channel = channel.into_stream();
+    if let Err(err) = tokio::io::copy_bidirectional(&mut channel, &mut destination).await {
+        debug!("RemoteForward channel closed with an error: {err}");
+    }
+}
+
+#[cfg(unix)]
+async fn forward_remote_unix_channel(
+    channel: Channel<Msg>,
+    reply: ChannelOpenHandle,
+    path: PathBuf,
+    connect_timeout: std::time::Duration,
+) {
+    reply.accept().await;
+    tokio::spawn(async move {
+        match connect_remote_unix(&path, connect_timeout).await {
+            Ok(destination) => relay_remote_channel(channel, destination).await,
+            Err(err) => {
+                warn!(
+                    "Could not connect RemoteForward destination {}: {err}",
+                    path.display()
+                );
+                if let Err(close_err) = channel.close().await {
+                    debug!("Could not close failed RemoteForward channel: {close_err}");
+                }
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+async fn connect_remote_unix(
+    path: &Path,
+    connect_timeout: std::time::Duration,
+) -> std::io::Result<tokio::net::UnixStream> {
+    if connect_timeout.is_zero() {
+        tokio::net::UnixStream::connect(path).await
+    } else {
+        tokio::time::timeout(connect_timeout, tokio::net::UnixStream::connect(path))
+            .await
+            .map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "RemoteForward destination connect timed out",
+                )
+            })?
+    }
+}
+
+#[cfg(not(unix))]
+async fn forward_remote_unix_channel(
+    _channel: Channel<Msg>,
+    reply: ChannelOpenHandle,
+    path: PathBuf,
+    _connect_timeout: std::time::Duration,
+) {
+    warn!(
+        "Unix socket RemoteForward destination {} is unavailable on this platform",
+        path.display()
+    );
+    reply.reject(ChannelOpenFailure::ConnectFailed).await;
+}
+
+async fn socks_connect<S>(
+    stream: &mut S,
+    connect_timeout: std::time::Duration,
+) -> std::io::Result<TcpStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let version = stream.read_u8().await?;
+    let (host, port) = match version {
+        4 => read_socks4_target(stream).await?,
+        5 => read_socks5_target(stream).await?,
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("unsupported SOCKS version {version}"),
+            ));
+        }
+    };
+
+    let destination = connect_remote_tcp(&host, port, connect_timeout).await;
+    match destination {
+        Ok(destination) => {
+            if version == 4 {
+                stream.write_all(&[0, 90, 0, 0, 0, 0, 0, 0]).await?;
+            } else {
+                stream.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
+            }
+            Ok(destination)
+        }
+        Err(err) => {
+            if version == 4 {
+                let _ = stream.write_all(&[0, 91, 0, 0, 0, 0, 0, 0]).await;
+            } else {
+                let _ = stream.write_all(&[5, 1, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn read_socks4_target<S>(stream: &mut S) -> std::io::Result<(String, u16)>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let command = stream.read_u8().await?;
+    if command != 1 {
+        let _ = stream.write_all(&[0, 91, 0, 0, 0, 0, 0, 0]).await;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "SOCKS4 supports CONNECT only",
+        ));
+    }
+    let port = stream.read_u16().await?;
+    let mut address = [0u8; 4];
+    stream.read_exact(&mut address).await?;
+    read_socks_string(stream).await?;
+    let host = if address[..3] == [0, 0, 0] && address[3] != 0 {
+        String::from_utf8(read_socks_string(stream).await?)
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string()))?
+    } else {
+        std::net::Ipv4Addr::from(address).to_string()
+    };
+    Ok((host, port))
+}
+
+async fn read_socks5_target<S>(stream: &mut S) -> std::io::Result<(String, u16)>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let method_count = stream.read_u8().await? as usize;
+    let mut methods = vec![0u8; method_count];
+    stream.read_exact(&mut methods).await?;
+    if !methods.contains(&0) {
+        stream.write_all(&[5, 0xff]).await?;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "SOCKS5 client did not offer no-authentication",
+        ));
+    }
+    stream.write_all(&[5, 0]).await?;
+    let request_version = stream.read_u8().await?;
+    let command = stream.read_u8().await?;
+    let reserved = stream.read_u8().await?;
+    if request_version != 5 || command != 1 || reserved != 0 {
+        let _ = stream.write_all(&[5, 7, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "SOCKS5 supports CONNECT only",
+        ));
+    }
+    let host = match stream.read_u8().await? {
+        1 => {
+            let mut address = [0u8; 4];
+            stream.read_exact(&mut address).await?;
+            std::net::Ipv4Addr::from(address).to_string()
+        }
+        3 => {
+            let length = stream.read_u8().await? as usize;
+            let mut domain = vec![0u8; length];
+            stream.read_exact(&mut domain).await?;
+            String::from_utf8(domain).map_err(|err| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, err.to_string())
+            })?
+        }
+        4 => {
+            let mut address = [0u8; 16];
+            stream.read_exact(&mut address).await?;
+            std::net::Ipv6Addr::from(address).to_string()
+        }
+        address_type => {
+            let _ = stream.write_all(&[5, 8, 0, 1, 0, 0, 0, 0, 0, 0]).await;
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!("unsupported SOCKS5 address type {address_type}"),
+            ));
+        }
+    };
+    let port = stream.read_u16().await?;
+    Ok((host, port))
+}
+
+async fn read_socks_string<S>(stream: &mut S) -> std::io::Result<Vec<u8>>
+where
+    S: AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+
+    let mut value = Vec::new();
+    loop {
+        let byte = stream.read_u8().await?;
+        if byte == 0 {
+            return Ok(value);
+        }
+        if value.len() >= 1024 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "SOCKS string exceeds 1024 bytes",
+            ));
+        }
+        value.push(byte);
+    }
+}
+
 /// [`russh`](https://docs.rs/russh/latest/russh) session.
 pub struct RusshSession<T>
 where
@@ -406,6 +782,14 @@ where
     runtime: Arc<Runtime>,
     session: Handle<CaSignaturePolicyHandler<T>>,
     forward_agent: bool,
+    remote_forward_ports: Vec<u16>,
+    remote_forward_state: Arc<RemoteForwardState>,
+    remote_forwards: Vec<RegisteredRemoteForward>,
+}
+
+enum RegisteredRemoteForward {
+    Tcp { address: String, port: u32 },
+    StreamLocal(String),
 }
 
 /// SFTP handle for russh.
@@ -639,35 +1023,78 @@ where
         let ssh_config = Config::try_from(opts)?;
         debug!("Connecting to '{}'", ssh_config.address);
         let proxy_jumps = ssh_config.proxy_jump_configs(opts)?;
+        let remote_forward_state = Arc::new(RemoteForwardState::default());
         let mut session = if let Some(first_jump) = proxy_jumps.first() {
-            let mut session = connect_russh_direct::<T>(&runtime, opts, first_jump)?;
+            let mut session = connect_russh_direct::<T>(
+                &runtime,
+                opts,
+                first_jump,
+                Arc::new(RemoteForwardState::default()),
+            )?;
             auth::authenticate(&mut session, &runtime, opts, first_jump)?;
             for next_hop in proxy_jumps
                 .iter()
                 .skip(1)
                 .chain(std::iter::once(&ssh_config))
             {
-                session = connect_russh_through_jump::<T>(&runtime, opts, &session, next_hop)?;
+                let routes = if std::ptr::eq(next_hop, &ssh_config) {
+                    remote_forward_state.clone()
+                } else {
+                    Arc::new(RemoteForwardState::default())
+                };
+                session =
+                    connect_russh_through_jump::<T>(&runtime, opts, &session, next_hop, routes)?;
                 if !std::ptr::eq(next_hop, &ssh_config) {
                     auth::authenticate(&mut session, &runtime, opts, next_hop)?;
                 }
             }
             session
         } else {
-            connect_russh_direct::<T>(&runtime, opts, &ssh_config)?
+            connect_russh_direct::<T>(&runtime, opts, &ssh_config, remote_forward_state.clone())?
         };
         auth::authenticate(&mut session, &runtime, opts, &ssh_config)?;
+        let remote_forwards =
+            setup_russh_remote_forwards(&runtime, &session, &ssh_config, &remote_forward_state)?;
+        let remote_forward_ports = remote_forwards
+            .iter()
+            .filter_map(|forward| match forward {
+                RegisteredRemoteForward::Tcp { port, .. } => Some(
+                    u16::try_from(*port)
+                        .expect("RemoteForward assigned ports were validated during setup"),
+                ),
+                RegisteredRemoteForward::StreamLocal(_) => None,
+            })
+            .collect();
 
         Ok(Self {
             runtime,
             session,
             forward_agent: ssh_config.params.forward_agent.unwrap_or(false),
+            remote_forward_ports,
+            remote_forward_state,
+            remote_forwards,
         })
     }
 
     fn disconnect(&self) -> RemoteResult<()> {
+        self.remote_forward_state
+            .active
+            .store(false, Ordering::Release);
         self.runtime
             .block_on(async {
+                for forward in self.remote_forwards.iter().rev() {
+                    let result = match forward {
+                        RegisteredRemoteForward::Tcp { address, port } => {
+                            self.session.cancel_tcpip_forward(address, *port).await
+                        }
+                        RegisteredRemoteForward::StreamLocal(path) => {
+                            self.session.cancel_streamlocal_forward(path).await
+                        }
+                    };
+                    if let Err(err) = result {
+                        warn!("Failed to cancel RemoteForward: {err}");
+                    }
+                }
                 self.session
                     .disconnect(Disconnect::ByApplication, "Closed by user", "en_US")
                     .await
@@ -676,6 +1103,10 @@ where
                 log::error!("failed to disconnect {err}");
                 RemoteError::new_ex(RemoteErrorType::ConnectionError, err.to_string())
             })
+    }
+
+    fn remote_forward_ports(&self) -> &[u16] {
+        &self.remote_forward_ports
     }
 
     fn banner(&self) -> RemoteResult<Option<String>> {
@@ -780,6 +1211,7 @@ fn connect_russh_direct<T>(
     runtime: &Runtime,
     opts: &SshOpts,
     ssh_config: &Config,
+    remote_forwards: Arc<RemoteForwardState>,
 ) -> RemoteResult<Handle<CaSignaturePolicyHandler<T>>>
 where
     T: Handler + Default + Send + 'static,
@@ -797,6 +1229,7 @@ where
             T::default(),
             ca_signature_algorithms.clone(),
             ssh_config.params.forward_agent.unwrap_or(false),
+            remote_forwards.clone(),
         );
         match connect_with_timeout(
             runtime,
@@ -825,6 +1258,7 @@ fn connect_russh_through_jump<T>(
     opts: &SshOpts,
     jump_session: &Handle<CaSignaturePolicyHandler<T>>,
     target: &Config,
+    remote_forwards: Arc<RemoteForwardState>,
 ) -> RemoteResult<Handle<CaSignaturePolicyHandler<T>>>
 where
     T: Handler + Default + Send + 'static,
@@ -837,6 +1271,7 @@ where
             T::default(),
             ca_signature_algorithms.clone(),
             target.params.forward_agent.unwrap_or(false),
+            remote_forwards.clone(),
         );
         let result = runtime.block_on(async {
             tokio::time::timeout(target.connection_timeout, async {
@@ -876,6 +1311,178 @@ where
             }
         }
     }
+}
+
+fn setup_russh_remote_forwards<T>(
+    runtime: &Runtime,
+    session: &Handle<T>,
+    config: &Config,
+    state: &RemoteForwardState,
+) -> RemoteResult<Vec<RegisteredRemoteForward>>
+where
+    T: Handler,
+{
+    #[cfg(not(unix))]
+    if config.params.remote_forward.iter().any(|forward| {
+        matches!(
+            forward.destination,
+            Some(RemoteForwardDestination::UnixSocket(_))
+        )
+    }) {
+        return Err(RemoteError::new_ex(
+            RemoteErrorType::UnsupportedFeature,
+            "Unix socket RemoteForward destinations are unavailable on this platform",
+        ));
+    }
+
+    let mut registered = Vec::new();
+    state
+        .routes
+        .write()
+        .expect("remote forward routes poisoned")
+        .clear();
+    state.active.store(true, Ordering::Release);
+    for forward in &config.params.remote_forward {
+        let pending_key = match &forward.listen {
+            RemoteForwardListen::Port(port) => RemoteForwardKey::Tcp {
+                address: "localhost".to_string(),
+                port: (*port != 0).then_some(u32::from(*port)),
+            },
+            RemoteForwardListen::Host { host, port } => RemoteForwardKey::Tcp {
+                address: if host.is_empty() || host == "*" {
+                    String::new()
+                } else {
+                    host.clone()
+                },
+                port: (*port != 0).then_some(u32::from(*port)),
+            },
+            RemoteForwardListen::UnixSocket(path) => {
+                if path.to_str().is_none() {
+                    state.active.store(false, Ordering::Release);
+                    state
+                        .routes
+                        .write()
+                        .expect("remote forward routes poisoned")
+                        .clear();
+                    cancel_russh_remote_forwards(runtime, session, &registered);
+                    return Err(RemoteError::new_ex(
+                        RemoteErrorType::ProtocolError,
+                        "RemoteForward Unix socket path is not valid UTF-8",
+                    ));
+                }
+                RemoteForwardKey::StreamLocal(path.clone())
+            }
+        };
+        let route_index = {
+            let mut routes = state
+                .routes
+                .write()
+                .expect("remote forward routes poisoned");
+            let route_index = routes.len();
+            routes.push(RemoteForwardRoute {
+                key: pending_key.clone(),
+                destination: forward.destination.clone(),
+                connect_timeout: config.connection_timeout,
+            });
+            route_index
+        };
+
+        let result = match &pending_key {
+            RemoteForwardKey::Tcp { address, port } => runtime
+                .block_on(session.tcpip_forward(address, port.unwrap_or(0)))
+                .map(|returned_port| RemoteForwardKey::Tcp {
+                    address: address.clone(),
+                    port: Some(port.unwrap_or(returned_port)),
+                }),
+            RemoteForwardKey::StreamLocal(path) => runtime
+                .block_on(session.streamlocal_forward(
+                    path.to_str().expect("Unix socket path was validated above"),
+                ))
+                .map(|()| pending_key.clone()),
+        };
+
+        match result {
+            Ok(key) => {
+                let registration = match &key {
+                    RemoteForwardKey::Tcp {
+                        address,
+                        port: Some(port),
+                    } => RegisteredRemoteForward::Tcp {
+                        address: address.clone(),
+                        port: *port,
+                    },
+                    RemoteForwardKey::StreamLocal(path) => RegisteredRemoteForward::StreamLocal(
+                        path.to_str()
+                            .expect("Unix socket path was validated above")
+                            .to_string(),
+                    ),
+                    RemoteForwardKey::Tcp { port: None, .. } => {
+                        unreachable!("successful TCP registration has an assigned port")
+                    }
+                };
+                if matches!(registration, RegisteredRemoteForward::Tcp { port, .. } if port > u32::from(u16::MAX))
+                {
+                    registered.push(registration);
+                    state.active.store(false, Ordering::Release);
+                    state
+                        .routes
+                        .write()
+                        .expect("remote forward routes poisoned")
+                        .clear();
+                    cancel_russh_remote_forwards(runtime, session, &registered);
+                    return Err(RemoteError::new_ex(
+                        RemoteErrorType::ProtocolError,
+                        "SSH server returned an invalid RemoteForward port",
+                    ));
+                }
+                state
+                    .routes
+                    .write()
+                    .expect("remote forward routes poisoned")[route_index]
+                    .key = key;
+                registered.push(registration);
+            }
+            Err(err) => {
+                state.active.store(false, Ordering::Release);
+                state
+                    .routes
+                    .write()
+                    .expect("remote forward routes poisoned")
+                    .clear();
+                cancel_russh_remote_forwards(runtime, session, &registered);
+                return Err(RemoteError::new_ex(
+                    RemoteErrorType::ProtocolError,
+                    format!("Could not configure RemoteForward: {err}"),
+                ));
+            }
+        }
+    }
+
+    Ok(registered)
+}
+
+fn cancel_russh_remote_forwards<T>(
+    runtime: &Runtime,
+    session: &Handle<T>,
+    registered: &[RegisteredRemoteForward],
+) where
+    T: Handler,
+{
+    runtime.block_on(async {
+        for forward in registered.iter().rev() {
+            let result = match forward {
+                RegisteredRemoteForward::Tcp { address, port } => {
+                    session.cancel_tcpip_forward(address, *port).await
+                }
+                RegisteredRemoteForward::StreamLocal(path) => {
+                    session.cancel_streamlocal_forward(path).await
+                }
+            };
+            if let Err(err) = result {
+                warn!("Failed to roll back RemoteForward: {err}");
+            }
+        }
+    });
 }
 
 impl Sftp for RusshSftp {
@@ -1763,6 +2370,7 @@ mod test {
             NoCheckServerKey,
             vec!["rsa-sha2-256".to_string()],
             false,
+            Arc::new(RemoteForwardState::default()),
         );
         assert!(
             !runtime
@@ -1770,8 +2378,12 @@ mod test {
                 .expect("failed to check rejected certificate")
         );
 
-        let mut accepted =
-            CaSignaturePolicyHandler::new(NoCheckServerKey, vec!["ssh-ed25519".to_string()], false);
+        let mut accepted = CaSignaturePolicyHandler::new(
+            NoCheckServerKey,
+            vec!["ssh-ed25519".to_string()],
+            false,
+            Arc::new(RemoteForwardState::default()),
+        );
         assert!(
             runtime
                 .block_on(accepted.check_server_key(&server_key))
@@ -2429,6 +3041,128 @@ mod test {
             .password("password")
             .runtime(test_runtime());
         assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
+    }
+
+    #[test]
+    fn should_apply_configured_remote_forward() {
+        let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
+        let (destination_port, destination) = ssh_mock::start_tcp_echo_server();
+        let (dynamic_destination_port, dynamic_destination) = ssh_mock::start_tcp_echo_server();
+        let remote_port = 43003;
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} 127.0.0.1:{destination_port}\n    RemoteForward 0",
+            port = container.port(),
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(test_runtime());
+        let mut session =
+            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
+        let dynamic_port = *session
+            .remote_forward_ports()
+            .get(1)
+            .expect("dynamic RemoteForward did not report its assigned port");
+
+        let (status, output) = session
+            .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))
+            .expect("failed to use configured remote forward");
+        assert_eq!(status, 0, "remote forwarding command failed: {output}");
+        assert_eq!(output, "pong\n");
+        destination.join().expect("TCP echo server panicked");
+
+        let (status, output) = session
+            .cmd(ssh_mock::socks5_test_command(
+                dynamic_port,
+                dynamic_destination_port,
+            ))
+            .expect("failed to use dynamic RemoteForward");
+        assert_eq!(status, 0, "dynamic forwarding command failed: {output}");
+        assert_eq!(output, "pong\n");
+        dynamic_destination
+            .join()
+            .expect("dynamic TCP echo server panicked");
+    }
+
+    #[test]
+    fn should_close_remote_forward_when_destination_connect_fails() {
+        let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
+        let destination = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .expect("failed to reserve closed destination port")
+            .local_addr()
+            .expect("failed to inspect closed destination port")
+            .port();
+        let remote_port = 43303;
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} 127.0.0.1:{destination}",
+            port = container.port(),
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(test_runtime());
+        let mut session =
+            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
+
+        let started = std::time::Instant::now();
+        let (status, output) = session
+            .cmd(format!(
+                "nc -w 10 127.0.0.1 {remote_port} </dev/null; printf closed"
+            ))
+            .expect("failed to exercise rejected RemoteForward destination");
+        assert_eq!(status, 0, "remote forwarding command failed: {output}");
+        assert_eq!(output, "closed");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "failed RemoteForward channel was not closed promptly"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn should_apply_remote_forward_with_unix_sockets() {
+        let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
+        let (_tcp_directory, tcp_destination_path, tcp_destination) =
+            ssh_mock::start_unix_echo_server();
+        let (_unix_directory, unix_destination_path, unix_destination) =
+            ssh_mock::start_unix_echo_server();
+        let remote_port = 43203;
+        let remote_socket = format!("/tmp/remotefs-ssh-{}.sock", std::process::id());
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} {tcp_destination}\n    RemoteForward {remote_socket} {unix_destination}",
+            port = container.port(),
+            tcp_destination = tcp_destination_path.display(),
+            unix_destination = unix_destination_path.display(),
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("forwarded")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .password("password")
+            .runtime(test_runtime());
+        let mut session =
+            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
+
+        let (status, output) = session
+            .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))
+            .expect("failed to use Unix destination RemoteForward");
+        assert_eq!(status, 0, "remote forwarding command failed: {output}");
+        assert_eq!(output, "pong\n");
+        tcp_destination.join().expect("Unix echo server panicked");
+
+        let (status, output) = session
+            .cmd(format!("printf ping | nc -w 5 -U {remote_socket}"))
+            .expect("failed to use Unix listener RemoteForward");
+        assert_eq!(status, 0, "Unix listener command failed: {output}");
+        assert_eq!(output, "pong\n");
+        unix_destination.join().expect("Unix echo server panicked");
     }
 
     #[test]

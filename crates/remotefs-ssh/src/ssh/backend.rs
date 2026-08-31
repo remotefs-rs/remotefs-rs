@@ -1,6 +1,8 @@
 //! Defines the main trait for SSH Backends to be used with the clients and the backend implementations
 //! to support different SSH libraries (e.g. libssh2, libssh)
 
+#[cfg(any(feature = "libssh", feature = "libssh2"))]
+mod forward;
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 mod interface;
 #[cfg(feature = "libssh2")]
@@ -47,6 +49,15 @@ pub trait SshSession: Sized {
 
     /// Disconnect from the server
     fn disconnect(&self) -> RemoteResult<()>;
+
+    /// Return the assigned ports for configured TCP `RemoteForward` listeners.
+    ///
+    /// Ports are returned in configuration order. Unix socket listeners are
+    /// omitted. This reports the server-assigned port when a listener requested
+    /// port `0`.
+    fn remote_forward_ports(&self) -> &[u16] {
+        &[]
+    }
 
     /// Get the SSH server banner.
     fn banner(&self) -> RemoteResult<Option<String>>;

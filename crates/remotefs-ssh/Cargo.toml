@@ -55,7 +55,7 @@ russh-sftp = { version = "2", optional = true }
 socket2 = { version = "0.6", optional = true }
 ssh-key = { version = "0.7.0-rc.11", optional = true }
 ssh2 = { version = "0.9", optional = true }
-ssh2-config = "0.7"
+ssh2-config = "0.8"
 tokio = { version = "1", default-features = false, features = ["net", "rt", "time"], optional = true }
 
 [dev-dependencies]
