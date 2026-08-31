@@ -221,7 +221,7 @@ pub fn create_ssh_config_with_identity(
     port: u16,
     identity_file: &std::path::Path,
 ) -> NamedTempFile {
-    create_ssh_config_with_identity_and_pubkey_authentication(port, identity_file, true)
+    create_ssh_config_with_identity_options(port, identity_file, true, None)
 }
 
 /// Create an ssh config file with `IdentityFile` and `PubkeyAuthentication`.
@@ -230,9 +230,30 @@ pub fn create_ssh_config_with_identity_and_pubkey_authentication(
     identity_file: &std::path::Path,
     pubkey_authentication: bool,
 ) -> NamedTempFile {
+    create_ssh_config_with_identity_options(port, identity_file, pubkey_authentication, None)
+}
+
+/// Create an ssh config file with `IdentityFile` and `PubkeyAcceptedAlgorithms`.
+pub fn create_ssh_config_with_identity_and_pubkey_algorithms(
+    port: u16,
+    identity_file: &std::path::Path,
+    pubkey_algorithms: &str,
+) -> NamedTempFile {
+    create_ssh_config_with_identity_options(port, identity_file, true, Some(pubkey_algorithms))
+}
+
+fn create_ssh_config_with_identity_options(
+    port: u16,
+    identity_file: &std::path::Path,
+    pubkey_authentication: bool,
+    pubkey_algorithms: Option<&str>,
+) -> NamedTempFile {
     let mut temp = NamedTempFile::new().expect("Failed to create tempfile");
     let identity = identity_file.display();
     let pubkey_authentication = if pubkey_authentication { "yes" } else { "no" };
+    let pubkey_algorithms = pubkey_algorithms
+        .map(|algorithms| format!("    PubkeyAcceptedAlgorithms {algorithms}\n"))
+        .unwrap_or_default();
     let config = format!(
         r##"
 # ssh config
@@ -247,13 +268,13 @@ Host sftp
     User         sftp
     IdentityFile {identity}
     PubkeyAuthentication {pubkey_authentication}
-Host scp
+{pubkey_algorithms}Host scp
     HostName     127.0.0.1
     Port         {port}
     User         sftp
     IdentityFile {identity}
     PubkeyAuthentication {pubkey_authentication}
-"##
+{pubkey_algorithms}"##
     );
     temp.write_all(config.as_bytes()).unwrap();
     temp

@@ -117,7 +117,12 @@ impl SshSession for LibSsh2Session {
 
         // if use_ssh_agent is enabled, try to authenticate with ssh agent
         if pubkey_authentication && let Some(ssh_agent_config) = &opts.ssh_agent_identity {
-            match session_auth_with_agent(&mut session, &ssh_config.username, ssh_agent_config) {
+            match session_auth_with_agent(
+                &mut session,
+                &ssh_config.username,
+                ssh_agent_config,
+                ssh_config.params.pubkey_accepted_algorithms.algorithms(),
+            ) {
                 Ok(_) => {
                     info!("Authenticated with ssh agent");
                     return Ok(Self { session });
@@ -685,6 +690,14 @@ fn set_algo_prefs(
         return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
     }
 
+    // Public key signature algorithms
+    let algos = libssh2_signature_algorithms(params.pubkey_accepted_algorithms.algorithms());
+    trace!("Configuring public key signature algorithms: {algos}");
+    if let Err(err) = session.method_pref(ssh2::MethodType::SignAlgo, algos.as_str()) {
+        error!("Could not set public key signature algorithms: {err}");
+        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+    }
+
     // ciphers
     let algos = params.ciphers.algorithms().join(",");
     trace!("Configuring Crypt algorithms: {algos}");
@@ -721,11 +734,31 @@ fn set_algo_prefs(
     Ok(())
 }
 
+/// Convert OpenSSH certificate algorithm names to libssh2 RSA signature names.
+fn libssh2_signature_algorithms(configured_algorithms: &[String]) -> String {
+    let mut algorithms = Vec::with_capacity(configured_algorithms.len());
+
+    for configured_algorithm in configured_algorithms {
+        let algorithm = match configured_algorithm.as_str() {
+            "rsa-sha2-512-cert-v01@openssh.com" => "rsa-sha2-512",
+            "rsa-sha2-256-cert-v01@openssh.com" => "rsa-sha2-256",
+            "ssh-rsa-cert-v01@openssh.com" => "ssh-rsa",
+            algorithm => algorithm,
+        };
+        if !algorithms.contains(&algorithm) {
+            algorithms.push(algorithm);
+        }
+    }
+
+    algorithms.join(",")
+}
+
 /// Authenticate on session with ssh agent
 fn session_auth_with_agent(
     session: &mut ssh2::Session,
     username: &str,
     ssh_agent_config: &SshAgentIdentity,
+    accepted_algorithms: &[String],
 ) -> RemoteResult<()> {
     let mut agent = session
         .agent()
@@ -745,6 +778,10 @@ fn session_auth_with_agent(
         .identities()
         .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?
     {
+        if !public_key_blob_is_accepted(identity.blob(), accepted_algorithms) {
+            debug!("Skipping SSH agent identity excluded by PubkeyAcceptedAlgorithms");
+            continue;
+        }
         if ssh_agent_config.pubkey_matches(identity.blob()) {
             debug!("Trying to authenticate with ssh agent with key: {identity:?}");
         } else {
@@ -779,7 +816,16 @@ fn session_auth_with_rsakey(
     username: &str,
     private_key: &Path,
     password: Option<&str>,
+    accepted_algorithms: &[String],
 ) -> RemoteResult<()> {
+    let private_key_algorithm = private_key_algorithm(private_key, password)?;
+    if !pubkey_algorithm_is_accepted(&private_key_algorithm, accepted_algorithms) {
+        return Err(RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            format!("private key algorithm {private_key_algorithm} is not accepted by SSH config"),
+        ));
+    }
+
     debug!("Authenticating with username '{username}' and RSA key");
     trace!(
         "Trying to authenticate with RSA key at '{}'",
@@ -807,11 +853,149 @@ fn session_auth(
             &ssh_config.username,
             private_key.as_path(),
             opts.password.as_deref(),
+            ssh_config.params.pubkey_accepted_algorithms.algorithms(),
         ),
         Authentication::Password(password) => {
             session_auth_with_password(session, &ssh_config.username, &password)
         }
     }
+}
+
+/// Read the algorithm from an OpenSSH or PEM private key.
+fn private_key_algorithm(
+    private_key: &Path,
+    password: Option<&str>,
+) -> RemoteResult<ssh_key::Algorithm> {
+    if let Ok(key) = ssh_key::PrivateKey::read_openssh_file(private_key) {
+        return Ok(key.algorithm());
+    }
+
+    let pem = std::fs::read(private_key).map_err(|err| {
+        RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            format!(
+                "could not read private key at '{}': {err}",
+                private_key.display()
+            ),
+        )
+    })?;
+    let key = password
+        .and_then(|password| {
+            openssl::pkey::PKey::private_key_from_pem_passphrase(&pem, password.as_bytes()).ok()
+        })
+        .or_else(|| openssl::pkey::PKey::private_key_from_pem(&pem).ok())
+        .ok_or_else(|| {
+            RemoteError::new_ex(
+                RemoteErrorType::AuthenticationFailed,
+                format!(
+                    "could not inspect private key at '{}' for PubkeyAcceptedAlgorithms",
+                    private_key.display()
+                ),
+            )
+        })?;
+
+    openssl_key_algorithm(&key).ok_or_else(|| {
+        RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            format!(
+                "private key at '{}' uses an unsupported algorithm",
+                private_key.display()
+            ),
+        )
+    })
+}
+
+/// Convert an OpenSSL private key identifier to its SSH algorithm.
+fn openssl_key_algorithm(
+    key: &openssl::pkey::PKey<openssl::pkey::Private>,
+) -> Option<ssh_key::Algorithm> {
+    use openssl::pkey::Id;
+    use ssh_key::{Algorithm, EcdsaCurve};
+
+    match key.id() {
+        Id::RSA | Id::RSA_PSS => Some(Algorithm::Rsa { hash: None }),
+        Id::DSA => Some(Algorithm::Dsa),
+        Id::ED25519 => Some(Algorithm::Ed25519),
+        Id::EC => {
+            let curve = match key.ec_key().ok()?.group().curve_name()? {
+                openssl::nid::Nid::X9_62_PRIME256V1 => EcdsaCurve::NistP256,
+                openssl::nid::Nid::SECP384R1 => EcdsaCurve::NistP384,
+                openssl::nid::Nid::SECP521R1 => EcdsaCurve::NistP521,
+                _ => return None,
+            };
+            Some(Algorithm::Ecdsa { curve })
+        }
+        _ => None,
+    }
+}
+
+/// Return whether a public key algorithm is allowed by the configured list.
+fn pubkey_algorithm_is_accepted(
+    key_algorithm: &ssh_key::Algorithm,
+    accepted_algorithms: &[String],
+) -> bool {
+    if matches!(key_algorithm, ssh_key::Algorithm::Rsa { .. }) {
+        accepted_algorithms.iter().any(|algorithm| {
+            matches!(
+                algorithm.as_str(),
+                "rsa-sha2-512" | "rsa-sha2-256" | "ssh-rsa"
+            )
+        })
+    } else {
+        accepted_algorithms
+            .iter()
+            .any(|algorithm| algorithm == key_algorithm.as_ref())
+    }
+}
+
+/// Return whether the exact algorithm named by an SSH public key blob is accepted.
+fn public_key_blob_is_accepted(blob: &[u8], accepted_algorithms: &[String]) -> bool {
+    let Some(name_length) = blob.get(..4) else {
+        return false;
+    };
+    let name_length = u32::from_be_bytes(
+        name_length
+            .try_into()
+            .expect("the public key algorithm length is four bytes"),
+    ) as usize;
+    let Some(name_end) = 4_usize.checked_add(name_length) else {
+        return false;
+    };
+    let Some(name) = blob.get(4..name_end) else {
+        return false;
+    };
+    let Ok(name) = std::str::from_utf8(name) else {
+        return false;
+    };
+
+    public_key_blob_algorithm_is_accepted(name, accepted_algorithms)
+}
+
+/// Return whether a public key blob algorithm is allowed by the configured list.
+fn public_key_blob_algorithm_is_accepted(
+    key_algorithm: &str,
+    accepted_algorithms: &[String],
+) -> bool {
+    const RSA_ALGORITHMS: [&str; 3] = ["rsa-sha2-512", "rsa-sha2-256", "ssh-rsa"];
+    const RSA_CERTIFICATE_ALGORITHMS: [&str; 3] = [
+        "rsa-sha2-512-cert-v01@openssh.com",
+        "rsa-sha2-256-cert-v01@openssh.com",
+        "ssh-rsa-cert-v01@openssh.com",
+    ];
+
+    let equivalent_algorithms = if RSA_ALGORITHMS.contains(&key_algorithm) {
+        &RSA_ALGORITHMS
+    } else if RSA_CERTIFICATE_ALGORITHMS.contains(&key_algorithm) {
+        &RSA_CERTIFICATE_ALGORITHMS
+    } else {
+        return accepted_algorithms
+            .iter()
+            .any(|algorithm| algorithm == key_algorithm);
+    };
+
+    accepted_algorithms
+        .iter()
+        .any(|algorithm| equivalent_algorithms.contains(&algorithm.as_str()))
 }
 
 /// Authenticate on session with username and password
@@ -841,6 +1025,85 @@ mod test {
 
     use super::*;
     use crate::mock::ssh as ssh_mock;
+
+    #[test]
+    fn should_filter_non_rsa_pubkey_algorithms() {
+        let rsa_only = vec!["rsa-sha2-256".to_string()];
+        let ed25519_only = vec!["ssh-ed25519".to_string()];
+
+        assert!(!pubkey_algorithm_is_accepted(
+            &ssh_key::Algorithm::Ed25519,
+            &rsa_only,
+        ));
+        assert!(pubkey_algorithm_is_accepted(
+            &ssh_key::Algorithm::Ed25519,
+            &ed25519_only,
+        ));
+        assert!(pubkey_algorithm_is_accepted(
+            &ssh_key::Algorithm::Rsa { hash: None },
+            &rsa_only,
+        ));
+    }
+
+    #[test]
+    fn should_distinguish_plain_and_certificate_pubkey_algorithms() {
+        let ed25519_only = vec!["ssh-ed25519".to_string()];
+        let ed25519_certificate_only = vec!["ssh-ed25519-cert-v01@openssh.com".to_string()];
+        let rsa_only = vec!["rsa-sha2-256".to_string()];
+        let rsa_certificate_only = vec!["rsa-sha2-256-cert-v01@openssh.com".to_string()];
+
+        assert!(!public_key_blob_algorithm_is_accepted(
+            "ssh-ed25519-cert-v01@openssh.com",
+            &ed25519_only,
+        ));
+        assert!(!public_key_blob_algorithm_is_accepted(
+            "ssh-ed25519",
+            &ed25519_certificate_only,
+        ));
+        assert!(!public_key_blob_algorithm_is_accepted(
+            "ssh-rsa-cert-v01@openssh.com",
+            &rsa_only,
+        ));
+        assert!(!public_key_blob_algorithm_is_accepted(
+            "ssh-rsa",
+            &rsa_certificate_only,
+        ));
+        assert!(public_key_blob_algorithm_is_accepted(
+            "ssh-rsa-cert-v01@openssh.com",
+            &rsa_certificate_only,
+        ));
+    }
+
+    #[test]
+    fn should_normalize_rsa_certificate_signature_algorithms() {
+        let configured = vec![
+            "ssh-ed25519-cert-v01@openssh.com".to_string(),
+            "rsa-sha2-512-cert-v01@openssh.com".to_string(),
+            "rsa-sha2-256-cert-v01@openssh.com".to_string(),
+            "ssh-rsa-cert-v01@openssh.com".to_string(),
+        ];
+
+        assert_eq!(
+            libssh2_signature_algorithms(&configured),
+            "ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512,rsa-sha2-256,ssh-rsa"
+        );
+    }
+
+    #[test]
+    fn should_inspect_legacy_pem_private_key_algorithm() {
+        let rsa = openssl::rsa::Rsa::generate(2048).expect("failed to generate RSA key");
+        let pem = rsa
+            .private_key_to_pem()
+            .expect("failed to encode RSA key as PEM");
+        let mut key_file = NamedTempFile::new().expect("failed to create private key file");
+        key_file
+            .write_all(&pem)
+            .expect("failed to write PEM private key");
+
+        let algorithm = private_key_algorithm(key_file.path(), None)
+            .expect("failed to inspect legacy PEM private key");
+        assert!(matches!(algorithm, ssh_key::Algorithm::Rsa { .. }));
+    }
 
     #[test]
     fn should_connect_with_identity_file_from_ssh_config() {
@@ -906,6 +1169,35 @@ mod test {
 
         let session = LibSsh2Session::connect(&opts)
             .expect("failed to fall back to the second configured IdentityFile");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
+    fn should_apply_pubkey_accepted_algorithms_from_ssh_config() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let legacy_config = ssh_mock::create_ssh_config_with_identity_and_pubkey_algorithms(
+            container.port(),
+            key_file.path(),
+            "ssh-rsa",
+        );
+        let opts =
+            SshOpts::new("sftp").config_file(legacy_config.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+        assert!(LibSsh2Session::connect(&opts).is_err());
+
+        let modern_config = ssh_mock::create_ssh_config_with_identity_and_pubkey_algorithms(
+            container.port(),
+            key_file.path(),
+            "rsa-sha2-256",
+        );
+        let opts =
+            SshOpts::new("sftp").config_file(modern_config.path(), ParseRule::ALLOW_UNKNOWN_FIELDS);
+        let session = LibSsh2Session::connect(&opts)
+            .expect("failed to authenticate with the accepted RSA SHA-2 algorithm");
         assert!(
             session
                 .authenticated()

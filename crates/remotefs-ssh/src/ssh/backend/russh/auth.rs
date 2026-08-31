@@ -33,7 +33,13 @@ where
     // Authentication order mirrors the libssh2/libssh backends: SSH agent first,
     // then key, then password.
     if pubkey_authentication && let Some(agent_identity) = opts.ssh_agent_identity.as_ref() {
-        match auth_with_agent(session, runtime, username, agent_identity) {
+        match auth_with_agent(
+            session,
+            runtime,
+            username,
+            agent_identity,
+            ssh_config.params.pubkey_accepted_algorithms.algorithms(),
+        ) {
             Ok(()) => {
                 info!("Authenticated with ssh agent");
                 return Ok(());
@@ -77,6 +83,7 @@ where
                     username,
                     &key_path,
                     opts.password.as_deref(),
+                    ssh_config.params.pubkey_accepted_algorithms.algorithms(),
                 ) {
                     Ok(()) => {
                         info!("Authenticated with key at '{}'", key_path.display());
@@ -114,6 +121,39 @@ where
     }))
 }
 
+/// Return the configured signature hashes accepted for a public key algorithm.
+fn accepted_hash_algorithms(
+    key_algorithm: &russh::keys::Algorithm,
+    accepted_algorithms: &[String],
+    certificate: bool,
+) -> Vec<Option<russh::keys::HashAlg>> {
+    if matches!(key_algorithm, russh::keys::Algorithm::Rsa { .. }) {
+        accepted_algorithms
+            .iter()
+            .filter_map(|algorithm| match (certificate, algorithm.as_str()) {
+                (false, "rsa-sha2-512") | (true, "rsa-sha2-512-cert-v01@openssh.com") => {
+                    Some(Some(russh::keys::HashAlg::Sha512))
+                }
+                (false, "rsa-sha2-256") | (true, "rsa-sha2-256-cert-v01@openssh.com") => {
+                    Some(Some(russh::keys::HashAlg::Sha256))
+                }
+                (false, "ssh-rsa") | (true, "ssh-rsa-cert-v01@openssh.com") => Some(None),
+                _ => None,
+            })
+            .collect()
+    } else {
+        let key_algorithm = if certificate {
+            key_algorithm.to_certificate_type()
+        } else {
+            key_algorithm.as_ref().to_string()
+        };
+        if !accepted_algorithms.contains(&key_algorithm) {
+            return Vec::new();
+        }
+        vec![None]
+    }
+}
+
 /// Authenticate with an RSA private key file.
 fn auth_with_rsa_key<T>(
     session: &mut Handle<T>,
@@ -121,6 +161,7 @@ fn auth_with_rsa_key<T>(
     username: &str,
     key_path: &Path,
     passphrase: Option<&str>,
+    accepted_algorithms: &[String],
 ) -> RemoteResult<()>
 where
     T: Handler,
@@ -141,23 +182,18 @@ where
     })?;
     let private_key = Arc::new(private_key);
 
-    // For RSA keys, `None` maps to the legacy `ssh-rsa` (SHA-1) signature, which modern
-    // OpenSSH servers reject by default. Try the modern `rsa-sha2-512` / `rsa-sha2-256`
-    // signature algorithms first, falling back to SHA-1 for legacy servers.
-    // For non-RSA keys the hash is ignored, so a single `None` attempt is enough.
-    let hash_algs: &[Option<russh::keys::HashAlg>] = if private_key.algorithm().is_rsa() {
-        &[
-            Some(russh::keys::HashAlg::Sha512),
-            Some(russh::keys::HashAlg::Sha256),
-            None,
-        ]
-    } else {
-        &[None]
-    };
+    let key_algorithm = private_key.algorithm();
+    let hash_algs = accepted_hash_algorithms(&key_algorithm, accepted_algorithms, false);
+    if hash_algs.is_empty() {
+        return Err(RemoteError::new_ex(
+            RemoteErrorType::AuthenticationFailed,
+            format!("public key algorithm {key_algorithm} is not accepted by SSH config"),
+        ));
+    }
 
     let mut last_failure = None;
     for hash_alg in hash_algs {
-        let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(private_key.clone(), *hash_alg);
+        let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(private_key.clone(), hash_alg);
 
         let auth_result = runtime
             .block_on(async {
@@ -230,6 +266,7 @@ fn auth_with_agent<T>(
     runtime: &Runtime,
     username: &str,
     identity: &crate::SshAgentIdentity,
+    accepted_algorithms: &[String],
 ) -> RemoteResult<()>
 where
     T: Handler,
@@ -256,7 +293,16 @@ where
         let mut last_err = None;
         for agent_identity in identities {
             let pubkey = agent_identity.public_key().into_owned();
-            let blob = pubkey.to_bytes().unwrap_or_default();
+            let (blob, key_algorithm, certificate) = match &agent_identity {
+                russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
+                    (key.to_bytes().unwrap_or_default(), key.algorithm(), false)
+                }
+                russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => (
+                    certificate.to_bytes().unwrap_or_default(),
+                    certificate.algorithm(),
+                    true,
+                ),
+            };
             if !identity.pubkey_matches(&blob) {
                 continue;
             }
@@ -265,23 +311,33 @@ where
                 pubkey.fingerprint(russh::keys::HashAlg::Sha256)
             );
 
-            // Same SHA-1 caveat as direct key auth: for RSA identities request the
-            // modern rsa-sha2-512/256 signature algorithms before the legacy ssh-rsa.
-            let hash_algs: &[Option<russh::keys::HashAlg>] = if pubkey.algorithm().is_rsa() {
-                &[
-                    Some(russh::keys::HashAlg::Sha512),
-                    Some(russh::keys::HashAlg::Sha256),
-                    None,
-                ]
-            } else {
-                &[None]
-            };
+            let hash_algs =
+                accepted_hash_algorithms(&key_algorithm, accepted_algorithms, certificate);
 
             for hash_alg in hash_algs {
-                match session
-                    .authenticate_publickey_with(username, pubkey.clone(), *hash_alg, &mut agent)
-                    .await
-                {
+                let auth_result = match &agent_identity {
+                    russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
+                        session
+                            .authenticate_publickey_with(
+                                username,
+                                key.clone(),
+                                hash_alg,
+                                &mut agent,
+                            )
+                            .await
+                    }
+                    russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => {
+                        session
+                            .authenticate_certificate_with(
+                                username,
+                                certificate.clone(),
+                                hash_alg,
+                                &mut agent,
+                            )
+                            .await
+                    }
+                };
+                match auth_result {
                     Ok(russh::client::AuthResult::Success) => return Ok(()),
                     Ok(russh::client::AuthResult::Failure {
                         remaining_methods, ..
@@ -320,6 +376,35 @@ where
     })
 }
 
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn should_distinguish_plain_and_certificate_agent_algorithms() {
+        let rsa = russh::keys::Algorithm::Rsa { hash: None };
+        let ed25519 = russh::keys::Algorithm::Ed25519;
+        let plain = vec!["rsa-sha2-256".to_string()];
+        let certificate = vec!["rsa-sha2-256-cert-v01@openssh.com".to_string()];
+        let ed25519_plain = vec!["ssh-ed25519".to_string()];
+        let ed25519_certificate = vec!["ssh-ed25519-cert-v01@openssh.com".to_string()];
+
+        assert!(accepted_hash_algorithms(&rsa, &plain, true).is_empty());
+        assert!(accepted_hash_algorithms(&rsa, &certificate, false).is_empty());
+        assert_eq!(
+            accepted_hash_algorithms(&rsa, &certificate, true),
+            vec![Some(russh::keys::HashAlg::Sha256)]
+        );
+        assert!(accepted_hash_algorithms(&ed25519, &ed25519_plain, true).is_empty());
+        assert!(accepted_hash_algorithms(&ed25519, &ed25519_certificate, false).is_empty());
+        assert_eq!(
+            accepted_hash_algorithms(&ed25519, &ed25519_certificate, true),
+            vec![None]
+        );
+    }
+}
+
 /// The SSH agent is only reachable over a Unix socket; on other platforms this is a no-op
 /// that simply reports the agent as unavailable so the remaining methods are tried.
 #[cfg(not(unix))]
@@ -328,6 +413,7 @@ fn auth_with_agent<T>(
     _runtime: &Runtime,
     _username: &str,
     _identity: &crate::SshAgentIdentity,
+    _accepted_algorithms: &[String],
 ) -> RemoteResult<()>
 where
     T: Handler,

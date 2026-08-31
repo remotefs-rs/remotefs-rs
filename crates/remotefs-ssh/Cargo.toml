@@ -25,8 +25,14 @@ default = ["find", "libssh2"]
 find = ["remotefs/find"]
 libssh = ["dep:if-addrs", "dep:libssh-rs", "dep:socket2"]
 libssh-vendored = ["libssh", "libssh-rs/vendored", "libssh-rs/vendored-openssl"]
-libssh2 = ["dep:if-addrs", "dep:socket2", "dep:ssh2"]
-libssh2-vendored = ["libssh2", "ssh2/vendored-openssl"]
+libssh2 = [
+  "dep:if-addrs",
+  "dep:openssl",
+  "dep:socket2",
+  "dep:ssh-key",
+  "dep:ssh2",
+]
+libssh2-vendored = ["libssh2", "openssl/vendored", "ssh2/vendored-openssl"]
 no-log = ["log/max_level_off"]
 russh = [
   "dep:if-addrs",
@@ -42,10 +48,12 @@ if-addrs = { version = "0.15", optional = true }
 lazy-regex = "3"
 libssh-rs = { version = "0.3", optional = true }
 log = "0.4"
+openssl = { version = "0.10", optional = true }
 remotefs = "0.3"
 russh = { version = "0.63", optional = true }
 russh-sftp = { version = "2", optional = true }
 socket2 = { version = "0.6", optional = true }
+ssh-key = { version = "0.7.0-rc.11", optional = true }
 ssh2 = { version = "0.9", optional = true }
 ssh2-config = "0.7"
 tokio = { version = "1", default-features = false, features = ["net", "rt", "time"], optional = true }

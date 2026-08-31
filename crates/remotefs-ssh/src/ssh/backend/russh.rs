@@ -1452,6 +1452,39 @@ mod test {
     }
 
     #[test]
+    fn should_apply_pubkey_accepted_algorithms_from_ssh_config() {
+        use crate::ssh::container::OpensshServer;
+
+        let container = OpensshServer::start();
+        let key_file = ssh_mock::create_key_file();
+        let legacy_config = ssh_mock::create_ssh_config_with_identity_and_pubkey_algorithms(
+            container.port(),
+            key_file.path(),
+            "ssh-rsa",
+        );
+        let opts = SshOpts::new("sftp")
+            .config_file(legacy_config.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .runtime(test_runtime());
+        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
+
+        let modern_config = ssh_mock::create_ssh_config_with_identity_and_pubkey_algorithms(
+            container.port(),
+            key_file.path(),
+            "rsa-sha2-256",
+        );
+        let opts = SshOpts::new("sftp")
+            .config_file(modern_config.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .runtime(test_runtime());
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("failed to authenticate with the accepted RSA SHA-2 algorithm");
+        assert!(
+            session
+                .authenticated()
+                .expect("failed to query session state")
+        );
+    }
+
+    #[test]
     #[cfg(unix)]
     fn should_connect_to_ssh_server_auth_ssh_agent() {
         use std::process::Command;
