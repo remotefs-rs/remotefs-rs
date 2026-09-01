@@ -24,7 +24,7 @@
 //!
 //! Here is a basic usage example, with the `Smb` client.
 //!
-//! ```rust
+//! ```rust,no_run
 //!
 //! // import remotefs trait and client
 //! use remotefs::{RemoteFs, fs::UnixPex};
