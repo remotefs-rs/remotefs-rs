@@ -4,7 +4,7 @@ version = "0.3.1"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-smb"
-edition = "2021"
+edition = "2024"
 homepage = "https://veeso.github.io/remotefs-rs-smb/"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
@@ -14,27 +14,27 @@ repository = "https://github.com/remotefs-rs/remotefs-rs-smb"
 description = "remotefs SMB client library"
 
 [dependencies]
-log = "^0.4"
+log = "0.4"
 remotefs = "^0.3"
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]
-libc = "^0.2"
-pavao = "^0.2.12"
+libc = "0.2"
+pavao = "0.3"
 
 [target."cfg(target_family = \"windows\")"]
 [target."cfg(target_family = \"windows\")".dependencies]
-filetime = "^0.2"
-windows-sys = { version = "^0.59", features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
+filetime = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
 
 [dev-dependencies]
 anyhow = "^1"
-argh = "^0.1"
-env_logger = "^0.11"
-pretty_assertions = "^1"
-rpassword = "7.2"
-serial_test = "^3"
-tempfile = "^3"
+argh = "0.1"
+env_logger = "0.11"
+pretty_assertions = "1"
+rpassword = "7"
+serial_test = "3"
+tempfile = "3"
 
 [features]
 default = ["find"]

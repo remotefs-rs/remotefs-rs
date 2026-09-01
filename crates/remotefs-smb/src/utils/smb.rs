@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use libc::mode_t;
 use pavao::SmbStat;
-use remotefs::fs::{FileType, Metadata, UnixPex};
 use remotefs::File;
+use remotefs::fs::{FileType, Metadata, UnixPex};
 
 /// Convert `SmbStat` to `File`
 pub fn smbstat_to_file<S: AsRef<str>>(uri: S, stat: SmbStat) -> File {
