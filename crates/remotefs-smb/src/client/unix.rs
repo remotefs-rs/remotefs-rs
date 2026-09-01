@@ -336,11 +336,9 @@ mod test {
         // Append to file
         let file_data = "Hello, world!\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .append_file(p, &Metadata::default(), Box::new(reader))
-                .is_err()
-        );
+        assert!(client
+            .append_file(p, &Metadata::default(), Box::new(reader))
+            .is_err());
         finalize_client(client);
     }
 
@@ -362,11 +360,9 @@ mod test {
     fn should_not_change_directory() {
         crate::mock::logger();
         let mut client = init_client();
-        assert!(
-            client
-                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-                .is_err()
-        );
+        assert!(client
+            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+            .is_err());
         finalize_client(client);
     }
 
@@ -380,11 +376,9 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
         finalize_client(client);
     }
@@ -396,11 +390,9 @@ mod test {
         crate::mock::logger();
         let mut client = init_client();
         // create directory
-        assert!(
-            client
-                .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
+        assert!(client
+            .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
+            .is_ok());
         finalize_client(client);
     }
 
@@ -411,11 +403,9 @@ mod test {
         crate::mock::logger();
         let mut client = init_client();
         // create directory
-        assert!(
-            client
-                .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
+        assert!(client
+            .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
+            .is_ok());
         assert_eq!(
             client
                 .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
@@ -434,14 +424,12 @@ mod test {
         crate::mock::logger();
         let mut client = init_client();
         // create directory
-        assert!(
-            client
-                .create_dir(
-                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                    UnixPex::from(0o755)
-                )
-                .is_err()
-        );
+        assert!(client
+            .create_dir(
+                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                UnixPex::from(0o755)
+            )
+            .is_err());
         finalize_client(client);
     }
 
@@ -477,11 +465,9 @@ mod test {
         let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_err()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_err());
         finalize_client(client);
     }
 
@@ -506,11 +492,9 @@ mod test {
         let p = Path::new("/cargo-test/a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Verify size
         assert_eq!(client.exists(p).ok().unwrap(), true);
         assert_eq!(
@@ -603,19 +587,15 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         // Verify size
         let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
         assert!(client.mov(p, dest).is_err());
-        assert!(
-            client
-                .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-                .is_err()
-        );
+        assert!(client
+            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
+            .is_err());
         finalize_client(client);
     }
 
@@ -629,11 +609,9 @@ mod test {
         let p = Path::new("/cargo-test/a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default().size(10), Box::new(reader))
-                .is_ok()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
+            .is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
         assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
@@ -648,11 +626,9 @@ mod test {
         let mut client = init_client();
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(
-            client
-                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-                .is_err()
-        );
+        assert!(client
+            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
+            .is_err());
         finalize_client(client);
     }
 
@@ -757,11 +733,9 @@ mod test {
         let p = Path::new("/cargo-test/a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default(), Box::new(reader))
-                .is_ok()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok());
         finalize_client(client);
     }
 
@@ -773,24 +747,22 @@ mod test {
         let mut client = init_client();
         // Create file
         let p = Path::new("bbbbb/cccc/a.sh");
-        assert!(
-            client
-                .setstat(
-                    p,
-                    Metadata {
-                        accessed: None,
-                        created: None,
-                        file_type: remotefs::fs::FileType::File,
-                        gid: Some(1),
-                        mode: Some(UnixPex::from(0o755)),
-                        modified: None,
-                        size: 7,
-                        symlink: None,
-                        uid: Some(1),
-                    }
-                )
-                .is_err()
-        );
+        assert!(client
+            .setstat(
+                p,
+                Metadata {
+                    accessed: None,
+                    created: None,
+                    file_type: remotefs::fs::FileType::File,
+                    gid: Some(1),
+                    mode: Some(UnixPex::from(0o755)),
+                    modified: None,
+                    size: 7,
+                    symlink: None,
+                    uid: Some(1),
+                }
+            )
+            .is_err());
         finalize_client(client);
     }
 
@@ -804,11 +776,9 @@ mod test {
         let p = Path::new("/cargo-test/a.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(p, &Metadata::default().size(7), Box::new(reader))
-                .is_ok()
-        );
+        assert!(client
+            .create_file(p, &Metadata::default().size(7), Box::new(reader))
+            .is_ok());
         let entry = client.stat(p).ok().unwrap();
         assert_eq!(entry.name(), "a.sh");
         let mut expected_path = client.pwd().ok().unwrap();
