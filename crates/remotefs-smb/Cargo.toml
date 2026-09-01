@@ -1,17 +1,17 @@
 [package]
+name = "remotefs-smb"
+version = "0.3.1"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
-description = "remotefs SMB client library"
 documentation = "https://docs.rs/remotefs-smb"
 edition = "2021"
 homepage = "https://veeso.github.io/remotefs-rs-smb/"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
 license = "MIT"
-name = "remotefs-smb"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-smb"
-version = "0.3.1"
+description = "remotefs SMB client library"
 
 [dependencies]
 log = "^0.4"
@@ -25,10 +25,7 @@ pavao = "^0.2.12"
 [target."cfg(target_family = \"windows\")"]
 [target."cfg(target_family = \"windows\")".dependencies]
 filetime = "^0.2"
-windows-sys = { version = "^0.59", features = [
-  "Win32_NetworkManagement_WNet",
-  "Win32_Foundation",
-] }
+windows-sys = { version = "^0.59", features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
 
 [dev-dependencies]
 anyhow = "^1"
@@ -47,6 +44,10 @@ no-log = ["log/max_level_off"]
 vendored = ["pavao/vendored"]
 # tests
 with-containers = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
 name = "tree"
