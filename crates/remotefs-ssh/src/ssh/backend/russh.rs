@@ -8,7 +8,7 @@ use std::future::Future as _;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
@@ -24,7 +24,7 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::runtime::Runtime;
 use tokio::time::{Instant, Sleep};
 
-use super::{SshSession, WriteMode, interface, socket};
+use super::{MAX_FORWARD_CONNECTIONS, SshSession, WriteMode, interface, socket};
 use crate::SshOpts;
 use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
@@ -90,10 +90,26 @@ struct RemoteForwardRoute {
 #[derive(Default)]
 struct RemoteForwardState {
     active: AtomicBool,
+    active_channels: AtomicUsize,
     routes: RwLock<Vec<RemoteForwardRoute>>,
 }
 
+struct ForwardChannelPermit {
+    state: Arc<RemoteForwardState>,
+}
+
 impl RemoteForwardState {
+    fn try_acquire_channel(self: &Arc<Self>) -> Option<ForwardChannelPermit> {
+        self.active_channels
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < MAX_FORWARD_CONNECTIONS).then_some(active + 1)
+            })
+            .ok()
+            .map(|_| ForwardChannelPermit {
+                state: Arc::clone(self),
+            })
+    }
+
     fn tcp_route(
         &self,
         connected_address: &str,
@@ -147,6 +163,12 @@ impl RemoteForwardState {
                 )
             })
             .cloned()
+    }
+}
+
+impl Drop for ForwardChannelPermit {
+    fn drop(&mut self) {
+        self.state.active_channels.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -259,7 +281,11 @@ where
             .remote_forwards
             .tcp_route(connected_address, connected_port)
         {
-            forward_remote_channel(channel, reply, route).await;
+            let Some(permit) = self.remote_forwards.try_acquire_channel() else {
+                reply.reject(ChannelOpenFailure::ResourceShortage).await;
+                return Ok(());
+            };
+            forward_remote_channel(channel, reply, route, permit).await;
             return Ok(());
         }
         self.inner
@@ -283,7 +309,11 @@ where
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if let Some(route) = self.remote_forwards.streamlocal_route(socket_path) {
-            forward_remote_channel(channel, reply, route).await;
+            let Some(permit) = self.remote_forwards.try_acquire_channel() else {
+                reply.reject(ChannelOpenFailure::ResourceShortage).await;
+                return Ok(());
+            };
+            forward_remote_channel(channel, reply, route, permit).await;
             return Ok(());
         }
         self.inner
@@ -304,7 +334,11 @@ where
                 .await;
         }
 
-        forward_agent_channel(channel, reply).await;
+        let Some(permit) = self.remote_forwards.try_acquire_channel() else {
+            reply.reject(ChannelOpenFailure::ResourceShortage).await;
+            return Ok(());
+        };
+        forward_agent_channel(channel, reply, permit).await;
         Ok(())
     }
 
@@ -472,7 +506,11 @@ where
 }
 
 #[cfg(unix)]
-async fn forward_agent_channel(channel: Channel<Msg>, reply: ChannelOpenHandle) {
+async fn forward_agent_channel(
+    channel: Channel<Msg>,
+    reply: ChannelOpenHandle,
+    permit: ForwardChannelPermit,
+) {
     let agent = match russh::keys::agent::client::AgentClient::connect_env().await {
         Ok(agent) => agent,
         Err(err) => {
@@ -483,6 +521,7 @@ async fn forward_agent_channel(channel: Channel<Msg>, reply: ChannelOpenHandle) 
 
     reply.accept().await;
     tokio::spawn(async move {
+        let _permit = permit;
         let mut channel = channel.into_stream();
         let mut agent = agent.into_inner();
         if let Err(err) = tokio::io::copy_bidirectional(&mut channel, &mut agent).await {
@@ -492,7 +531,11 @@ async fn forward_agent_channel(channel: Channel<Msg>, reply: ChannelOpenHandle) 
 }
 
 #[cfg(not(unix))]
-async fn forward_agent_channel(_channel: Channel<Msg>, _reply: ChannelOpenHandle) {
+async fn forward_agent_channel(
+    _channel: Channel<Msg>,
+    _reply: ChannelOpenHandle,
+    _permit: ForwardChannelPermit,
+) {
     warn!("SSH agent forwarding is unavailable on this platform");
 }
 
@@ -500,11 +543,13 @@ async fn forward_remote_channel(
     channel: Channel<Msg>,
     reply: ChannelOpenHandle,
     route: RemoteForwardRoute,
+    permit: ForwardChannelPermit,
 ) {
     match route.destination {
         Some(RemoteForwardDestination::Host { host, port }) => {
             reply.accept().await;
             tokio::spawn(async move {
+                let _permit = permit;
                 let destination = connect_remote_tcp(&host, port, route.connect_timeout).await;
                 match destination {
                     Ok(destination) => relay_remote_channel(channel, destination).await,
@@ -518,11 +563,12 @@ async fn forward_remote_channel(
             });
         }
         Some(RemoteForwardDestination::UnixSocket(path)) => {
-            forward_remote_unix_channel(channel, reply, path, route.connect_timeout).await;
+            forward_remote_unix_channel(channel, reply, path, route.connect_timeout, permit).await;
         }
         None => {
             reply.accept().await;
             tokio::spawn(async move {
+                let _permit = permit;
                 let mut channel = channel.into_stream();
                 match socks_connect(&mut channel, route.connect_timeout).await {
                     Ok(mut destination) => {
@@ -574,9 +620,11 @@ async fn forward_remote_unix_channel(
     reply: ChannelOpenHandle,
     path: PathBuf,
     connect_timeout: std::time::Duration,
+    permit: ForwardChannelPermit,
 ) {
     reply.accept().await;
     tokio::spawn(async move {
+        let _permit = permit;
         match connect_remote_unix(&path, connect_timeout).await {
             Ok(destination) => relay_remote_channel(channel, destination).await,
             Err(err) => {
@@ -617,6 +665,7 @@ async fn forward_remote_unix_channel(
     reply: ChannelOpenHandle,
     path: PathBuf,
     _connect_timeout: std::time::Duration,
+    _permit: ForwardChannelPermit,
 ) {
     warn!(
         "Unix socket RemoteForward destination {} is unavailable on this platform",
@@ -894,43 +943,52 @@ fn connect_with_timeout<T>(
 where
     T: Handler + Send + 'static,
 {
-    let deadline = Instant::now() + timeout;
-    let stream = runtime
-        .block_on(async {
-            tokio::time::timeout_at(
-                deadline,
-                connect_tcp(
-                    target.address,
-                    target.bind_address,
-                    target.bind_interface,
-                    tcp_keep_alive,
-                ),
-            )
-            .await
-        })
-        .map_err(|err| {
-            let msg = format!("SSH connection timed out: {err}");
-            error!("{msg}");
-            RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
-        })?
-        .map_err(|err| {
-            let msg = format!("SSH connection failed: {err}");
-            error!("{msg}");
-            RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
-        })?;
+    let deadline = (!timeout.is_zero())
+        .then(|| Instant::now().checked_add(timeout))
+        .flatten();
+    let connect = || {
+        connect_tcp(
+            target.address,
+            target.bind_address,
+            target.bind_interface,
+            tcp_keep_alive,
+        )
+    };
+    let stream = match deadline {
+        Some(deadline) => runtime
+            .block_on(async { tokio::time::timeout_at(deadline, connect()).await })
+            .map_err(|err| {
+                let msg = format!("SSH connection timed out: {err}");
+                error!("{msg}");
+                RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+            })?,
+        None => runtime.block_on(connect()),
+    }
+    .map_err(|err| {
+        let msg = format!("SSH connection failed: {err}");
+        error!("{msg}");
+        RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+    })?;
     if config.nodelay
         && let Err(err) = stream.set_nodelay(true)
     {
         warn!("Failed to enable TCP_NODELAY: {err}");
     }
 
-    let deadline_active = Arc::new(AtomicBool::new(true));
-    let connection_deadline_active = deadline_active.clone();
-    let session_result = runtime.block_on(async {
-        let stream = ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
-        client::connect_stream(config, stream, handler).await
-    });
-    deadline_active.store(false, Ordering::Release);
+    let session_result = match deadline {
+        Some(deadline) => {
+            let deadline_active = Arc::new(AtomicBool::new(true));
+            let connection_deadline_active = deadline_active.clone();
+            let result = runtime.block_on(async {
+                let stream =
+                    ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
+                client::connect_stream(config, stream, handler).await
+            });
+            deadline_active.store(false, Ordering::Release);
+            result
+        }
+        None => runtime.block_on(async { client::connect_stream(config, stream, handler).await }),
+    };
     session_result.map_err(|err| {
         let msg = format!("SSH connection failed: {err:?}");
         error!("{msg}");
@@ -1273,20 +1331,23 @@ where
             target.params.forward_agent.unwrap_or(false),
             remote_forwards.clone(),
         );
-        let result = runtime.block_on(async {
-            tokio::time::timeout(target.connection_timeout, async {
-                let channel = jump_session
-                    .channel_open_direct_tcpip(
-                        target.resolved_host.clone(),
-                        u32::from(target.port),
-                        "127.0.0.1",
-                        0,
-                    )
-                    .await?;
-                client::connect_stream(config.clone(), channel.into_stream(), handler).await
-            })
-            .await
-        });
+        let connect = async {
+            let channel = jump_session
+                .channel_open_direct_tcpip(
+                    target.resolved_host.clone(),
+                    u32::from(target.port),
+                    "127.0.0.1",
+                    0,
+                )
+                .await?;
+            client::connect_stream(config.clone(), channel.into_stream(), handler).await
+        };
+        let result = if target.connection_timeout.is_zero() {
+            Ok(runtime.block_on(connect))
+        } else {
+            runtime
+                .block_on(async { tokio::time::timeout(target.connection_timeout, connect).await })
+        };
         match result {
             Ok(Ok(session)) => return Ok(session),
             Ok(Err(err)) if attempt < target.connection_attempts.max(1) => {
@@ -2360,6 +2421,22 @@ mod test {
     }
 
     #[test]
+    fn should_limit_concurrent_forwarded_channels() {
+        let state = Arc::new(RemoteForwardState::default());
+        let mut permits = (0..MAX_FORWARD_CONNECTIONS)
+            .map(|_| {
+                state
+                    .try_acquire_channel()
+                    .expect("forwarded channel should remain within the limit")
+            })
+            .collect::<Vec<_>>();
+
+        assert!(state.try_acquire_channel().is_none());
+        permits.pop();
+        assert!(state.try_acquire_channel().is_some());
+    }
+
+    #[test]
     fn should_apply_ca_signature_algorithms_to_host_certificates() {
         let certificate = russh::keys::Certificate::from_openssh(ssh_mock::MOCK_USER_CERTIFICATE)
             .expect("failed to parse test certificate");
@@ -2580,6 +2657,28 @@ mod test {
             session.cmd("pwd").expect("command through proxy failed").0,
             0
         );
+    }
+
+    #[test]
+    fn should_disable_proxy_jump_timeout_when_zero() {
+        use crate::ssh::container::ProxyJumpServers;
+
+        let servers = ProxyJumpServers::start();
+        let config_file = ssh_mock::create_ssh_config_with_proxy_jump(
+            &servers.target_host,
+            2222,
+            servers.first_jump.port(),
+            &servers.second_jump_host,
+        );
+        let opts = SshOpts::new("target")
+            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+            .connection_timeout(Duration::ZERO)
+            .password("password")
+            .runtime(test_runtime());
+
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("zero connection timeout should allow ProxyJump handshakes to complete");
+        session.disconnect().expect("failed to disconnect");
     }
 
     #[test]
@@ -2943,6 +3042,21 @@ mod test {
             server_elapsed < Duration::from_secs(1),
             "connection remained open after timeout: {server_elapsed:?}"
         );
+    }
+
+    #[test]
+    fn should_disable_connection_timeout_when_zero() {
+        let container = crate::ssh::container::OpensshServer::start();
+        let opts = SshOpts::new("127.0.0.1")
+            .port(container.port())
+            .username("sftp")
+            .password("password")
+            .connection_timeout(Duration::ZERO)
+            .runtime(test_runtime());
+
+        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
+            .expect("zero connection timeout should allow the connection to complete");
+        session.disconnect().expect("failed to disconnect");
     }
 
     #[test]

@@ -38,6 +38,9 @@ pub use self::libssh2::LibSsh2Session;
 pub use self::russh::{NoCheckServerKey, RusshSession};
 use crate::SshOpts;
 
+#[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
+const MAX_FORWARD_CONNECTIONS: usize = 64;
+
 /// SSH session trait.
 ///
 /// Provides SSH channel functions

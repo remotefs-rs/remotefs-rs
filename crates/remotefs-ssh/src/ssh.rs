@@ -156,7 +156,10 @@ impl SshOpts {
         self
     }
 
-    /// Set connection timeout
+    /// Set connection timeout.
+    ///
+    /// A zero duration disables the connection timeout.
+    ///
     /// This option will override an eventual connection timeout specified for the current host in the ssh configuration
     pub fn connection_timeout(mut self, timeout: Duration) -> Self {
         self.connection_timeout = Some(timeout);
@@ -179,18 +182,33 @@ impl SshOpts {
     /// User and system SSH configuration files are not loaded implicitly. Call this method to
     /// apply SSH configuration from the provided file.
     ///
-    /// The supported options are:
+    /// The supported options, depending on the selected backend and platform, are:
     ///
-    /// - Host block
-    /// - HostName
-    /// - Port
-    /// - User
+    /// - AddKeysToAgent
+    /// - BindAddress
+    /// - BindInterface
+    /// - CASignatureAlgorithms
+    /// - CertificateFile
     /// - Ciphers
-    /// - MACs
-    /// - KexAlgorithms
-    /// - HostKeyAlgorithms
+    /// - Compression
     /// - ConnectionAttempts
     /// - ConnectTimeout
+    /// - ForwardAgent
+    /// - Host block
+    /// - HostKeyAlgorithms
+    /// - HostName
+    /// - IdentityFile
+    /// - IgnoreUnknown
+    /// - KexAlgorithms
+    /// - MACs
+    /// - Port
+    /// - ProxyJump
+    /// - PubkeyAcceptedAlgorithms
+    /// - PubkeyAuthentication
+    /// - RemoteForward
+    /// - ServerAliveInterval
+    /// - TCPKeepAlive
+    /// - User
     pub fn config_file<P: AsRef<Path>>(mut self, p: P, rules: ParseRule) -> Self {
         self.config_file = Some(p.as_ref().to_path_buf());
         self.parse_rules = rules;

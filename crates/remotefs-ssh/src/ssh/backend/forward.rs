@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use ssh2_config::{RemoteForwardDestination, RemoteForwardListen};
 
-pub(super) const MAX_FORWARD_CONNECTIONS: usize = 64;
 const CONNECTOR_THREADS: usize = 8;
 const CONNECTOR_QUEUE_CAPACITY: usize = 64;
 

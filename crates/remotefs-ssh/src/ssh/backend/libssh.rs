@@ -16,12 +16,11 @@ use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use ssh2_config::{RemoteForwardDestination, RemoteForwardListen};
 
-use super::{SshSession, interface, socket};
+use super::{MAX_FORWARD_CONNECTIONS, SshSession, interface, socket};
 use crate::SshOpts;
 use crate::ssh::backend::Sftp;
 use crate::ssh::backend::forward::{
-    ChannelIo, ForwardConnection, ForwardWorker, MAX_FORWARD_CONNECTIONS,
-    tcp_remote_forward_endpoint,
+    ChannelIo, ForwardConnection, ForwardWorker, tcp_remote_forward_endpoint,
 };
 use crate::ssh::config::Config;
 
@@ -47,13 +46,21 @@ fn connect_with_timeout(
     timeout: Duration,
 ) -> libssh_rs::SshResult<()> {
     session.set_blocking(false);
-    let started = Instant::now();
+    let deadline = (!timeout.is_zero())
+        .then(|| Instant::now().checked_add(timeout))
+        .flatten();
     let result = loop {
         match session.connect() {
             Ok(()) => break Ok(()),
-            Err(libssh_rs::Error::TryAgain) if started.elapsed() < timeout => {
-                let remaining = timeout.saturating_sub(started.elapsed());
-                std::thread::sleep(Duration::from_millis(10).min(remaining));
+            Err(libssh_rs::Error::TryAgain)
+                if deadline.is_none_or(|deadline| Instant::now() < deadline) =>
+            {
+                let delay = deadline.map_or(Duration::from_millis(10), |deadline| {
+                    deadline
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(10))
+                });
+                std::thread::sleep(delay);
             }
             Err(libssh_rs::Error::TryAgain) => {
                 break Err(libssh_rs::Error::fatal(format!(
@@ -1388,7 +1395,9 @@ fn read_command_with_agent_forwarding(
                 }
             }
 
-            while let Some(agent_channel) = session.accept_agent_forward() {
+            while relays.len() < MAX_FORWARD_CONNECTIONS
+                && let Some(agent_channel) = session.accept_agent_forward()
+            {
                 match AgentForwardRelay::connect(agent_channel) {
                     Ok(relay) => relays.push(relay),
                     Err(err) => warn!("Could not connect forwarded SSH agent channel: {err}"),
@@ -1649,6 +1658,20 @@ mod tests {
             server_elapsed < Duration::from_secs(1),
             "connection remained open after timeout: {server_elapsed:?}"
         );
+    }
+
+    #[test]
+    fn should_disable_connection_timeout_when_zero() {
+        let container = OpensshServer::start();
+        let opts = SshOpts::new("127.0.0.1")
+            .port(container.port())
+            .username("sftp")
+            .password("password")
+            .connection_timeout(Duration::ZERO);
+
+        let session = LibSshSession::connect(&opts)
+            .expect("zero connection timeout should allow the connection to complete");
+        session.disconnect().expect("failed to disconnect");
     }
 
     #[test]

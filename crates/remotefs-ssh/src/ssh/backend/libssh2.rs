@@ -13,11 +13,10 @@ use socket2::{Domain, Protocol, Socket, Type};
 use ssh2::{FileStat, OpenType, RenameFlags};
 use ssh2_config::{RemoteForwardDestination, RemoteForwardListen};
 
-use super::{SshSession, interface, socket};
+use super::{MAX_FORWARD_CONNECTIONS, SshSession, interface, socket};
 use crate::ssh::backend::Sftp;
 use crate::ssh::backend::forward::{
-    ChannelIo, ForwardConnection, ForwardWorker, MAX_FORWARD_CONNECTIONS,
-    tcp_remote_forward_endpoint,
+    ChannelIo, ForwardConnection, ForwardWorker, tcp_remote_forward_endpoint,
 };
 use crate::ssh::backend::keepalive::ServerKeepalive;
 use crate::ssh::config::Config;
