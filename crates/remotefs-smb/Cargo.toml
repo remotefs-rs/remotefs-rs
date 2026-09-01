@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-smb"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-smb"
@@ -11,6 +11,7 @@ keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-smb"
+rust-version = "1.88.0"
 description = "remotefs SMB client library"
 
 [dependencies]
