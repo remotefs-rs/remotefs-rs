@@ -39,22 +39,17 @@
       src="https://img.shields.io/badge/donate-ko--fi-red"
       alt="Ko-fi"
   /></a>
+  <a href="https://conventionalcommits.org">
+    <img
+      src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white"
+      alt="Conventional commits"
+  /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-smb/workflows/Linux/badge.svg"
-      alt="Linux CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-smb/workflows/MacOS/badge.svg"
-      alt="MacOS CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-smb/actions"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-smb/workflows/Windows/badge.svg"
-      alt="Windows CI"
+      src="https://github.com/remotefs-rs/remotefs-rs-smb/actions/workflows/ci.yml/badge.svg"
+      alt="CI"
   /></a>
   <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-smb"
     ><img
@@ -87,7 +82,7 @@ remotefs-smb = "^0.3"
 
 these features are supported:
 
-- `find`: enable `find()` method on client (*enabled by default*)
+- `find`: enable `find()` method on client (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 - `vendored`: build pavao with **vendored libsmbclient**
 
@@ -206,7 +201,7 @@ The following table states the compatibility for the client client and the remot
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | Support (UNIX) | Support (Win ) |
-|----------------|----------------|----------------|
+| -------------- | -------------- | -------------- |
 | append_file    | Yes            | Yes            |
 | append         | No             | Yes            |
 | change_dir     | Yes            | Yes            |
@@ -227,6 +222,34 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | setstat        | No             | Yes            |
 | stat           | Yes            | Yes            |
 | symlink        | Yes            | Yes            |
+
+---
+
+## Development 🛠️
+
+Every task runs through a [`just`](https://just.systems) recipe. Run `just`
+to list them all.
+
+```sh
+just build                 # cargo build --all-targets
+just test                  # cargo test --lib, then --doc
+just coverage              # cargo llvm-cov, writes lcov.info
+just fmt                   # dprint fmt (Markdown, Rust, TOML, YAML)
+just fmt_check             # dprint check
+just lint "-- -D warnings" # clippy with all features
+just doc                   # cargo doc --all-features
+just deny                  # cargo deny check
+just scan_secrets          # trufflehog filesystem
+just check                 # the full local quality gate
+```
+
+`just check` chains `fmt_check`, Clippy with warnings denied, `doc`, `deny`,
+and `test`, and is the required gate before opening a pull request. Most
+tests need the Samba container from `tests/docker-compose.yml` running
+locally (`docker compose -f tests/docker-compose.yml up -d --build`) before
+`just test "--no-default-features --features find,with-containers"` will pass.
+
+See [AGENTS.md](AGENTS.md) for the full contract.
 
 ---
 
