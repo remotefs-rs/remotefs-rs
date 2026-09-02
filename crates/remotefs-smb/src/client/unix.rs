@@ -856,8 +856,7 @@ mod test {
 
     #[cfg(feature = "with-containers")]
     fn init_client() -> SmbFs {
-        let _ = std::fs::remove_dir_all(Path::new("/tmp/cargo-test"));
-        let client = SmbFs::try_new(
+        let mut client = SmbFs::try_new(
             SmbCredentials::default()
                 .server("smb://localhost:3445")
                 .share("/temp")
@@ -869,20 +868,20 @@ mod test {
                 .one_share_per_server(true),
         )
         .unwrap();
-        // make test dir
-        let _ = std::fs::create_dir(Path::new("/tmp/cargo-test"));
+        // make test dir over SMB (not on the host fs: the samba container's
+        // entrypoint chowns/chmods the bind-mounted share root, which can leave
+        // the host path unwritable for the CI user)
+        let _ = client.remove_dir_all(Path::new("/cargo-test"));
+        client
+            .create_dir(Path::new("/cargo-test"), UnixPex::from(0o755))
+            .unwrap();
         client
     }
 
     #[cfg(feature = "with-containers")]
-    fn finalize_client(client: SmbFs) {
-        remove_dir_all("/cargo-test");
+    fn finalize_client(mut client: SmbFs) {
+        let _ = client.remove_dir_all(Path::new("/cargo-test"));
         std::thread::sleep(Duration::from_secs(1));
         drop(client);
-    }
-
-    #[cfg(feature = "with-containers")]
-    fn remove_dir_all<S: AsRef<str>>(dir: S) {
-        let _ = std::fs::remove_dir_all(Path::new(dir.as_ref()));
     }
 }
