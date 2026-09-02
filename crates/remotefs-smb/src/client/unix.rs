@@ -12,7 +12,21 @@ use pavao::{SmbDirentType, SmbMode, SmbOpenOptions};
 use remotefs::fs::{File, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
+use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
 use crate::utils::{path as path_utils, smb as smb_utils};
+
+impl From<SmbDialect> for pavao::SmbDialect {
+    fn from(value: SmbDialect) -> Self {
+        match value {
+            SmbDialect::Nt1 => Self::Nt1,
+            SmbDialect::Smb202 => Self::Smb202,
+            SmbDialect::Smb210 => Self::Smb210,
+            SmbDialect::Smb300 => Self::Smb300,
+            SmbDialect::Smb302 => Self::Smb302,
+            SmbDialect::Smb311 => Self::Smb311,
+        }
+    }
+}
 
 /// SMB file system client
 pub struct SmbFs {
@@ -21,12 +35,72 @@ pub struct SmbFs {
 }
 
 impl SmbFs {
-    /// Try to create a new `SmbFs`.
-    /// Fails if it is not possible to instantiate a smb context.
+    /// Tries to create an SMB client with secure automatic dialect bounds.
+    ///
+    /// Automatic negotiation is limited to SMB2 through SMB3.1.1 and excludes
+    /// the deprecated SMB1/CIFS `NT1` dialect.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::BadAddress`] if Pavao cannot initialize the
+    /// SMB context.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
+    ///
+    /// let _client = SmbFs::try_new(
+    ///     SmbCredentials::default()
+    ///         .server("smb://server.example")
+    ///         .share("/documents"),
+    ///     SmbOptions::default(),
+    /// )?;
+    /// # Ok::<(), remotefs::RemoteError>(())
+    /// ```
     pub fn try_new(credentials: SmbCredentials, options: SmbOptions) -> RemoteResult<Self> {
+        Self::try_new_with_dialect(credentials, options, AUTO_MIN_DIALECT, AUTO_MAX_DIALECT)
+    }
+
+    /// Tries to create an SMB client with inclusive protocol dialect bounds.
+    ///
+    /// The client applies `min_dialect` and `max_dialect` to Pavao after
+    /// preserving all other settings in `options`. An inverted range is
+    /// rejected. Selecting [`SmbDialect::Nt1`] enables deprecated SMB1/CIFS
+    /// negotiation and should be reserved for legacy devices that require it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::BadAddress`] if the bounds are invalid or
+    /// Pavao cannot initialize the SMB context.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use remotefs_smb::{SmbCredentials, SmbDialect, SmbFs, SmbOptions};
+    ///
+    /// let _client = SmbFs::try_new_with_dialect(
+    ///     SmbCredentials::default()
+    ///         .server("smb://server.example")
+    ///         .share("/documents"),
+    ///     SmbOptions::default(),
+    ///     SmbDialect::Smb202,
+    ///     SmbDialect::Smb210,
+    /// )?;
+    /// # Ok::<(), remotefs::RemoteError>(())
+    /// ```
+    pub fn try_new_with_dialect(
+        credentials: SmbCredentials,
+        options: SmbOptions,
+        min_dialect: SmbDialect,
+        max_dialect: SmbDialect,
+    ) -> RemoteResult<Self> {
+        let options = options
+            .min_protocol(min_dialect.into())
+            .max_protocol(max_dialect.into());
         Ok(Self {
             client: SmbClient::new(credentials, options)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::BadAddress, e))?,
+                .map_err(|error| RemoteError::new_ex(RemoteErrorType::BadAddress, error))?,
             wrkdir: PathBuf::from("/"),
         })
     }
@@ -287,10 +361,68 @@ mod test {
     #[cfg(feature = "with-containers")]
     use std::time::Duration;
 
-    #[cfg(feature = "with-containers")]
     use serial_test::serial;
 
     use super::*;
+
+    #[test]
+    fn should_convert_all_dialects_to_pavao() {
+        assert_eq!(
+            pavao::SmbDialect::from(SmbDialect::Nt1),
+            pavao::SmbDialect::Nt1
+        );
+        assert_eq!(
+            pavao::SmbDialect::from(SmbDialect::Smb202),
+            pavao::SmbDialect::Smb202
+        );
+        assert_eq!(
+            pavao::SmbDialect::from(SmbDialect::Smb210),
+            pavao::SmbDialect::Smb210
+        );
+        assert_eq!(
+            pavao::SmbDialect::from(SmbDialect::Smb300),
+            pavao::SmbDialect::Smb300
+        );
+        assert_eq!(
+            pavao::SmbDialect::from(SmbDialect::Smb302),
+            pavao::SmbDialect::Smb302
+        );
+        assert_eq!(
+            pavao::SmbDialect::from(SmbDialect::Smb311),
+            pavao::SmbDialect::Smb311
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn should_reject_inverted_dialect_bounds() {
+        let result = SmbFs::try_new_with_dialect(
+            test_credentials(),
+            SmbOptions::default(),
+            SmbDialect::Smb311,
+            SmbDialect::Nt1,
+        );
+
+        assert_eq!(
+            result.err().expect("inverted bounds must fail").kind,
+            RemoteErrorType::BadAddress,
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn should_default_to_secure_auto_dialect_bounds() {
+        let default_client = SmbFs::try_new(test_credentials(), SmbOptions::default()).unwrap();
+        let explicit_auto_client = SmbFs::try_new_with_dialect(
+            test_credentials(),
+            SmbOptions::default(),
+            SmbDialect::Smb202,
+            SmbDialect::Smb311,
+        );
+
+        assert!(explicit_auto_client.is_ok());
+        drop(default_client);
+    }
 
     #[test]
     #[cfg(feature = "with-containers")]
@@ -818,15 +950,19 @@ mod test {
 
     fn is_sync<T: Sync>(_sync: T) {}
 
+    fn test_credentials() -> SmbCredentials {
+        SmbCredentials::default()
+            .server("smb://localhost:3445")
+            .share("/temp")
+            .username("test")
+            .password("test")
+            .workgroup("pavao")
+    }
+
     #[test]
     fn test_should_be_sync() {
         let client = SmbFs::try_new(
-            SmbCredentials::default()
-                .server("smb://localhost:3445")
-                .share("/temp")
-                .username("test")
-                .password("test")
-                .workgroup("pavao"),
+            test_credentials(),
             SmbOptions::default()
                 .case_sensitive(true)
                 .one_share_per_server(true),
@@ -839,12 +975,7 @@ mod test {
     #[test]
     fn test_should_be_send() {
         let client = SmbFs::try_new(
-            SmbCredentials::default()
-                .server("smb://localhost:3445")
-                .share("/temp")
-                .username("test")
-                .password("test")
-                .workgroup("pavao"),
+            test_credentials(),
             SmbOptions::default()
                 .case_sensitive(true)
                 .one_share_per_server(true),
@@ -857,12 +988,7 @@ mod test {
     #[cfg(feature = "with-containers")]
     fn init_client() -> SmbFs {
         let mut client = SmbFs::try_new(
-            SmbCredentials::default()
-                .server("smb://localhost:3445")
-                .share("/temp")
-                .username("test")
-                .password("test")
-                .workgroup("pavao"),
+            test_credentials(),
             SmbOptions::default()
                 .case_sensitive(true)
                 .one_share_per_server(true),

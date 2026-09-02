@@ -23,6 +23,7 @@
 //! ### Smb client (UNIX)
 //!
 //! Here is a basic usage example, with the `Smb` client.
+//! `SmbFs::try_new` automatically negotiates only SMB2 through SMB3.1.1.
 //!
 //! ```rust,no_run
 //!
@@ -56,6 +57,23 @@
 //! assert!(client.disconnect().is_ok());
 //! ```
 //!
+//! To select a narrower inclusive range explicitly, use
+//! [`SmbFs::try_new_with_dialect`]:
+//!
+//! ```rust,no_run
+//! use remotefs_smb::{SmbCredentials, SmbDialect, SmbFs, SmbOptions};
+//!
+//! let _client = SmbFs::try_new_with_dialect(
+//!     SmbCredentials::default()
+//!         .server("smb://server.example")
+//!         .share("/documents"),
+//!     SmbOptions::default(),
+//!     SmbDialect::Smb202,
+//!     SmbDialect::Smb210,
+//! )?;
+//! # Ok::<(), remotefs::RemoteError>(())
+//! ```
+//!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 #![doc(
@@ -71,6 +89,7 @@ extern crate log;
 
 mod client;
 
+pub use client::SmbDialect;
 #[cfg(target_family = "unix")]
 pub use client::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions, SmbShareMode};
 #[cfg(target_family = "windows")]

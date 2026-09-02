@@ -17,6 +17,8 @@ use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 use windows_sys::Win32::Foundation::{NO_ERROR, TRUE};
 use windows_sys::Win32::NetworkManagement::WNet;
 
+use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
+
 /// SMB file system client
 pub struct SmbFs {
     remote_path: PathBuf,
@@ -27,9 +29,53 @@ pub struct SmbFs {
 }
 
 impl SmbFs {
-    /// Instantiates a new SmbFs
+    /// Instantiates an SMB client with secure automatic dialect bounds.
+    ///
+    /// The portable policy represented by this constructor allows SMB2 through
+    /// SMB3.1.1 and excludes the deprecated SMB1/CIFS `NT1` dialect. The
+    /// Windows redirector ultimately applies the operating system's SMB
+    /// negotiation policy.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use remotefs_smb::{SmbCredentials, SmbFs};
+    ///
+    /// let _client = SmbFs::new(SmbCredentials::new("server.example", "documents"));
+    /// ```
     pub fn new(credentials: SmbCredentials) -> Self {
-        let remote_name = format!("\\\\{}\\{}", credentials.server, credentials.share);
+        Self::new_with_dialect(credentials, AUTO_MIN_DIALECT, AUTO_MAX_DIALECT)
+    }
+
+    /// Instantiates an SMB client with cross-platform dialect bounds.
+    ///
+    /// Windows' native `WNetAddConnection2A` redirector API does not expose
+    /// per-connection SMB dialect bounds. The `min_dialect` and `max_dialect`
+    /// arguments are therefore accepted for API parity but are not enforced;
+    /// the operating system manages protocol negotiation. In particular,
+    /// selecting [`SmbDialect::Nt1`] here does not enable SMB1.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use remotefs_smb::{SmbCredentials, SmbDialect, SmbFs};
+    ///
+    /// let _client = SmbFs::new_with_dialect(
+    ///     SmbCredentials::new("server.example", "documents"),
+    ///     SmbDialect::Smb202,
+    ///     SmbDialect::Smb210,
+    /// );
+    /// ```
+    pub fn new_with_dialect(
+        credentials: SmbCredentials,
+        _min_dialect: SmbDialect,
+        _max_dialect: SmbDialect,
+    ) -> Self {
+        let remote_name = format!(
+            "\\\\{server}\\{share}",
+            server = credentials.server,
+            share = credentials.share,
+        );
         Self {
             remote_path: PathBuf::from(&remote_name),
             remote_name,
@@ -370,6 +416,27 @@ impl RemoteFs for SmbFs {
 mod test {
 
     use super::*;
+
+    #[test]
+    fn should_construct_with_explicit_dialect_bounds() {
+        let client = SmbFs::new_with_dialect(
+            SmbCredentials::new("pippo", "pippo"),
+            SmbDialect::Nt1,
+            SmbDialect::Nt1,
+        );
+
+        assert_eq!(client.remote_name, r"\\pippo\pippo");
+        assert!(!client.is_connected);
+    }
+
+    #[test]
+    fn should_construct_with_secure_auto_defaults() {
+        let client = SmbFs::new(SmbCredentials::new("pippo", "pippo"));
+
+        assert_eq!(AUTO_MIN_DIALECT, SmbDialect::Smb202);
+        assert_eq!(AUTO_MAX_DIALECT, SmbDialect::Smb311);
+        assert!(!client.is_connected);
+    }
 
     #[test]
     #[cfg(feature = "with-containers")]
