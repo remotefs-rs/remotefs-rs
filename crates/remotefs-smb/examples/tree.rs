@@ -3,10 +3,10 @@ extern crate log;
 
 use argh::FromArgs;
 use remotefs::RemoteFs;
-#[cfg(target_family = "windows")]
-use remotefs_smb::{SmbCredentials, SmbFs};
 #[cfg(target_family = "unix")]
-use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
+use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions};
+#[cfg(target_family = "windows")]
+use remotefs_smb::{WNetSmbCredentials, WNetSmbFs};
 
 #[derive(FromArgs)]
 #[argh(description = "
@@ -74,35 +74,35 @@ fn main() -> anyhow::Result<()> {
 }
 
 #[cfg(target_family = "windows")]
-fn init_client(args: Args) -> SmbFs {
+fn init_client(args: Args) -> WNetSmbFs {
     info!(
         "initializing client with server {} and share {}",
         args.server, args.share
     );
-    let mut credentials = SmbCredentials::new(args.server, args.share);
+    let mut credentials = WNetSmbCredentials::new(args.server, args.share);
     if let Some(username) = args.username {
         credentials = credentials.username(username);
     }
     if let Some(password) = args.password {
         credentials = credentials.password(password);
     }
-    SmbFs::new(credentials)
+    WNetSmbFs::new(credentials)
 }
 
 #[cfg(target_family = "unix")]
-fn init_client(args: Args, password: String) -> anyhow::Result<SmbFs> {
+fn init_client(args: Args, password: String) -> anyhow::Result<PavaoSmbFs> {
     info!(
         "initializing client with server {} and share {}, with username {} and workgroup {}",
         args.server, args.share, args.username, args.workgroup
     );
-    let client = SmbFs::try_new(
-        SmbCredentials::default()
+    let client = PavaoSmbFs::try_new(
+        PavaoSmbCredentials::default()
             .server(args.server)
             .share(args.share)
             .username(args.username)
             .password(password)
             .workgroup(args.workgroup),
-        SmbOptions::default()
+        PavaoSmbOptions::default()
             .one_share_per_server(true)
             .case_sensitive(false),
     )?;

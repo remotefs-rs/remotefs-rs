@@ -8,7 +8,7 @@ mod file_stream;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
 
-pub use credentials::SmbCredentials;
+pub use credentials::WNetSmbCredentials;
 use file_stream::FileStream;
 use filetime::{self, FileTime};
 use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
@@ -19,16 +19,16 @@ use windows_sys::Win32::NetworkManagement::WNet;
 
 use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
 
-/// SMB file system client
-pub struct SmbFs {
+/// SMB file system client backed by the Windows WNet API.
+pub struct WNetSmbFs {
     remote_path: PathBuf,
     remote_name: String,
-    credentials: SmbCredentials,
+    credentials: WNetSmbCredentials,
     wrkdir: PathBuf,
     is_connected: bool,
 }
 
-impl SmbFs {
+impl WNetSmbFs {
     /// Instantiates an SMB client with secure automatic dialect bounds.
     ///
     /// The portable policy represented by this constructor allows SMB2 through
@@ -39,11 +39,11 @@ impl SmbFs {
     /// # Examples
     ///
     /// ```no_run
-    /// use remotefs_smb::{SmbCredentials, SmbFs};
+    /// use remotefs_smb::{WNetSmbCredentials, WNetSmbFs};
     ///
-    /// let _client = SmbFs::new(SmbCredentials::new("server.example", "documents"));
+    /// let _client = WNetSmbFs::new(WNetSmbCredentials::new("server.example", "documents"));
     /// ```
-    pub fn new(credentials: SmbCredentials) -> Self {
+    pub fn new(credentials: WNetSmbCredentials) -> Self {
         Self::new_with_dialect(credentials, AUTO_MIN_DIALECT, AUTO_MAX_DIALECT)
     }
 
@@ -58,16 +58,16 @@ impl SmbFs {
     /// # Examples
     ///
     /// ```no_run
-    /// use remotefs_smb::{SmbCredentials, SmbDialect, SmbFs};
+    /// use remotefs_smb::{SmbDialect, WNetSmbCredentials, WNetSmbFs};
     ///
-    /// let _client = SmbFs::new_with_dialect(
-    ///     SmbCredentials::new("server.example", "documents"),
+    /// let _client = WNetSmbFs::new_with_dialect(
+    ///     WNetSmbCredentials::new("server.example", "documents"),
     ///     SmbDialect::Smb202,
     ///     SmbDialect::Smb210,
     /// );
     /// ```
     pub fn new_with_dialect(
-        credentials: SmbCredentials,
+        credentials: WNetSmbCredentials,
         _min_dialect: SmbDialect,
         _max_dialect: SmbDialect,
     ) -> Self {
@@ -108,7 +108,7 @@ impl SmbFs {
     }
 }
 
-impl RemoteFs for SmbFs {
+impl RemoteFs for WNetSmbFs {
     fn connect(&mut self) -> RemoteResult<Welcome> {
         // add connection
         trace!("connecting to {}", self.remote_name);
@@ -419,8 +419,8 @@ mod test {
 
     #[test]
     fn should_construct_with_explicit_dialect_bounds() {
-        let client = SmbFs::new_with_dialect(
-            SmbCredentials::new("pippo", "pippo"),
+        let client = WNetSmbFs::new_with_dialect(
+            WNetSmbCredentials::new("pippo", "pippo"),
             SmbDialect::Nt1,
             SmbDialect::Nt1,
         );
@@ -431,7 +431,7 @@ mod test {
 
     #[test]
     fn should_construct_with_secure_auto_defaults() {
-        let client = SmbFs::new(SmbCredentials::new("pippo", "pippo"));
+        let client = WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"));
 
         assert_eq!(AUTO_MIN_DIALECT, SmbDialect::Smb202);
         assert_eq!(AUTO_MAX_DIALECT, SmbDialect::Smb311);
@@ -453,22 +453,22 @@ mod test {
 
     #[test]
     fn test_should_be_sync() {
-        let client = SmbFs::new(SmbCredentials::new("pippo", "pippo"));
+        let client = WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"));
 
         is_sync(client);
     }
 
     #[test]
     fn test_should_be_send() {
-        let client = SmbFs::new(SmbCredentials::new("pippo", "pippo"));
+        let client = WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"));
 
         is_send(client);
     }
 
     #[cfg(feature = "with-containers")]
-    fn init_client() -> SmbFs {
-        let mut client = SmbFs::new(
-            SmbCredentials::new(env!("SMB_SERVER"), env!("SMB_SHARE"))
+    fn init_client() -> WNetSmbFs {
+        let mut client = WNetSmbFs::new(
+            WNetSmbCredentials::new(env!("SMB_SERVER"), env!("SMB_SHARE"))
                 .username(env!("SMB_USERNAME"))
                 .password(env!("SMB_PASSWORD")),
         );
@@ -478,7 +478,7 @@ mod test {
     }
 
     #[cfg(feature = "with-containers")]
-    fn finalize_client(mut client: SmbFs) {
+    fn finalize_client(mut client: WNetSmbFs) {
         assert!(client.disconnect().is_ok());
     }
 }

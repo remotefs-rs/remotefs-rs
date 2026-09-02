@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.3.1 (20/03/2025)</p>
+<p align="center">Current version: 0.5.0 (02/09/2026)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -77,18 +77,28 @@ First of all, add `remotefs-smb` to your project dependencies:
 
 ```toml
 remotefs = "0.3"
-remotefs-smb = "^0.3"
+remotefs-smb = "^0.5"
 ```
 
-these features are supported:
+These features are supported:
 
+- `pavao`: enable the `libsmbclient`-based client on UNIX (_enabled by default_)
+- `smb`: enable the Rust-native client on every platform
 - `find`: enable `find()` method on client (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
-- `vendored`: build pavao with **vendored libsmbclient**
+- `vendored`: build pavao with **vendored libsmbclient** (implies `pavao`)
 
-### Install dependencies (UNIX based only)
+Three clients ship in this crate and can be enabled together:
 
-remotefs-smb relies on `pavao`, which requires the `libsmbclient` library, which can be installed with the following instructions:
+| Client       | Feature | Platforms | Dialects           | System libraries  |
+| ------------ | ------- | --------- | ------------------ | ----------------- |
+| `SmbFs`      | `smb`   | all       | SMB 2.0.2 to 3.1.1 | none              |
+| `PavaoSmbFs` | `pavao` | UNIX      | SMB1 to SMB 3.1.1  | `libsmbclient`    |
+| `WNetSmbFs`  | always  | Windows   | OS managed         | `WNet` (built in) |
+
+### Install dependencies (pavao client only)
+
+The `pavao` feature relies on `pavao`, which requires the `libsmbclient` library, which can be installed with the following instructions:
 
 #### MacOS 🍎
 
@@ -137,13 +147,24 @@ rm -rf samba/
 
 ### Client implementation
 
-#### UNIX client
+#### Rust-native client (all platforms)
+
+Enable the `smb` feature and add `tokio`:
+
+```toml
+remotefs-smb = { version = "^0.5", features = ["smb"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+```
 
 ```rust
-// import remotefs trait and client
-use remotefs::{RemoteFs, fs::UnixPex};
-use remotefs_smb::{SmbFs, SmbOptions, SmbCredentials};
 use std::path::Path;
+use std::sync::Arc;
+
+use remotefs::{fs::UnixPex, RemoteFs};
+use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
+use tokio::runtime::Runtime;
+
+let runtime = Arc::new(Runtime::new().unwrap());
 let mut client = SmbFs::try_new(
     SmbCredentials::default()
         .server("smb://localhost:3445")
@@ -151,7 +172,41 @@ let mut client = SmbFs::try_new(
         .username("test")
         .password("test")
         .workgroup("pavao"),
-    SmbOptions::default()
+    SmbOptions::default(),
+    &runtime,
+)
+.unwrap();
+// connect
+assert!(client.connect().is_ok());
+// get working directory
+println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
+// make directory
+assert!(client
+    .create_dir(Path::new("/cargo"), UnixPex::from(0o755))
+    .is_ok());
+// change working directory
+assert!(client.change_dir(Path::new("/cargo")).is_ok());
+// disconnect
+assert!(client.disconnect().is_ok());
+```
+
+The runtime must outlive the client and the client must not be called from a task running on that same runtime.
+
+#### Pavao client (UNIX)
+
+```rust
+// import remotefs trait and client
+use remotefs::{RemoteFs, fs::UnixPex};
+use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions};
+use std::path::Path;
+let mut client = PavaoSmbFs::try_new(
+    PavaoSmbCredentials::default()
+        .server("smb://localhost:3445")
+        .share("/temp")
+        .username("test")
+        .password("test")
+        .workgroup("pavao"),
+    PavaoSmbOptions::default()
         .case_sensitive(true)
         .one_share_per_server(true),
 )
@@ -168,15 +223,15 @@ assert!(client.change_dir(Path::new("/cargo")).is_ok());
 assert!(client.disconnect().is_ok());
 ```
 
-#### Windows client
+#### WNet client (Windows)
 
 ```rust
 // import remotefs trait and client
 use remotefs::{RemoteFs, fs::UnixPex};
-use remotefs_smb::{SmbFs, SmbCredentials};
+use remotefs_smb::{WNetSmbCredentials, WNetSmbFs};
 use std::path::Path;
-let mut client = SmbFs::new(
-    SmbCredentials::new("localhost:3445", "temp")
+let mut client = WNetSmbFs::new(
+    WNetSmbCredentials::new("localhost:3445", "temp")
         .username("test")
         .password("test")
 );
@@ -200,28 +255,28 @@ The following table states the compatibility for the client client and the remot
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Support (UNIX) | Support (Win ) |
-| -------------- | -------------- | -------------- |
-| append_file    | Yes            | Yes            |
-| append         | No             | Yes            |
-| change_dir     | Yes            | Yes            |
-| copy           | No             | Yes            |
-| create_dir     | Yes            | Yes            |
-| create_file    | Yes            | Yes            |
-| create         | No             | Yes            |
-| exec           | No             | No             |
-| exists         | Yes            | Yes            |
-| list_dir       | Yes            | Yes            |
-| mov            | Yes            | Yes            |
-| open_file      | Yes            | Yes            |
-| open           | No             | Yes            |
-| pwd            | Yes            | Yes            |
-| remove_dir_all | Yes            | Yes            |
-| remove_dir     | Yes            | Yes            |
-| remove_file    | Yes            | Yes            |
-| setstat        | No             | Yes            |
-| stat           | Yes            | Yes            |
-| symlink        | Yes            | Yes            |
+| Client/Method  | Rust-native | pavao (UNIX) | WNet (Windows) |
+| -------------- | ----------- | ------------ | -------------- |
+| append_file    | Yes         | Yes          | Yes            |
+| append         | No          | No           | Yes            |
+| change_dir     | Yes         | Yes          | Yes            |
+| copy           | No          | No           | Yes            |
+| create_dir     | Yes         | Yes          | Yes            |
+| create_file    | Yes         | Yes          | Yes            |
+| create         | No          | No           | Yes            |
+| exec           | No          | No           | No             |
+| exists         | Yes         | Yes          | Yes            |
+| list_dir       | Yes         | Yes          | Yes            |
+| mov            | Yes         | Yes          | Yes            |
+| open_file      | Yes         | Yes          | Yes            |
+| open           | No          | No           | Yes            |
+| pwd            | Yes         | Yes          | Yes            |
+| remove_dir_all | Yes         | Yes          | Yes            |
+| remove_dir     | Yes         | Yes          | Yes            |
+| remove_file    | Yes         | Yes          | Yes            |
+| setstat        | No          | No           | Yes            |
+| stat           | Yes         | Yes          | Yes            |
+| symlink        | No          | No           | Yes            |
 
 ---
 
@@ -236,8 +291,8 @@ just test                  # cargo test --lib, then --doc
 just coverage              # cargo llvm-cov, writes lcov.info
 just fmt                   # dprint fmt (Markdown, Rust, TOML, YAML)
 just fmt_check             # dprint check
-just lint "-- -D warnings" # clippy with all features
-just doc                   # cargo doc --all-features
+just lint "-- -D warnings" # clippy
+just doc                   # cargo doc --no-deps
 just deny                  # cargo deny check
 just scan_secrets          # trufflehog filesystem
 just check                 # the full local quality gate
@@ -248,6 +303,8 @@ and `test`, and is the required gate before opening a pull request. Most
 tests need the Samba container from `tests/docker-compose.yml` running
 locally (`docker compose -f tests/docker-compose.yml up -d --build`) before
 `just test "--no-default-features --features find,with-containers"` will pass.
+Pass `--features smb` (or `find,pavao,smb,with-containers`) to cover the
+Rust-native client; it shares the same container.
 
 See [AGENTS.md](AGENTS.md) for the full contract.
 
@@ -284,6 +341,7 @@ View remotefs' changelog [HERE](CHANGELOG.md)
 remotefs-smb is powered by these aweseome projects:
 
 - [pavao](https://github.com/veeso/pavao)
+- [smb-rs](https://github.com/afiffon/smb-rs)
 
 ---
 

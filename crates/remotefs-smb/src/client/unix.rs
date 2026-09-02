@@ -7,7 +7,11 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use libc::mode_t;
-pub use pavao::{SmbClient, SmbCredentials, SmbEncryptionLevel, SmbOptions, SmbShareMode};
+pub use pavao::{
+    SmbClient, SmbCredentials as PavaoSmbCredentials,
+    SmbEncryptionLevel as PavaoSmbEncryptionLevel, SmbOptions as PavaoSmbOptions,
+    SmbShareMode as PavaoSmbShareMode,
+};
 use pavao::{SmbDirentType, SmbMode, SmbOpenOptions};
 use remotefs::fs::{File, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
@@ -28,13 +32,13 @@ impl From<SmbDialect> for pavao::SmbDialect {
     }
 }
 
-/// SMB file system client
-pub struct SmbFs {
+/// SMB file system client backed by pavao (libsmbclient).
+pub struct PavaoSmbFs {
     client: SmbClient,
     wrkdir: PathBuf,
 }
 
-impl SmbFs {
+impl PavaoSmbFs {
     /// Tries to create an SMB client with secure automatic dialect bounds.
     ///
     /// Automatic negotiation is limited to SMB2 through SMB3.1.1 and excludes
@@ -48,17 +52,20 @@ impl SmbFs {
     /// # Examples
     ///
     /// ```no_run
-    /// use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
+    /// use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions};
     ///
-    /// let _client = SmbFs::try_new(
-    ///     SmbCredentials::default()
+    /// let _client = PavaoSmbFs::try_new(
+    ///     PavaoSmbCredentials::default()
     ///         .server("smb://server.example")
     ///         .share("/documents"),
-    ///     SmbOptions::default(),
+    ///     PavaoSmbOptions::default(),
     /// )?;
     /// # Ok::<(), remotefs::RemoteError>(())
     /// ```
-    pub fn try_new(credentials: SmbCredentials, options: SmbOptions) -> RemoteResult<Self> {
+    pub fn try_new(
+        credentials: PavaoSmbCredentials,
+        options: PavaoSmbOptions,
+    ) -> RemoteResult<Self> {
         Self::try_new_with_dialect(credentials, options, AUTO_MIN_DIALECT, AUTO_MAX_DIALECT)
     }
 
@@ -77,21 +84,21 @@ impl SmbFs {
     /// # Examples
     ///
     /// ```no_run
-    /// use remotefs_smb::{SmbCredentials, SmbDialect, SmbFs, SmbOptions};
+    /// use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions, SmbDialect};
     ///
-    /// let _client = SmbFs::try_new_with_dialect(
-    ///     SmbCredentials::default()
+    /// let _client = PavaoSmbFs::try_new_with_dialect(
+    ///     PavaoSmbCredentials::default()
     ///         .server("smb://server.example")
     ///         .share("/documents"),
-    ///     SmbOptions::default(),
+    ///     PavaoSmbOptions::default(),
     ///     SmbDialect::Smb202,
     ///     SmbDialect::Smb210,
     /// )?;
     /// # Ok::<(), remotefs::RemoteError>(())
     /// ```
     pub fn try_new_with_dialect(
-        credentials: SmbCredentials,
-        options: SmbOptions,
+        credentials: PavaoSmbCredentials,
+        options: PavaoSmbOptions,
         min_dialect: SmbDialect,
         max_dialect: SmbDialect,
     ) -> RemoteResult<Self> {
@@ -137,7 +144,7 @@ impl SmbFs {
     }
 }
 
-impl RemoteFs for SmbFs {
+impl RemoteFs for PavaoSmbFs {
     fn connect(&mut self) -> RemoteResult<Welcome> {
         // Get user to check whether connection works
         self.check_connection()?;
@@ -396,9 +403,9 @@ mod test {
     #[test]
     #[serial]
     fn should_reject_inverted_dialect_bounds() {
-        let result = SmbFs::try_new_with_dialect(
+        let result = PavaoSmbFs::try_new_with_dialect(
             test_credentials(),
-            SmbOptions::default(),
+            PavaoSmbOptions::default(),
             SmbDialect::Smb311,
             SmbDialect::Nt1,
         );
@@ -412,10 +419,11 @@ mod test {
     #[test]
     #[serial]
     fn should_default_to_secure_auto_dialect_bounds() {
-        let default_client = SmbFs::try_new(test_credentials(), SmbOptions::default()).unwrap();
-        let explicit_auto_client = SmbFs::try_new_with_dialect(
+        let default_client =
+            PavaoSmbFs::try_new(test_credentials(), PavaoSmbOptions::default()).unwrap();
+        let explicit_auto_client = PavaoSmbFs::try_new_with_dialect(
             test_credentials(),
-            SmbOptions::default(),
+            PavaoSmbOptions::default(),
             SmbDialect::Smb202,
             SmbDialect::Smb311,
         );
@@ -950,8 +958,8 @@ mod test {
 
     fn is_sync<T: Sync>(_sync: T) {}
 
-    fn test_credentials() -> SmbCredentials {
-        SmbCredentials::default()
+    fn test_credentials() -> PavaoSmbCredentials {
+        PavaoSmbCredentials::default()
             .server("smb://localhost:3445")
             .share("/temp")
             .username("test")
@@ -961,9 +969,9 @@ mod test {
 
     #[test]
     fn test_should_be_sync() {
-        let client = SmbFs::try_new(
+        let client = PavaoSmbFs::try_new(
             test_credentials(),
-            SmbOptions::default()
+            PavaoSmbOptions::default()
                 .case_sensitive(true)
                 .one_share_per_server(true),
         )
@@ -974,9 +982,9 @@ mod test {
 
     #[test]
     fn test_should_be_send() {
-        let client = SmbFs::try_new(
+        let client = PavaoSmbFs::try_new(
             test_credentials(),
-            SmbOptions::default()
+            PavaoSmbOptions::default()
                 .case_sensitive(true)
                 .one_share_per_server(true),
         )
@@ -986,10 +994,10 @@ mod test {
     }
 
     #[cfg(feature = "with-containers")]
-    fn init_client() -> SmbFs {
-        let mut client = SmbFs::try_new(
+    fn init_client() -> PavaoSmbFs {
+        let mut client = PavaoSmbFs::try_new(
             test_credentials(),
-            SmbOptions::default()
+            PavaoSmbOptions::default()
                 .case_sensitive(true)
                 .one_share_per_server(true),
         )
@@ -1005,7 +1013,7 @@ mod test {
     }
 
     #[cfg(feature = "with-containers")]
-    fn finalize_client(mut client: SmbFs) {
+    fn finalize_client(mut client: PavaoSmbFs) {
         let _ = client.remove_dir_all(Path::new("/cargo-test"));
         std::thread::sleep(Duration::from_secs(1));
         drop(client);

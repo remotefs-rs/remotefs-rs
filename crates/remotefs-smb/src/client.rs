@@ -30,7 +30,19 @@ pub enum SmbDialect {
     Smb311,
 }
 
+#[cfg(any(
+    all(target_family = "unix", feature = "pavao"),
+    feature = "smb",
+    target_family = "windows",
+    test,
+))]
 const AUTO_MIN_DIALECT: SmbDialect = SmbDialect::Smb202;
+#[cfg(any(
+    all(target_family = "unix", feature = "pavao"),
+    feature = "smb",
+    target_family = "windows",
+    test,
+))]
 const AUTO_MAX_DIALECT: SmbDialect = SmbDialect::Smb311;
 
 #[cfg(test)]
@@ -55,16 +67,23 @@ mod test {
     }
 }
 
-// -- unix client
+// -- unix client (pavao / libsmbclient)
 
-#[cfg(target_family = "unix")]
+#[cfg(all(target_family = "unix", feature = "pavao"))]
 mod unix;
-#[cfg(target_family = "unix")]
+#[cfg(all(target_family = "unix", feature = "pavao"))]
 pub use unix::*;
 
-// -- windows client
+// -- windows client (WNet)
 
 #[cfg(target_family = "windows")]
 mod windows;
 #[cfg(target_family = "windows")]
 pub use windows::*;
+
+// -- rust-native client (smb crate)
+
+#[cfg(feature = "smb")]
+mod rust_smb;
+#[cfg(feature = "smb")]
+pub use rust_smb::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions};

@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-smb"
-version = "0.4.1"
+version = "0.5.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-smb"
@@ -11,17 +11,20 @@ keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-smb"
-rust-version = "1.88.0"
+rust-version = "1.89.0"
 description = "remotefs SMB client library"
 
 [dependencies]
+futures-util = { version = "0.3", optional = true }
 log = "0.4"
-remotefs = "^0.3"
+remotefs = "0.3"
+smb = { version = "0.11", default-features = false, features = ["async", "compress", "encrypt", "sign"], optional = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread"], optional = true }
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]
-libc = "0.2"
-pavao = "0.3"
+libc = { version = "0.2", optional = true }
+pavao = { version = "0.3", optional = true }
 
 [target."cfg(target_family = \"windows\")"]
 [target."cfg(target_family = \"windows\")".dependencies]
@@ -29,7 +32,7 @@ filetime = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
 
 [dev-dependencies]
-anyhow = "^1"
+anyhow = "1"
 argh = "0.1"
 env_logger = "0.11"
 pretty_assertions = "1"
@@ -38,18 +41,28 @@ serial_test = "3"
 tempfile = "3"
 
 [features]
-default = ["find"]
+default = ["find", "pavao"]
+# clients
+pavao = ["dep:libc", "dep:pavao"]
+smb = ["dep:futures-util", "dep:smb", "dep:tokio"]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
-vendored = ["pavao/vendored"]
+vendored = ["pavao", "pavao/vendored"]
 # tests
 with-containers = []
 
 [package.metadata.docs.rs]
-all-features = false
+features = ["find", "pavao", "smb"]
+no-default-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
 name = "tree"
 path = "examples/tree.rs"
+required-features = ["pavao"]
+
+[[example]]
+name = "tree_rs"
+path = "examples/tree_rs.rs"
+required-features = ["smb"]

@@ -1,12 +1,13 @@
+/// Credentials for the Windows WNet-based client.
 #[derive(Debug, Default, Clone)]
-pub struct SmbCredentials {
+pub struct WNetSmbCredentials {
     pub(crate) server: String,
     pub(crate) share: String,
     pub(crate) username: Option<String>,
     pub(crate) password: Option<String>,
 }
 
-impl SmbCredentials {
+impl WNetSmbCredentials {
     pub fn new<S: AsRef<str>>(server: S, share: S) -> Self {
         Self {
             server: server.as_ref().to_string(),
@@ -15,13 +16,13 @@ impl SmbCredentials {
         }
     }
 
-    /// Construct SmbCredentials with the provided username
+    /// Construct WNetSmbCredentials with the provided username
     pub fn username<S: AsRef<str>>(mut self, username: S) -> Self {
         self.username = Some(username.as_ref().to_string());
         self
     }
 
-    /// Construct SmbCredentials with the provided password
+    /// Construct WNetSmbCredentials with the provided password
     pub fn password<S: AsRef<str>>(mut self, password: S) -> Self {
         self.password = Some(password.as_ref().to_string());
         self
@@ -37,7 +38,7 @@ mod test {
 
     #[test]
     fn should_init_credentials() {
-        let credentials = SmbCredentials::new("localhost", "temp");
+        let credentials = WNetSmbCredentials::new("localhost", "temp");
         assert_eq!(&credentials.server, "localhost");
         assert_eq!(&credentials.share, "temp");
         assert!(credentials.username.is_none());
@@ -46,7 +47,7 @@ mod test {
 
     #[test]
     fn should_construct_credentials() {
-        let credentials = SmbCredentials::new("localhost", "temp")
+        let credentials = WNetSmbCredentials::new("localhost", "temp")
             .username("test")
             .password("foobar");
         assert_eq!(&credentials.server, "localhost");
