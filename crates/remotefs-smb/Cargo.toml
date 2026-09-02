@@ -47,7 +47,7 @@ vendored = ["pavao/vendored"]
 with-containers = []
 
 [package.metadata.docs.rs]
-all-features = true
+all-features = false
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[example]]
