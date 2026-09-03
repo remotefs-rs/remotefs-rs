@@ -39,10 +39,6 @@ impl From<FtpArgs> for FtpFs {
             ftp.passive_mode()
         };
 
-        if args.secure {
-            ftp.secure()
-        } else {
-            ftp
-        }
+        if args.secure { ftp.secure() } else { ftp }
     }
 }

@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use pretty_assertions::{assert_eq, assert_ne};
-use remotefs::fs::{FileType, Metadata, UnixPex};
 use remotefs::File;
+use remotefs::fs::{FileType, Metadata, UnixPex};
 use remotefs_memory::MemoryFs;
 use widestring::U16CString;
 

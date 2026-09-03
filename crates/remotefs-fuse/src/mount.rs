@@ -24,7 +24,7 @@ impl<T> Mount<T>
 where
     T: RemoteFs + Sync + Send,
 {
-    /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
+    /// Mount the filesystem implemented by `Driver` to the provided mountpoint.
     ///
     /// You can specify the mount options using the `options` parameter as an array of [`MountOption`].
     #[allow(clippy::self_named_constructors)]
@@ -47,7 +47,7 @@ where
         })
     }
 
-    /// Mount the filesystem implemented by  [`Driver`] to the provided mountpoint.
+    /// Mount the filesystem implemented by `Driver` to the provided mountpoint.
     ///
     /// You can specify the mount options using the `options` parameter as an array of [`MountOption`].
     #[cfg(windows)]

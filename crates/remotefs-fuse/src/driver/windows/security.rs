@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::{mem, ptr};
 
-use dokan::{map_win32_error_to_ntstatus, win32_ensure, OperationResult};
+use dokan::{OperationResult, map_win32_error_to_ntstatus, win32_ensure};
 use winapi::shared::ntstatus::*;
 use winapi::shared::{minwindef, winerror};
 use winapi::um::errhandlingapi::GetLastError;

@@ -179,7 +179,11 @@ where
 
     /// Check whether the user has access to a file.
     fn check_access(&self, file: &File, uid: u32, gid: u32, mut access_mask: AccessFlags) -> bool {
-        debug!("Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask:?}", file.path(), file.metadata());
+        debug!(
+            "Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask:?}",
+            file.path(),
+            file.metadata()
+        );
         if access_mask == AccessFlags::F_OK {
             return true;
         }
@@ -333,7 +337,9 @@ where
                 kind: RemoteErrorType::UnsupportedFeature,
                 ..
             }) if offset > 0 => {
-                error!("remote file system doesn't support stream, so it is not possible to write at offset");
+                error!(
+                    "remote file system doesn't support stream, so it is not possible to write at offset"
+                );
                 return Err(RemoteError::new_ex(
                     RemoteErrorType::UnsupportedFeature,
                     "remote file system doesn't support stream, so it is not possible to write at offset".to_string(),
@@ -353,7 +359,9 @@ where
         if offset > 0 {
             // try to seek
             if let Err(err) = writer.seek(std::io::SeekFrom::Start(offset)) {
-                error!("Failed to seek file: {err}. Not that not all the remote filesystems support seeking");
+                error!(
+                    "Failed to seek file: {err}. Not that not all the remote filesystems support seeking"
+                );
                 return Err(RemoteError::new_ex(
                     RemoteErrorType::IoError,
                     err.to_string(),
@@ -621,7 +629,10 @@ where
 
         if file_type != SFlag::S_IFREG && file_type != SFlag::S_IFLNK && file_type != SFlag::S_IFDIR
         {
-            warn!("mknod() implementation is incomplete. Only supports regular files, symlinks, and directories. Got {:o}", mode);
+            warn!(
+                "mknod() implementation is incomplete. Only supports regular files, symlinks, and directories. Got {:o}",
+                mode
+            );
             reply.error(libc::ENOSYS);
             return;
         }
@@ -660,7 +671,10 @@ where
                     .map(|_| ())
             }
             Some(_) | None => {
-                warn!("mknod() implementation is incomplete. Only supports regular files and directories. Got {:o}", mode);
+                warn!(
+                    "mknod() implementation is incomplete. Only supports regular files and directories. Got {:o}",
+                    mode
+                );
                 reply.error(libc::ENOSYS);
                 return;
             }

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs};
-use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
+use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
 
 pub fn mounted_file_path() -> &'static Path {
     Path::new("/tmp/mounted.txt")

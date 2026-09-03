@@ -6,8 +6,8 @@ use std::sync::{Arc, RwLock};
 use remotefs::File;
 use widestring::{U16Str, U16String};
 
-use super::security::SecurityDescriptor;
 use super::AltStream;
+use super::security::SecurityDescriptor;
 
 #[derive(Debug)]
 pub struct StatHandle {

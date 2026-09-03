@@ -266,7 +266,9 @@ where
                 kind: RemoteErrorType::UnsupportedFeature,
                 ..
             }) if offset > 0 => {
-                error!("remote file system doesn't support stream, so it is not possible to write at offset");
+                error!(
+                    "remote file system doesn't support stream, so it is not possible to write at offset"
+                );
                 return Err(RemoteError::new_ex(
                     RemoteErrorType::UnsupportedFeature,
                     "remote file system doesn't support stream, so it is not possible to write at offset".to_string(),
@@ -286,7 +288,9 @@ where
         if offset > 0 {
             // try to seek
             if let Err(err) = writer.seek(std::io::SeekFrom::Start(offset)) {
-                error!("Failed to seek file: {err}. Not that not all the remote filesystems support seeking");
+                error!(
+                    "Failed to seek file: {err}. Not that not all the remote filesystems support seeking"
+                );
                 return Err(RemoteError::new_ex(
                     RemoteErrorType::IoError,
                     err.to_string(),
@@ -546,7 +550,9 @@ where
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
         let file_name_path = Self::path_info(file_name).path;
-        info!("create_file({file_name_path:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})");
+        info!(
+            "create_file({file_name_path:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})"
+        );
 
         let stat = self.stat(file_name).ok();
 
@@ -857,11 +863,12 @@ where
             || stat.delete_pending
             || info.delete_on_close()
         {
-            info!("removing file: {}; delete_on_close: {}; stat.delete_on_close: {}; delete_pending: {}",
-                 stat.file.path().display(),
+            info!(
+                "removing file: {}; delete_on_close: {}; stat.delete_on_close: {}; delete_pending: {}",
+                stat.file.path().display(),
                 context.delete_on_close,
-                 stat.delete_on_close,
-                  stat.delete_pending
+                stat.delete_on_close,
+                stat.delete_pending
             );
             if let Err(err) = self.remote(|remote| {
                 if stat.file.is_dir() {
@@ -1177,7 +1184,9 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("set_file_time({file_name:?}, {creation_time:?}, {last_access_time:?}, {last_write_time:?}, {context:?})");
+        info!(
+            "set_file_time({file_name:?}, {creation_time:?}, {last_access_time:?}, {last_write_time:?}, {context:?})"
+        );
         let file = match context.stat.read() {
             Err(_) => {
                 error!("mutex poisoned");
@@ -1448,7 +1457,9 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        info!("get_file_security({file_name:?}, {security_information:?}, {buffer_length}, {context:?})");
+        info!(
+            "get_file_security({file_name:?}, {security_information:?}, {buffer_length}, {context:?})"
+        );
         let stat = match context.stat.read() {
             Ok(stat) => stat,
             Err(_) => {

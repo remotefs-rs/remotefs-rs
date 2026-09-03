@@ -5,7 +5,7 @@ use nix::unistd::AccessFlags;
 use pretty_assertions::{assert_eq, assert_ne};
 use remotefs::fs::{Metadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs};
-use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
+use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
 
 use super::Driver;
 use crate::MountOption;

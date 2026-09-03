@@ -11,32 +11,32 @@
 //!
 //! - **Linux**: you need to have `fuse3` installed on your system.
 //!
-//!     Of course, you also need to have the `FUSE` kernel module installed.
-//!     To build `remotefs-fuse` on Linux, you need to have the `libfuse3` development package installed.
+//!   Of course, you also need to have the `FUSE` kernel module installed.
+//!   To build `remotefs-fuse` on Linux, you need to have the `libfuse3` development package installed.
 //!
-//!     In Ubuntu, you can install it with:
+//!   In Ubuntu, you can install it with:
 //!
-//!     ```sh
-//!     sudo apt-get install fuse3 libfuse3-dev
-//!     ```
+//!   ```sh
+//!   sudo apt-get install fuse3 libfuse3-dev
+//!   ```
 //!
-//!     In CentOS, you can install it with:
+//!   In CentOS, you can install it with:
 //!
-//!     ```sh
-//!     sudo yum install fuse-devel
-//!     ```
+//!   ```sh
+//!   sudo yum install fuse-devel
+//!   ```
 //!
 //! - **macOS**: you need to have the `macfuse` service installed on your system.
 //!
-//!     You can install it with:
+//!   You can install it with:
 //!
-//!     ```sh
-//!     brew install macfuse
-//!     ```
+//!   ```sh
+//!   brew install macfuse
+//!   ```
 //!
 //! - **Windows**: you need to have the `dokany` service installed on your system.
-//!    
-//!    You can install it from <https://github.com/dokan-dev/dokany?tab=readme-ov-file#installation>
+//!
+//!   You can install it from <https://github.com/dokan-dev/dokany?tab=readme-ov-file#installation>
 //!
 //! ## Get started
 //!

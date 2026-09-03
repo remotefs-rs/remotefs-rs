@@ -2,53 +2,53 @@
 name = "remotefs-fuse"
 version = { workspace = true }
 authors = { workspace = true }
-edition = { workspace = true }
-rust-version = { workspace = true }
-license = { workspace = true }
-keywords = { workspace = true }
 categories = { workspace = true }
-repository = { workspace = true }
 documentation = "https://docs.rs/remotefs-fuse"
+edition = { workspace = true }
+include = ["src/**/*", "../../LICENSE", "../../README.md", "../../CHANGELOG.md"]
+keywords = { workspace = true }
+license = { workspace = true }
+readme = "../../README.md"
+repository = { workspace = true }
+rust-version = { workspace = true }
 description = "A FUSE Driver for remote-fs"
-include = ["src/**/*", "../LICENSE", "../README.md", "../CHANGELOG.md"]
-readme = "../README.md"
+
+[features]
+default = []
+integration-tests = []
+no-log = ["log/max_level_off"]
+
+[dependencies]
+log = { workspace = true }
+remotefs = { workspace = true }
+seahash = { workspace = true }
+tempfile = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+fuser = { workspace = true, features = ["libfuse"] }
+libc = { workspace = true }
+nix = { workspace = true, features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+dashmap = { workspace = true }
+dokan = { workspace = true }
+dokan-sys = { workspace = true }
+path-slash = { workspace = true }
+widestring = { workspace = true }
+winapi = { workspace = true }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+pretty_assertions = { workspace = true }
+remotefs-memory = { workspace = true }
+serial_test = { workspace = true }
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { workspace = true, features = ["user"] }
 
 [lib]
 name = "remotefs_fuse"
 path = "src/lib.rs"
-
-[dependencies]
-log = "^0.4"
-remotefs = "0.3"
-seahash = "4"
-tempfile = "^3"
-
-[target.'cfg(unix)'.dependencies]
-fuser = "0.15"
-libc = "^0.2"
-nix = { version = "0.29", features = ["fs"] }
-
-[target.'cfg(windows)'.dependencies]
-dashmap = "6"
-dokan = "0.3.1"
-dokan-sys = "0.3.1"
-path-slash = "0.2"
-widestring = "0.4.3"
-winapi = "0.3.9"
-
-[dev-dependencies]
-env_logger = "^0.11"
-pretty_assertions = "^1"
-remotefs-memory = "0.1"
-serial_test = "^3"
-
-[target.'cfg(unix)'.dev-dependencies]
-nix = { version = "0.29", features = ["user"] }
-
-[features]
-default = []
-no-log = ["log/max_level_off"]
-integration-tests = []
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--cfg", "docsrs"]

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use argh::FromArgs;
 use remotefs::fs::UnixPex;
-use remotefs_memory::{node, Inode, MemoryFs, Node, Tree};
+use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
 
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "memory")]

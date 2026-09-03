@@ -7,27 +7,26 @@
 <p align="center">~ A FUSE Driver for remotefs-rs ~</p>
 
 <p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.1.0</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
     ><img
-      src="https://img.shields.io/badge/License-MIT-teal.svg"
+      src="https://img.shields.io/crates/l/remotefs-fuse.svg"
       alt="License-MIT"
   /></a>
   <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-fuse.svg?style=badge"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-fuse?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-fuse"
     ><img
-      src="https://img.shields.io/crates/d/remotefs-fuse.svg"
+      src="https://img.shields.io/crates/d/remotefs-fuse.svg?logo=rust"
       alt="Downloads counter"
   /></a>
   <a href="https://crates.io/crates/remotefs-fuse"
     ><img
-      src="https://img.shields.io/crates/v/remotefs-fuse.svg"
+      src="https://img.shields.io/crates/v/remotefs-fuse.svg?logo=rust"
       alt="Latest version"
   /></a>
   <a href="https://ko-fi.com/veeso">
@@ -35,38 +34,45 @@
       src="https://img.shields.io/badge/donate-ko--fi-red"
       alt="Ko-fi"
   /></a>
+  <a href="https://conventionalcommits.org"
+    ><img
+      src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white"
+      alt="Conventional commits"
+  /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/linux.yml"
+  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/linux/badge.svg"
-      alt="Linux CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/macos.yml"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/macos/badge.svg"
-      alt="MacOS CI"
-  /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/windows.yml"
-    ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-fuse/workflows/windows/badge.svg"
-      alt="Windows CI"
+      src="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml/badge.svg"
+      alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-fuse"
     ><img
-      src="https://docs.rs/remotefs-fuse/badge.svg"
+      src="https://img.shields.io/docsrs/remotefs-fuse?logo=rust"
       alt="Docs"
   /></a>
 </p>
 
 ---
 
-## Get started
+## About remotefs-fuse ☁️
+
+remotefs-fuse mounts any [`remotefs`](https://github.com/remotefs-rs/remotefs-rs) `RemoteFs`
+implementation (SFTP/SCP, FTP, AWS S3, SMB, WebDAV, Kube, in-memory, ...) as a local filesystem,
+via FUSE on Linux/macOS and Dokany on Windows. It ships as two crates:
+
+- **remotefs-fuse**: the library (`Mount`, `MountOption`, `Driver`), to embed in your own project.
+- **remotefs-fuse-cli**: a ready-to-use CLI that wires a chosen `remotefs` backend into
+  `remotefs-fuse` for you.
+
+---
+
+## Get started 🚀
 
 First of all you need to add **remotefs-fuse** to your project dependencies:
 
 ```toml
-remotefs-fuse = "^0.1.0"
+remotefs-fuse = "0.1"
 ```
 
 these features are supported:
@@ -108,32 +114,32 @@ mount.run().expect("Failed to run filesystem event loop");
 
 - **Linux**: you need to have `fuse3` installed on your system.
 
-     Of course, you also need to have the `FUSE` kernel module installed.
-     To build `remotefs-fuse` on Linux, you need to have the `libfuse3` development package installed.
+  Of course, you also need to have the `FUSE` kernel module installed.
+  To build `remotefs-fuse` on Linux, you need to have the `libfuse3` development package installed.
 
-     In Ubuntu, you can install it with:
+  In Ubuntu, you can install it with:
 
-     ```sh
-     sudo apt-get install fuse3 libfuse3-dev
-     ```
+  ```sh
+  sudo apt-get install fuse3 libfuse3-dev
+  ```
 
-     In CentOS, you can install it with:
+  In CentOS, you can install it with:
 
-     ```sh
-     sudo yum install fuse-devel
-     ```
+  ```sh
+  sudo yum install fuse-devel
+  ```
 
 - **macOS**: you need to have the `macfuse` service installed on your system.
 
-     You can install it with:
+  You can install it with:
 
-     ```sh
-     brew install macfuse
-     ```
+  ```sh
+  brew install macfuse
+  ```
 
 - **Windows**: you need to have the `dokany` service installed on your system.
 
-    You can install it from <https://github.com/dokan-dev/dokany?tab=readme-ov-file#installation>
+  You can install it from <https://github.com/dokan-dev/dokany?tab=readme-ov-file#installation>
 
 ## CLI Tool
 
@@ -231,9 +237,61 @@ Please consider this is an early-stage project and I haven't heavily tested it, 
 
 I suggest you to first test it on test filesystems to see whether the library behaves correctly with your system.
 
+---
+
+## Development 🛠️
+
+Every task runs through a [`just`](https://just.systems) recipe. Run `just` to list them all.
+
+```sh
+just build                 # cargo build --all-targets
+just test                  # cargo test --workspace, then --doc
+just fmt                   # dprint fmt (Markdown, Rust, TOML, YAML)
+just fmt_check             # dprint check
+just lint "-- -D warnings" # clippy with all features
+just doc                   # cargo doc --all-features
+just deny                  # cargo deny check
+just scan_secrets          # trufflehog filesystem
+just check                 # the full local quality gate
+```
+
+`just check` chains `fmt_check`, Clippy with warnings denied, `doc`, `deny`, and `test`, and is
+the required gate before opening a pull request.
+
+Integration tests actually mount a filesystem, so they're gated behind the `integration-tests`
+feature and need the platform FUSE/Dokany service installed (see [Requirements](#requirements)):
+
+```sh
+just test "--features integration-tests"
+```
+
+---
+
+## Support the developer ☕
+
+If you like remotefs-fuse and you're grateful for the work I've done, please consider a little donation 🥳
+
+You can make a donation with one of these platforms:
+
+[![ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/veeso)
+[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.me/chrisintin)
+[![bitcoin](https://img.shields.io/badge/Bitcoin-ff9416?style=for-the-badge&logo=bitcoin&logoColor=white)](https://btc.com/bc1qvlmykjn7htz0vuprmjrlkwtv9m9pan6kylsr8w)
+
+---
+
+## Contributing and issues 🤝🏻
+
+Contributions, bug reports, new features, and questions are welcome! 😉
+If you have any questions or concerns, or you want to suggest a new feature, or you just want to
+improve remotefs-fuse, feel free to open an issue or a PR.
+
+Before contributing with AI-assisted tools, please read the [AI Policy](AI_POLICY.md).
+
+---
+
 ## Changelog ⏳
 
-View remotefs-fuse`s changelog [HERE](CHANGELOG.md)
+View the remotefs-fuse [changelog](CHANGELOG.md).
 
 ---
 
@@ -241,4 +299,4 @@ View remotefs-fuse`s changelog [HERE](CHANGELOG.md)
 
 remotefs-fuse is licensed under the MIT license.
 
-You can read the entire license [HERE](LICENSE)
+You can read the entire [MIT license](LICENSE).
