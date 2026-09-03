@@ -78,8 +78,11 @@ where
 
     /// Get file name from a path.
     fn file_name(path: &Path) -> U16CString {
-        U16CString::from_str(path.file_name().unwrap().to_string_lossy())
-            .unwrap_or_else(|_| U16CString::default())
+        let Some(file_name) = path.file_name() else {
+            return U16CString::default();
+        };
+
+        U16CString::from_str(file_name.to_string_lossy()).unwrap_or_else(|_| U16CString::default())
     }
 
     /// Get windows attributes from a file.

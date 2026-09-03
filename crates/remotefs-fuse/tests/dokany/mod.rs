@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use remotefs_fuse::{Mount, Unmount};
 use serial_test::serial;
@@ -11,7 +11,6 @@ use crate::driver::mounted_file_path;
 
 pub type UnmountLock = Arc<Mutex<Option<Unmount>>>;
 
-static AVAILABLE_DRIVES: &[&str] = &["Z", "Y", "X", "W", "V", "U", "T", "S", "R", "Q"];
 static CURRENT_DRIVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Mounts the filesystem in a separate thread.
@@ -19,6 +18,7 @@ static CURRENT_DRIVE: AtomicUsize = AtomicUsize::new(0);
 /// The filesystem must be unmounted manually and then the thread must be joined.
 fn mount(p: &Path) -> (UnmountLock, JoinHandle<()>) {
     let mountpoint = p.to_path_buf();
+    let mountpoint_t = mountpoint.clone();
 
     let error_flag = Arc::new(AtomicBool::new(false));
     let error_flag_t = error_flag.clone();
@@ -27,22 +27,33 @@ fn mount(p: &Path) -> (UnmountLock, JoinHandle<()>) {
     let umount_t = umount.clone();
 
     let join = std::thread::spawn(move || {
-        let mut mount =
-            Mount::mount(crate::driver::setup_driver(), &mountpoint, &[]).expect("failed to mount");
+        let mut mount = Mount::mount(crate::driver::setup_driver(), &mountpoint_t, &[])
+            .expect("failed to mount");
 
         let umount = mount.unmounter();
         *umount_t.lock().unwrap() = Some(umount);
 
-        mount.run().expect("failed to run filesystem event loop");
+        let result = mount.run();
+        if result.is_err() {
+            error_flag_t.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        result.expect("failed to run filesystem event loop");
 
         // set the error flag if the filesystem was unmounted
         error_flag_t.store(true, std::sync::atomic::Ordering::Relaxed);
     });
 
     // wait for the filesystem to be mounted
-    std::thread::sleep(Duration::from_secs(1));
-    if error_flag.load(std::sync::atomic::Ordering::Relaxed) {
-        panic!("Failed to mount filesystem");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !is_drive_mounted(&mountpoint) && Instant::now() < deadline {
+        if error_flag.load(std::sync::atomic::Ordering::Relaxed) {
+            panic!("Failed to mount filesystem");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    if !is_drive_mounted(&mountpoint) {
+        panic!("Timed out waiting for filesystem to mount");
     }
 
     (umount, join)
@@ -59,9 +70,43 @@ fn umount(umount: UnmountLock) {
 }
 
 fn next_driver() -> PathBuf {
-    let current = CURRENT_DRIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let drive = AVAILABLE_DRIVES[current % AVAILABLE_DRIVES.len()];
-    PathBuf::from(drive)
+    const DRIVE_COUNT: usize = 26;
+
+    let current = CURRENT_DRIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % DRIVE_COUNT;
+    let drives = unsafe { winapi::um::fileapi::GetLogicalDrives() };
+
+    for offset in 0..DRIVE_COUNT {
+        let index = (current + offset) % DRIVE_COUNT;
+        if drives & (1 << index) == 0 {
+            return PathBuf::from(char::from(b'A' + index as u8).to_string());
+        }
+    }
+
+    panic!("No unused drive letter is available");
+}
+
+fn is_drive_mounted(drive: &Path) -> bool {
+    let drive_index = drive
+        .to_string_lossy()
+        .as_bytes()
+        .first()
+        .expect("drive letter is missing")
+        .to_ascii_uppercase()
+        - b'A';
+    let drives = unsafe { winapi::um::fileapi::GetLogicalDrives() };
+
+    drives & (1 << drive_index) != 0
+}
+
+#[test]
+#[serial]
+fn test_should_select_unused_drive() {
+    let drive = next_driver();
+
+    assert!(
+        !is_drive_mounted(&drive),
+        "drive is already in use: {drive:?}"
+    );
 }
 
 fn path_to_drive(mnt: &Path, path: &Path) -> PathBuf {

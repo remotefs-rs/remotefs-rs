@@ -33,6 +33,13 @@ fn test_should_get_filename() {
 }
 
 #[test]
+fn test_should_get_empty_filename_for_root() {
+    let filename = Driver::<MemoryFs>::file_name(Path::new("/"));
+
+    assert_eq!(filename, U16CString::default().to_ucstring());
+}
+
+#[test]
 fn test_should_make_attributes_from_file() {
     let file = File {
         path: PathBuf::from("C:\\Users\\user\\Desktop\\file.txt"),
