@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
-    Request, TimeOrNow,
+    AccessFlags as FuserAccessFlags, BsdFileFlags, FileAttr, FileHandle as FuserFileHandle,
+    FileType, Filesystem, FopenFlags, Generation, INodeNo, KernelConfig, LockOwner, OpenFlags,
+    RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+    ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use inode::{Inode, ROOT_INODE};
 use libc::{c_int, mode_t};
@@ -33,6 +34,313 @@ const BLOCK_SIZE: usize = 512;
 const FMODE_EXEC: c_int = 0x20;
 const ROOT_UID: u32 = 0;
 
+pub(crate) struct DriverInner<T: RemoteFs> {
+    pub(crate) database: InodeDb,
+    pub(crate) file_handlers: FileHandlersDb,
+    pub(crate) options: Vec<MountOption>,
+    pub(crate) remote: T,
+}
+
+impl<T> DriverInner<T>
+where
+    T: RemoteFs,
+{
+    pub(crate) fn new(remote: T, options: Vec<MountOption>) -> Self {
+        Self {
+            database: InodeDb::load(),
+            file_handlers: FileHandlersDb::default(),
+            options,
+            remote,
+        }
+    }
+}
+
+impl<T> Filesystem for Driver<T>
+where
+    T: RemoteFs + Send + Sync + 'static,
+{
+    fn init(&mut self, req: &Request, config: &mut KernelConfig) -> std::io::Result<()> {
+        self.with_inner(|inner| inner.init(req, config))
+    }
+
+    fn destroy(&mut self) {
+        self.with_inner(|inner| inner.destroy());
+    }
+
+    fn lookup(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        self.with_inner(|inner| inner.lookup(req, parent, name, reply));
+    }
+
+    fn forget(&self, req: &Request, ino: INodeNo, nlookup: u64) {
+        self.with_inner(|inner| inner.forget(req, ino, nlookup));
+    }
+
+    fn getattr(&self, req: &Request, ino: INodeNo, fh: Option<FuserFileHandle>, reply: ReplyAttr) {
+        self.with_inner(|inner| inner.getattr(req, ino, fh, reply));
+    }
+
+    fn setattr(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<SystemTime>,
+        fh: Option<FuserFileHandle>,
+        crtime: Option<SystemTime>,
+        chgtime: Option<SystemTime>,
+        bkuptime: Option<SystemTime>,
+        flags: Option<BsdFileFlags>,
+        reply: ReplyAttr,
+    ) {
+        self.with_inner(|inner| {
+            inner.setattr(
+                req, ino, mode, uid, gid, size, atime, mtime, ctime, fh, crtime, chgtime, bkuptime,
+                flags, reply,
+            );
+        });
+    }
+
+    fn readlink(&self, req: &Request, ino: INodeNo, reply: ReplyData) {
+        self.with_inner(|inner| inner.readlink(req, ino, reply));
+    }
+
+    fn mknod(
+        &self,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        rdev: u32,
+        reply: ReplyEntry,
+    ) {
+        self.with_inner(|inner| inner.mknod(req, parent, name, mode, umask, rdev, reply));
+    }
+
+    fn mkdir(
+        &self,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        reply: ReplyEntry,
+    ) {
+        self.with_inner(|inner| inner.mkdir(req, parent, name, mode, umask, reply));
+    }
+
+    fn unlink(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        self.with_inner(|inner| inner.unlink(req, parent, name, reply));
+    }
+
+    fn rmdir(&self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        self.with_inner(|inner| inner.rmdir(req, parent, name, reply));
+    }
+
+    fn symlink(
+        &self,
+        req: &Request,
+        parent: INodeNo,
+        link_name: &OsStr,
+        target: &Path,
+        reply: ReplyEntry,
+    ) {
+        self.with_inner(|inner| inner.symlink(req, parent, link_name, target, reply));
+    }
+
+    fn rename(
+        &self,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        newparent: INodeNo,
+        newname: &OsStr,
+        flags: RenameFlags,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.rename(req, parent, name, newparent, newname, flags, reply));
+    }
+
+    fn link(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        newparent: INodeNo,
+        newname: &OsStr,
+        reply: ReplyEntry,
+    ) {
+        self.with_inner(|inner| inner.link(req, ino, newparent, newname, reply));
+    }
+
+    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        self.with_inner(|inner| inner.open(req, ino, flags, reply));
+    }
+
+    fn read(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        offset: u64,
+        size: u32,
+        flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
+        reply: ReplyData,
+    ) {
+        self.with_inner(|inner| inner.read(req, ino, fh, offset, size, flags, lock_owner, reply));
+    }
+
+    fn write(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        offset: u64,
+        data: &[u8],
+        write_flags: WriteFlags,
+        flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
+        reply: ReplyWrite,
+    ) {
+        self.with_inner(|inner| {
+            inner.write(
+                req,
+                ino,
+                fh,
+                offset,
+                data,
+                write_flags,
+                flags,
+                lock_owner,
+                reply,
+            );
+        });
+    }
+
+    fn flush(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        lock_owner: LockOwner,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.flush(req, ino, fh, lock_owner, reply));
+    }
+
+    fn release(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        flags: OpenFlags,
+        lock_owner: Option<LockOwner>,
+        flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.release(req, ino, fh, flags, lock_owner, flush, reply));
+    }
+
+    fn fsync(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.fsync(req, ino, fh, datasync, reply));
+    }
+
+    fn opendir(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        self.with_inner(|inner| inner.opendir(req, ino, flags, reply));
+    }
+
+    fn readdir(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        offset: u64,
+        reply: ReplyDirectory,
+    ) {
+        self.with_inner(|inner| inner.readdir(req, ino, fh, offset, reply));
+    }
+
+    fn releasedir(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        flags: OpenFlags,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.releasedir(req, ino, fh, flags, reply));
+    }
+
+    fn fsyncdir(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.fsyncdir(req, ino, fh, datasync, reply));
+    }
+
+    fn statfs(&self, req: &Request, ino: INodeNo, reply: ReplyStatfs) {
+        self.with_inner(|inner| inner.statfs(req, ino, reply));
+    }
+
+    fn setxattr(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        name: &OsStr,
+        value: &[u8],
+        flags: i32,
+        position: u32,
+        reply: ReplyEmpty,
+    ) {
+        self.with_inner(|inner| inner.setxattr(req, ino, name, value, flags, position, reply));
+    }
+
+    fn getxattr(&self, req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        self.with_inner(|inner| inner.getxattr(req, ino, name, size, reply));
+    }
+
+    fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        self.with_inner(|inner| inner.listxattr(req, ino, size, reply));
+    }
+
+    fn removexattr(&self, req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        self.with_inner(|inner| inner.removexattr(req, ino, name, reply));
+    }
+
+    fn access(&self, req: &Request, ino: INodeNo, mask: FuserAccessFlags, reply: ReplyEmpty) {
+        self.with_inner(|inner| inner.access(req, ino, mask, reply));
+    }
+
+    fn create(
+        &self,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        flags: i32,
+        reply: ReplyCreate,
+    ) {
+        self.with_inner(|inner| inner.create(req, parent, name, mode, umask, flags, reply));
+    }
+}
+
 /// Convert a [`remotefs::fs::FileType`] to a [`FileType`] from [`fuser`]
 fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
     match filetype {
@@ -48,7 +356,7 @@ where
     T: RemoteFs,
 {
     FileAttr {
-        ino: Driver::<T>::inode(value.path()),
+        ino: INodeNo(Driver::<T>::inode(value.path())),
         size: value.metadata().size,
         blocks: value.metadata().size.div_ceil(BLOCK_SIZE as u64),
         atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
@@ -97,7 +405,7 @@ impl<T> Driver<T>
 where
     T: RemoteFs,
 {
-    /// Get the inode as [`Inode`] ([`u64`]) number for a [`Path`]
+    /// Get the inode as [`Inode`] ([`u64`]) number for a [`Path`].
     fn inode(path: &Path) -> Inode {
         if path == Path::new("/") {
             return ROOT_INODE;
@@ -107,7 +415,12 @@ where
         path.hash(&mut hasher);
         hasher.finish()
     }
+}
 
+impl<T> DriverInner<T>
+where
+    T: RemoteFs,
+{
     /// Get the inode for a path.
     ///
     /// If the inode is not in the database, it will be fetched from the remote filesystem.
@@ -118,8 +431,8 @@ where
         })?;
 
         // Save the inode to the database
-        if !self.database.has(attrs.ino) {
-            self.database.put(attrs.ino, path.to_path_buf());
+        if !self.database.has(attrs.ino.0) {
+            self.database.put(attrs.ino.0, path.to_path_buf());
         }
 
         Ok((file, attrs))
@@ -146,7 +459,7 @@ where
         let path = parent_path.join(name);
 
         // Get the inode and save it to the database
-        let inode = Self::inode(&path);
+        let inode = Driver::<T>::inode(&path);
         if !self.database.has(inode) {
             self.database.put(inode, path.clone());
         }
@@ -238,7 +551,12 @@ where
     /// If possible, this system will use the stream from remotefs directly,
     /// otherwise it will use a temporary file (*sigh*).
     /// Note that most of remotefs supports streaming, so this should be rare.
-    fn read(&mut self, path: &Path, buffer: &mut [u8], offset: u64) -> RemoteResult<usize> {
+    fn read_remote_file(
+        &mut self,
+        path: &Path,
+        buffer: &mut [u8],
+        offset: u64,
+    ) -> RemoteResult<usize> {
         match self.remote.open(path) {
             Ok(mut reader) => {
                 debug!("Reading file from stream: {:?} at {offset}", path);
@@ -328,7 +646,7 @@ where
     }
 
     /// Write data to a file.
-    fn write(&mut self, file: &File, data: &[u8], offset: u64) -> RemoteResult<u32> {
+    fn write_remote_file(&mut self, file: &File, data: &[u8], offset: u64) -> RemoteResult<u32> {
         // write data
         let mut reader = Cursor::new(data);
         let mut writer = match self.remote.create(file.path(), file.metadata()) {
@@ -429,17 +747,53 @@ where
     }
 }
 
-impl<T> Filesystem for Driver<T>
+impl<T> Driver<T>
+where
+    T: RemoteFs,
+{
+    #[cfg(test)]
+    fn get_inode_from_path(&self, path: &Path) -> RemoteResult<(File, FileAttr)> {
+        self.with_inner(|inner| inner.get_inode_from_path(path))
+    }
+
+    #[cfg(test)]
+    fn get_inode(&self, inode: INodeNo) -> RemoteResult<(File, FileAttr)> {
+        self.with_inner(|inner| inner.get_inode(inode.0))
+    }
+
+    #[cfg(test)]
+    fn lookup_name(&self, parent: INodeNo, name: &OsStr) -> Option<PathBuf> {
+        self.with_inner(|inner| inner.lookup_name(parent.0, name))
+    }
+
+    #[cfg(test)]
+    fn check_access(&self, file: &File, uid: u32, gid: u32, access_mask: AccessFlags) -> bool {
+        self.with_inner(|inner| inner.check_access(file, uid, gid, access_mask))
+    }
+
+    #[cfg(test)]
+    fn uid(&self) -> Option<u32> {
+        self.with_inner(|inner| inner.uid())
+    }
+
+    #[cfg(test)]
+    fn gid(&self) -> Option<u32> {
+        self.with_inner(|inner| inner.gid())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+impl<T> DriverInner<T>
 where
     T: RemoteFs,
 {
     /// Initialize filesystem.
     /// Called before any other filesystem method.
-    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
+    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> std::io::Result<()> {
         info!("Initializing filesystem");
         if let Err(err) = self.remote.connect() {
             error!("Failed to connect to remote filesystem: {err}");
-            return Err(libc::EIO);
+            return Err(std::io::Error::other(err.to_string()));
         }
         info!("Connected to remote filesystem");
 
@@ -458,13 +812,13 @@ where
     }
 
     /// Look up a directory entry by name and get its attributes.
-    fn lookup(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
+    fn lookup(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         info!("lookup() called with {:?} {:?}", parent, name);
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -472,7 +826,7 @@ where
         let (file, attrs) = match self.get_inode_from_path(path.as_path()) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
             Ok(res) => res,
@@ -480,11 +834,11 @@ where
 
         if !self.check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK) {
             error!("No access to file: {path:?}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
-        reply.entry(&Duration::new(0, 0), &attrs, 0)
+        reply.entry(&Duration::new(0, 0), &attrs, Generation(0))
     }
 
     /// Forget about an inode.
@@ -494,18 +848,24 @@ where
     /// each forget. The filesystem may ignore forget calls, if the inodes don't need to
     /// have a limited lifetime. On unmount it is not guaranteed, that all referenced
     /// inodes will receive a forget message.
-    fn forget(&mut self, _req: &Request, ino: u64, _nlookup: u64) {
+    fn forget(&mut self, _req: &Request, ino: INodeNo, _nlookup: u64) {
         info!("forget() called with {ino}");
-        self.database.forget(ino);
+        self.database.forget(ino.0);
     }
 
     /// Get file attributes.
-    fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
+    fn getattr(
+        &mut self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: Option<FuserFileHandle>,
+        reply: ReplyAttr,
+    ) {
         info!("getattr() called with {ino}");
-        let attrs = match self.get_inode(ino) {
+        let attrs = match self.get_inode(ino.0) {
             Err(err) => {
                 error!("Failed to get file attributes for {ino}: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
             Ok((_, attrs)) => attrs,
@@ -518,7 +878,7 @@ where
     fn setattr(
         &mut self,
         req: &Request,
-        ino: u64,
+        ino: INodeNo,
         mode: Option<u32>,
         uid: Option<u32>,
         gid: Option<u32>,
@@ -526,29 +886,29 @@ where
         atime: Option<TimeOrNow>,
         mtime: Option<TimeOrNow>,
         ctime: Option<SystemTime>,
-        _fh: Option<u64>,
+        _fh: Option<FuserFileHandle>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        _flags: Option<u32>,
+        _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
         info!(
             "setattr() called with mode: {:?}, uid: {:?}, gid: {:?}, size: {:?}, atime: {:?}, mtime: {:?}, ctime: {:?}",
             mode, uid, gid, size, atime, mtime, ctime
         );
-        let (mut file, _) = match self.get_inode(ino) {
+        let (mut file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         if !self.check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK) {
             error!("No access to file: {}", file.path().display());
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
@@ -582,27 +942,27 @@ where
             }
             Err(err) => {
                 error!("Failed to set file attributes: {err}");
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
             }
         }
     }
 
     /// Read symbolic link.
-    fn readlink(&mut self, _req: &Request, ino: u64, reply: ReplyData) {
+    fn readlink(&mut self, _req: &Request, ino: INodeNo, reply: ReplyData) {
         info!("readlink() called with {:?}", ino);
-        let (file, _) = match self.get_inode(ino) {
+        let (file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         let mut buffer = vec![0; file.metadata().size as usize];
-        if let Err(err) = self.read(file.path(), &mut buffer, 0) {
+        if let Err(err) = self.read_remote_file(file.path(), &mut buffer, 0) {
             error!("Failed to read file: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -615,7 +975,7 @@ where
     fn mknod(
         &mut self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         _umask: u32,
@@ -633,23 +993,23 @@ where
                 "mknod() implementation is incomplete. Only supports regular files, symlinks, and directories. Got {:o}",
                 mode
             );
-            reply.error(libc::ENOSYS);
+            reply.error(fuser::Errno::ENOSYS);
             return;
         }
 
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(parent.0, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
@@ -675,14 +1035,14 @@ where
                     "mknod() implementation is incomplete. Only supports regular files and directories. Got {:o}",
                     mode
                 );
-                reply.error(libc::ENOSYS);
+                reply.error(fuser::Errno::ENOSYS);
                 return;
             }
         };
 
         if let Err(err) = res {
             error!("Failed to create file: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -690,9 +1050,9 @@ where
         match self.get_inode_from_path(path.as_path()) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
             }
-            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, Generation(0)),
         }
     }
 
@@ -700,33 +1060,33 @@ where
     fn mkdir(
         &mut self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         _umask: u32,
         reply: ReplyEntry,
     ) {
         info!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(parent.0, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
         let mode = UnixPex::from(mode);
         if let Err(err) = self.remote.create_dir(&path, mode) {
             error!("Failed to create directory: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -734,34 +1094,34 @@ where
         match self.get_inode_from_path(path.as_path()) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
             }
-            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, Generation(0)),
         }
     }
 
     /// Remove a file
-    fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn unlink(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         info!("unlink() called with {:?} {:?}", parent, name);
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(parent.0, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
         if let Err(err) = self.remote.remove_file(&path) {
             error!("Failed to remove file: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -769,27 +1129,27 @@ where
     }
 
     /// Remove a directory
-    fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn rmdir(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         info!("rmdir() called with {:?} {:?}", parent, name);
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(parent.0, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
         if let Err(err) = self.remote.remove_dir(&path) {
             error!("Failed to remove directory: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -800,31 +1160,31 @@ where
     fn symlink(
         &mut self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &OsStr,
         link: &Path,
         reply: ReplyEntry,
     ) {
         info!("symlink() called with {:?} {:?} {:?}", parent, name, link);
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(parent.0, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
         if let Err(err) = self.remote.symlink(&path, link) {
             error!("Failed to create symlink: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -832,9 +1192,9 @@ where
         match self.get_inode_from_path(path.as_path()) {
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
             }
-            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, 0),
+            Ok((_, attrs)) => reply.entry(&Duration::new(0, 0), &attrs, Generation(0)),
         }
     }
 
@@ -842,11 +1202,11 @@ where
     fn rename(
         &mut self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &OsStr,
-        newparent: u64,
+        newparent: INodeNo,
         newname: &OsStr,
-        _flags: u32,
+        _flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
         info!(
@@ -855,45 +1215,45 @@ where
         );
 
         // Check access for parent
-        if !self.check_inode_access(parent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(parent.0, req, AccessFlags::W_OK) {
             error!("No access to parent: {parent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
-        let src = match self.lookup_name(parent, name) {
+        let src = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // Check access for new parent
-        if !self.check_inode_access(newparent, req, AccessFlags::W_OK) {
+        if !self.check_inode_access(newparent.0, req, AccessFlags::W_OK) {
             error!("No access to new parent: {newparent}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
-        let dest = match self.lookup_name(newparent, newname) {
+        let dest = match self.lookup_name(newparent.0, newname) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {newname:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         if let Err(err) = self.remote.mov(&src, &dest) {
             error!("Failed to move file: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
         // Update the database
-        self.database.put(Self::inode(&dest), dest);
+        self.database.put(Driver::<T>::inode(&dest), dest);
 
         reply.ok();
     }
@@ -902,14 +1262,14 @@ where
     fn link(
         &mut self,
         _req: &Request,
-        _ino: u64,
-        _newparent: u64,
+        _ino: INodeNo,
+        _newparent: INodeNo,
         _newname: &OsStr,
         reply: ReplyEntry,
     ) {
         debug!("link() called");
         // not implemented
-        reply.error(libc::ENOSYS);
+        reply.error(fuser::Errno::ENOSYS);
     }
 
     /// Open a file.
@@ -920,15 +1280,15 @@ where
     /// anything in fh. There are also some flags (direct_io, keep_cache) which the
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
-    fn open(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         info!("open() called for {ino}");
-        let flags = OFlag::from_bits_truncate(flags);
+        let flags = OFlag::from_bits_truncate(flags.0);
         let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
             OFlag::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
                 if flags.intersects(OFlag::O_TRUNC) {
                     error!("EACCESS due to O_TRUNC flag");
-                    reply.error(libc::EACCES);
+                    reply.error(fuser::Errno::EACCES);
                     return;
                 }
                 if flags.intersects(OFlag::from_bits_retain(FMODE_EXEC)) {
@@ -943,29 +1303,29 @@ where
             // Exactly one access mode flag must be specified
             _ => {
                 error!("Invalid access mode flags: {flags:?}");
-                reply.error(libc::EINVAL);
+                reply.error(fuser::Errno::EINVAL);
                 return;
             }
         };
 
-        let (file, _) = match self.get_inode(ino) {
+        let (file, _) = match self.get_inode(ino.0) {
             Ok(res) => res,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         if !self.check_access(&file, req.uid(), req.gid(), access_mask) {
             error!("No access to file: {}", file.path().display());
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
 
         // Set file handle and reply
-        let fh = self.file_handlers.open(req.pid(), ino, read, write);
-        reply.opened(fh, 0);
+        let fh = self.file_handlers.open(req.pid(), ino.0, read, write);
+        reply.opened(FuserFileHandle(fh), FopenFlags::empty());
     }
 
     /// Read data.
@@ -978,48 +1338,41 @@ where
     fn read(
         &mut self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
         info!("read() called for {ino} {size} bytes at {offset}");
         // check access
         if !self
             .file_handlers
-            .get(req.pid(), fh)
+            .get(req.pid(), fh.0)
             .map(|handler| handler.read)
             .unwrap_or_default()
         {
             error!("No read permission for fh {fh} and pid {}", req.pid());
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
-        // check offset
-        if offset < 0 {
-            error!("Invalid offset {offset}");
-            reply.error(libc::EINVAL);
-            return;
-        }
-
-        let (file, _) = match self.get_inode(ino) {
+        let (file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
-        let read_size = (size as u64).min(file.metadata().size.saturating_sub(offset as u64));
+        let read_size = (size as u64).min(file.metadata().size.saturating_sub(offset));
         debug!("Reading {read_size} bytes from at {offset}");
         let mut buffer = vec![0; read_size as usize];
-        if let Err(err) = self.read(file.path(), &mut buffer, offset as u64) {
+        if let Err(err) = self.read_remote_file(file.path(), &mut buffer, offset) {
             error!("Failed to read file: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -1035,49 +1388,42 @@ where
     fn write(
         &mut self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        offset: u64,
         data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _write_flags: WriteFlags,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
         info!("write() called for {ino} {} bytes at {offset}", data.len());
         // check access
         if !self
             .file_handlers
-            .get(req.pid(), fh)
+            .get(req.pid(), fh.0)
             .map(|handler| handler.write)
             .unwrap_or_default()
         {
             debug!("No write permission for fh {fh}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
-        // check offset
-        if offset < 0 {
-            debug!("Invalid offset {offset}");
-            reply.error(libc::EINVAL);
-            return;
-        }
-
-        let (file, _) = match self.get_inode(ino) {
+        let (file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         // write data
-        let bytes_written = match self.write(&file, data, offset as u64) {
+        let bytes_written = match self.write_remote_file(&file, data, offset) {
             Ok(bytes) => bytes,
             Err(err) => {
                 error!("Failed to write file: {err}");
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
                 return;
             }
         };
@@ -1095,13 +1441,20 @@ where
     /// is not forced to flush pending writes. One reason to flush data, is if the
     /// filesystem wants to return write errors. If the filesystem supports file locking
     /// operations (setlk, getlk) it should remove all locks belonging to 'lock_owner'.
-    fn flush(&mut self, req: &Request, ino: u64, fh: u64, _lock_owner: u64, reply: ReplyEmpty) {
+    fn flush(
+        &mut self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        _lock_owner: LockOwner,
+        reply: ReplyEmpty,
+    ) {
         info!("flush() called for {ino}");
 
         // get fh
-        if self.file_handlers.get(req.pid(), fh).is_none() {
+        if self.file_handlers.get(req.pid(), fh.0).is_none() {
             error!("no file handler found for {fh} and pid {}", req.pid());
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         }
 
@@ -1120,29 +1473,36 @@ where
     fn release(
         &mut self,
         req: &Request,
-        _ino: u64,
-        fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _ino: INodeNo,
+        fh: FuserFileHandle,
+        _flags: OpenFlags,
+        _lock_owner: Option<LockOwner>,
         _flush: bool,
         reply: ReplyEmpty,
     ) {
         // get fh
-        if self.file_handlers.get(req.pid(), fh).is_none() {
+        if self.file_handlers.get(req.pid(), fh.0).is_none() {
             error!("no file handler found for {fh} and pid {}", req.pid());
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         }
 
         // remove fh and ok
-        self.file_handlers.close(req.pid(), fh);
+        self.file_handlers.close(req.pid(), fh.0);
         reply.ok();
     }
 
     /// Synchronize file contents.
     /// If the datasync parameter is non-zero, then only the user data should be flushed,
     /// not the meta data.
-    fn fsync(&mut self, _req: &Request, _ino: u64, _fh: u64, _datasync: bool, reply: ReplyEmpty) {
+    fn fsync(
+        &mut self,
+        _req: &Request,
+        _ino: INodeNo,
+        _fh: FuserFileHandle,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
         reply.ok();
     }
 
@@ -1153,15 +1513,15 @@ where
     /// anything in fh, though that makes it impossible to implement standard conforming
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
-    fn opendir(&mut self, req: &Request, ino: u64, flags: i32, reply: ReplyOpen) {
+    fn opendir(&mut self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         info!("opendir() called on {:?}", ino);
-        let flags = OFlag::from_bits_truncate(flags);
+        let flags = OFlag::from_bits_truncate(flags.0);
         let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
             OFlag::O_RDONLY => {
                 // Behavior is undefined, but most filesystems return EACCES
                 if flags.intersects(OFlag::O_TRUNC) {
                     error!("EACCES due to O_TRUNC flag");
-                    reply.error(libc::EACCES);
+                    reply.error(fuser::Errno::EACCES);
                     return;
                 }
                 (AccessFlags::R_OK, true, false)
@@ -1171,26 +1531,26 @@ where
             // Exactly one access mode flag must be specified
             _ => {
                 error!("Invalid flags: {flags:?}");
-                reply.error(libc::EINVAL);
+                reply.error(fuser::Errno::EINVAL);
                 return;
             }
         };
 
-        let (file, _) = match self.get_inode(ino) {
+        let (file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
 
         if self.check_access(&file, req.uid(), req.gid(), access_mask) {
-            let fh = self.file_handlers.open(req.pid(), ino, read, write);
-            reply.opened(fh, 0);
+            let fh = self.file_handlers.open(req.pid(), ino.0, read, write);
+            reply.opened(FuserFileHandle(fh), FopenFlags::empty());
         } else {
             error!("No access to file: {ino}");
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
         }
     }
 
@@ -1202,33 +1562,33 @@ where
     fn readdir(
         &mut self,
         req: &Request,
-        ino: u64,
-        fh: u64,
-        offset: i64,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        offset: u64,
         mut reply: ReplyDirectory,
     ) {
         info!("readdir() called on {:?}", ino);
         // check fh with read permissions
-        match self.file_handlers.get(req.pid(), fh) {
+        match self.file_handlers.get(req.pid(), fh.0) {
             Some(handler) if !handler.read => {
                 error!("No read permission for fh {fh} and pid {}", req.pid());
-                reply.error(libc::EACCES);
+                reply.error(fuser::Errno::EACCES);
                 return;
             }
             None => {
                 error!("no file handler found for {fh} and pid {}", req.pid());
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
             _ => {}
         }
 
         // get directory
-        let file = match self.get_inode(ino) {
+        let file = match self.get_inode(ino.0) {
             Ok((file, _)) => file,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -1239,13 +1599,13 @@ where
             Ok(entries) => entries,
             Err(err) => {
                 error!("Failed to list directory: {err}");
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
                 return;
             }
         };
 
         for (index, entry) in entries.into_iter().skip(offset as usize).enumerate() {
-            let inode = Self::inode(entry.path());
+            let inode = Driver::<T>::inode(entry.path());
             debug!("Reading entry {inode} {index} {}", entry.path().display());
             let name = match entry.path().file_name() {
                 Some(name) => OsStr::from_bytes(name.as_bytes()),
@@ -1255,8 +1615,8 @@ where
                 }
             };
             let buffer_full = reply.add(
-                inode,
-                offset + index as i64 + 1,
+                INodeNo(inode),
+                offset + index as u64 + 1,
                 convert_remote_filetype(entry.metadata().file_type),
                 name,
             );
@@ -1274,19 +1634,26 @@ where
     /// For every opendir call there will be exactly one releasedir call. fh will
     /// contain the value set by the opendir method, or will be undefined if the
     /// opendir method didn't set any value.
-    fn releasedir(&mut self, req: &Request, _ino: u64, fh: u64, _flags: i32, reply: ReplyEmpty) {
+    fn releasedir(
+        &mut self,
+        req: &Request,
+        _ino: INodeNo,
+        fh: FuserFileHandle,
+        _flags: OpenFlags,
+        reply: ReplyEmpty,
+    ) {
         // get fh
-        if self.file_handlers.get(req.pid(), fh).is_none() {
+        if self.file_handlers.get(req.pid(), fh.0).is_none() {
             error!(
                 "Failed to get file handler for {fh} and process {}",
                 req.pid()
             );
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         }
 
         // remove fh and ok
-        self.file_handlers.close(req.pid(), fh);
+        self.file_handlers.close(req.pid(), fh.0);
         reply.ok();
     }
 
@@ -1294,22 +1661,29 @@ where
     /// If the datasync parameter is set, then only the directory contents should
     /// be flushed, not the meta data. fh will contain the value set by the opendir
     /// method, or will be undefined if the opendir method didn't set any value.
-    fn fsyncdir(&mut self, req: &Request, ino: u64, fh: u64, _datasync: bool, reply: ReplyEmpty) {
+    fn fsyncdir(
+        &mut self,
+        req: &Request,
+        ino: INodeNo,
+        fh: FuserFileHandle,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
         info!("fsyncdir() called for {ino}");
         // get fh
-        if self.file_handlers.get(req.pid(), fh).is_none() {
+        if self.file_handlers.get(req.pid(), fh.0).is_none() {
             error!(
                 "Failed to get file handler for {fh} and process {}",
                 req.pid()
             );
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         }
         reply.ok();
     }
 
     /// Get file system statistics.
-    fn statfs(&mut self, _req: &Request, ino: u64, reply: ReplyStatfs) {
+    fn statfs(&mut self, _req: &Request, ino: INodeNo, reply: ReplyStatfs) {
         info!("statfs() called for {ino}");
 
         // get statfs
@@ -1318,7 +1692,7 @@ where
             size: u64,
         }
 
-        let path = match self.get_inode(ino) {
+        let path = match self.get_inode(ino.0) {
             Ok((file, _)) => file.path().to_path_buf(),
             Err(_) => PathBuf::from("/"),
         };
@@ -1343,7 +1717,7 @@ where
         let mut stats = FsStats { files: 0, size: 0 };
         if let Err(err) = iter_dir(&mut self.remote, &path, &mut stats) {
             error!("Failed to get filesystem statistics: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
@@ -1363,7 +1737,7 @@ where
     fn setxattr(
         &mut self,
         _req: &Request,
-        ino: u64,
+        ino: INodeNo,
         name: &OsStr,
         value: &[u8],
         _flags: i32,
@@ -1372,47 +1746,54 @@ where
     ) {
         info!("setxattr() called on {:?} {:?} {:?}", ino, name, value);
         // not supported
-        reply.error(libc::ENOSYS);
+        reply.error(fuser::Errno::ENOSYS);
     }
 
     /// Get an extended attribute.
     /// If `size` is 0, the size of the value should be sent with `reply.size()`.
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
-    fn getxattr(&mut self, _req: &Request, ino: u64, name: &OsStr, _size: u32, reply: ReplyXattr) {
+    fn getxattr(
+        &mut self,
+        _req: &Request,
+        ino: INodeNo,
+        name: &OsStr,
+        _size: u32,
+        reply: ReplyXattr,
+    ) {
         info!("getxattr() called on {:?} {:?}", ino, name);
         // not supported
-        reply.error(libc::ENOSYS);
+        reply.error(fuser::Errno::ENOSYS);
     }
 
     /// List extended attribute names.
     /// If `size` is 0, the size of the value should be sent with `reply.size()`.
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
-    fn listxattr(&mut self, _req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
+    fn listxattr(&mut self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
         info!("listxattr() called on {:?} {:?}", ino, size);
         // not supported
-        reply.error(libc::ENOSYS);
+        reply.error(fuser::Errno::ENOSYS);
     }
 
     /// Remove an extended attribute.
-    fn removexattr(&mut self, _req: &Request, ino: u64, name: &OsStr, reply: ReplyEmpty) {
+    fn removexattr(&mut self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         info!("removexattr() called on {:?} {:?}", ino, name);
         // not supported
-        reply.error(libc::ENOSYS);
+        reply.error(fuser::Errno::ENOSYS);
     }
 
     /// Check file access permissions.
     /// This will be called for the access() system call. If the 'default_permissions'
     /// mount option is given, this method is not called. This method is not called
     /// under Linux kernel versions 2.4.x
-    fn access(&mut self, req: &Request, ino: u64, mask: i32, reply: ReplyEmpty) {
+    fn access(&mut self, req: &Request, ino: INodeNo, mask: FuserAccessFlags, reply: ReplyEmpty) {
         info!("access() called on {:?} {:o}", ino, mask);
-        let file = match self.get_inode(ino) {
+        let file = match self.get_inode(ino.0) {
             Ok((file, _)) => file,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -1421,12 +1802,12 @@ where
             &file,
             req.uid(),
             req.gid(),
-            AccessFlags::from_bits_truncate(mask),
+            AccessFlags::from_bits_truncate(mask.bits()),
         ) {
             reply.ok();
         } else {
             error!("No access to file: {}", file.path().display());
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
         }
     }
 
@@ -1443,7 +1824,7 @@ where
     fn create(
         &mut self,
         req: &Request,
-        parent: u64,
+        parent: INodeNo,
         name: &OsStr,
         mode: u32,
         _umask: u32,
@@ -1460,16 +1841,16 @@ where
             // Exactly one access mode flag must be specified
             _ => {
                 error!("Invalid access mode flag: {flags:?}");
-                reply.error(libc::EINVAL);
+                reply.error(fuser::Errno::EINVAL);
                 return;
             }
         };
 
-        let path = match self.lookup_name(parent, name) {
+        let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup name {name:?}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -1483,21 +1864,27 @@ where
         let reader = Cursor::new(Vec::new());
         if let Err(err) = self.remote.create_file(&path, &metadata, Box::new(reader)) {
             error!("Failed to create file: {err}");
-            reply.error(libc::EIO);
+            reply.error(fuser::Errno::EIO);
             return;
         }
 
-        let inode = Self::inode(&path);
+        let inode = Driver::<T>::inode(&path);
 
         // return created
         match self.get_inode(inode) {
             Err(err) => {
                 debug!("Failed to get file attributes: {err}");
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
             }
             Ok((_, attrs)) => {
                 let fh = self.file_handlers.open(req.pid(), inode, read, write);
-                reply.created(&Duration::new(0, 0), &attrs, 0, fh, 0);
+                reply.created(
+                    &Duration::new(0, 0),
+                    &attrs,
+                    Generation(0),
+                    FuserFileHandle(fh),
+                    FopenFlags::empty(),
+                );
             }
         }
     }

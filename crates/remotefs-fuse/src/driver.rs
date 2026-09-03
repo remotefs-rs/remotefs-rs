@@ -16,19 +16,14 @@ use crate::MountOption;
 /// The driver will use the [`fuser`](https://crates.io/crates/fuser) crate to mount the filesystem, on Unix systems, while
 /// it will use [dokan](https://crates.io/crates/dokan) on Windows.
 pub struct Driver<T: RemoteFs> {
-    /// Inode database
+    /// Unix filesystem state.
     #[cfg(unix)]
-    database: unix::InodeDb,
-    /// File handle database
-    #[cfg(unix)]
-    file_handlers: unix::FileHandlersDb,
-    /// Mount options
-    pub(crate) options: Vec<MountOption>,
-    #[cfg(unix)]
-    /// [`RemoteFs`] instance
-    remote: T,
+    inner: std::sync::Mutex<unix::DriverInner<T>>,
+    /// Mount options.
     #[cfg(windows)]
-    /// [`RemoteFs`] instance usable as `Sync` in immutable references
+    pub(crate) options: Vec<MountOption>,
+    #[cfg(windows)]
+    /// [`RemoteFs`] instance usable as `Sync` in immutable references.
     remote: std::sync::Arc<std::sync::Mutex<T>>,
     #[cfg(windows)]
     /// [`windows::DirEntry`] foor directory
@@ -51,16 +46,27 @@ where
     pub fn new(remote: T, options: Vec<MountOption>) -> Self {
         Self {
             #[cfg(unix)]
-            database: unix::InodeDb::load(),
-            #[cfg(unix)]
-            file_handlers: unix::FileHandlersDb::default(),
+            inner: std::sync::Mutex::new(unix::DriverInner::new(remote, options)),
+            #[cfg(windows)]
             options,
-            #[cfg(unix)]
-            remote,
             #[cfg(windows)]
             remote: std::sync::Arc::new(std::sync::Mutex::new(remote)),
             #[cfg(windows)]
             file_handlers: dashmap::DashMap::new(),
         }
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn with_inner<R>(
+        &self,
+        operation: impl FnOnce(&mut unix::DriverInner<T>) -> R,
+    ) -> R {
+        let mut inner = self.inner.lock().expect("Unix driver state lock poisoned");
+        operation(&mut inner)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn options(&self) -> Vec<MountOption> {
+        self.with_inner(|inner| inner.options.clone())
     }
 }

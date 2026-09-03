@@ -99,14 +99,16 @@ fn make_file_at(driver: &mut Driver<MemoryFs>, path: &Path, content: &[u8]) {
     make_dir_at(driver, parent_dir);
 
     let reader = std::io::Cursor::new(content.to_vec());
-    driver
-        .remote
-        .create_file(
-            path,
-            &Metadata::default().size(content.len() as u64),
-            Box::new(reader),
-        )
-        .expect("Failed to create file");
+    driver.with_inner(|inner| {
+        inner
+            .remote
+            .create_file(
+                path,
+                &Metadata::default().size(content.len() as u64),
+                Box::new(reader),
+            )
+            .expect("Failed to create file");
+    });
 }
 
 /// Make directory on the remote fs at `path`
@@ -117,14 +119,16 @@ fn make_dir_at(driver: &mut Driver<MemoryFs>, path: &Path) {
     for stem in path.iter() {
         abs_path.push(stem);
         println!("Creating directory: {abs_path:?}");
-        match driver.remote.create_dir(&abs_path, UnixPex::from(0o755)) {
-            Ok(_)
-            | Err(RemoteError {
-                kind: RemoteErrorType::DirectoryAlreadyExists,
-                ..
-            }) => {}
-            Err(err) => panic!("Failed to create directory: {err}"),
-        }
+        driver.with_inner(
+            |inner| match inner.remote.create_dir(&abs_path, UnixPex::from(0o755)) {
+                Ok(_)
+                | Err(RemoteError {
+                    kind: RemoteErrorType::DirectoryAlreadyExists,
+                    ..
+                }) => {}
+                Err(err) => panic!("Failed to create directory: {err}"),
+            },
+        );
     }
 }
 
@@ -162,13 +166,15 @@ fn test_should_get_inode_from_path() {
     assert_eq!(attrs.size, 11);
 
     // file should be in the database
-    assert_eq!(
-        driver
-            .database
-            .get(attrs.ino)
-            .expect("inode is not in database"),
-        file_path
-    );
+    driver.with_inner(|inner| {
+        assert_eq!(
+            inner
+                .database
+                .get(attrs.ino.0)
+                .expect("inode is not in database"),
+            file_path
+        );
+    });
 
     // should get the same file if querying by inode
     let (file_b, attrs_b) = driver.get_inode(attrs.ino).expect("failed to get inode");
@@ -199,13 +205,15 @@ fn test_should_lookup_name() {
 
     // inode for looked up file should be in the database
     let child_inode = Driver::<MemoryFs>::inode(&looked_up_path);
-    assert_eq!(
-        driver
-            .database
-            .get(child_inode)
-            .expect("child inode is not in database"),
-        looked_up_path
-    );
+    driver.with_inner(|inner| {
+        assert_eq!(
+            inner
+                .database
+                .get(child_inode)
+                .expect("child inode is not in database"),
+            looked_up_path
+        );
+    });
 }
 
 #[test]

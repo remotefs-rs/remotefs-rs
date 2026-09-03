@@ -141,6 +141,31 @@ pub enum MountOption {
 }
 
 #[cfg(unix)]
+pub(super) fn into_fuser_config(options: &[MountOption]) -> fuser::Config {
+    let acl = if options
+        .iter()
+        .any(|option| matches!(option, MountOption::AllowRoot))
+    {
+        fuser::SessionACL::RootAndOwner
+    } else if options
+        .iter()
+        .any(|option| matches!(option, MountOption::AllowOther))
+    {
+        fuser::SessionACL::All
+    } else {
+        fuser::SessionACL::Owner
+    };
+
+    let mut config = fuser::Config::default();
+    config.mount_options = options
+        .iter()
+        .filter_map(|option| option.try_into().ok())
+        .collect();
+    config.acl = acl;
+    config
+}
+
+#[cfg(unix)]
 #[cfg_attr(docsrs, doc(cfg(unix)))]
 impl TryFrom<&MountOption> for fuser::MountOption {
     type Error = &'static str;
@@ -150,8 +175,9 @@ impl TryFrom<&MountOption> for fuser::MountOption {
             MountOption::FSName(name) => fuser::MountOption::FSName(name.clone()),
             MountOption::Subtype(name) => fuser::MountOption::Subtype(name.clone()),
             MountOption::Custom(name) => fuser::MountOption::CUSTOM(name.clone()),
-            MountOption::AllowOther => fuser::MountOption::AllowOther,
-            MountOption::AllowRoot => fuser::MountOption::AllowRoot,
+            MountOption::AllowOther | MountOption::AllowRoot => {
+                return Err("ACL options are handled by fuser::Config");
+            }
             MountOption::AutoUnmount => fuser::MountOption::AutoUnmount,
             MountOption::DefaultPermissions => fuser::MountOption::DefaultPermissions,
             MountOption::Dev => fuser::MountOption::Dev,
@@ -447,6 +473,27 @@ mod test {
         assert_eq!(
             MountOption::from_str("sector_size=512").unwrap(),
             MountOption::SectorSize(512)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_should_convert_fuser_config() {
+        let options = vec![
+            MountOption::AllowRoot,
+            MountOption::FSName("remote".to_string()),
+            MountOption::RW,
+        ];
+
+        let config = into_fuser_config(&options);
+
+        assert_eq!(config.acl, fuser::SessionACL::RootAndOwner);
+        assert_eq!(
+            config.mount_options,
+            vec![
+                fuser::MountOption::FSName("remote".to_string()),
+                fuser::MountOption::RW,
+            ]
         );
     }
 }

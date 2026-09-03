@@ -10,10 +10,10 @@ use crate::driver::Driver;
 /// A struct to mount the filesystem.
 pub struct Mount<T>
 where
-    T: RemoteFs + Sync + Send,
+    T: RemoteFs + Sync + Send + 'static,
 {
     #[cfg(unix)]
-    session: fuser::Session<Driver<T>>,
+    session: Option<fuser::Session<Driver<T>>>,
     #[cfg(windows)]
     mountpoint: widestring::U16CString,
     #[cfg(windows)]
@@ -22,7 +22,7 @@ where
 
 impl<T> Mount<T>
 where
-    T: RemoteFs + Sync + Send,
+    T: RemoteFs + Sync + Send + 'static,
 {
     /// Mount the filesystem implemented by `Driver` to the provided mountpoint.
     ///
@@ -36,14 +36,10 @@ where
     ) -> Result<Self, std::io::Error> {
         let driver = Driver::new(remote, options.to_vec());
 
-        let options = driver
-            .options
-            .iter()
-            .flat_map(|opt| opt.try_into())
-            .collect::<Vec<_>>();
+        let options = option::into_fuser_config(&driver.options());
 
         Ok(Self {
-            session: fuser::Session::new(driver, mountpoint, &options)?,
+            session: Some(fuser::Session::new(driver, mountpoint, &options)?),
         })
     }
 
@@ -75,7 +71,10 @@ where
     /// This function will block the current thread.
     pub fn run(&mut self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
-        self.session.run()?;
+        self.session
+            .take()
+            .ok_or_else(|| std::io::Error::other("filesystem session has already been started"))?
+            .run()?;
 
         #[cfg(windows)]
         {
@@ -97,7 +96,11 @@ where
     pub fn unmounter(&mut self) -> Unmount {
         Unmount {
             #[cfg(unix)]
-            umount: self.session.unmount_callable(),
+            umount: self
+                .session
+                .as_mut()
+                .expect("filesystem session has already been started")
+                .unmount_callable(),
             #[cfg(windows)]
             mountpoint: self.mountpoint.clone(),
         }
