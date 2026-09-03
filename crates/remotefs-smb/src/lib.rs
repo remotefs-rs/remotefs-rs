@@ -191,6 +191,7 @@ mod client;
 
 pub use client::SmbDialect;
 #[cfg(all(target_family = "unix", feature = "pavao"))]
+#[cfg_attr(docsrs, doc(cfg(all(target_family = "unix", feature = "pavao"))))]
 pub use client::{
     PavaoSmbCredentials, PavaoSmbEncryptionLevel, PavaoSmbFs, PavaoSmbOptions, PavaoSmbShareMode,
 };
@@ -198,6 +199,7 @@ pub use client::{
 #[cfg_attr(docsrs, doc(cfg(feature = "smb")))]
 pub use client::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions};
 #[cfg(target_family = "windows")]
+#[cfg_attr(docsrs, doc(cfg(target_family = "windows")))]
 pub use client::{WNetSmbCredentials, WNetSmbFs};
 
 // -- utils

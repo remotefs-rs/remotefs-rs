@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-smb"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-smb"
@@ -56,6 +56,8 @@ with-containers = []
 features = ["find", "pavao", "smb"]
 no-default-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
 [[example]]
 name = "tree"
