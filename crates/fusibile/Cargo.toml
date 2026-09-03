@@ -30,7 +30,7 @@ env_logger = { workspace = true }
 log = { workspace = true }
 remotefs = { workspace = true }
 remotefs-aws-s3 = { workspace = true, optional = true }
-remotefs-ftp = { workspace = true, features = ["rustls"], optional = true }
+
 remotefs-fuse = { workspace = true }
 remotefs-kube = { workspace = true, optional = true }
 remotefs-memory = { workspace = true }
@@ -42,6 +42,10 @@ tokio = { workspace = true, features = ["rt"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["user"] }
+remotefs-ftp = { workspace = true, features = ["native-tls", "native-tls-vendored"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+remotefs-ftp = { workspace = true, features = ["native-tls"], optional = true }
 
 [[bin]]
 name = "remotefs-fuse-cli"
