@@ -5,7 +5,7 @@ use remotefs::{RemoteFs, RemoteResult};
 #[cfg(all(feature = "smb", target_family = "unix"))]
 use remotefs_smb::PavaoSmbFs as SmbFs;
 #[cfg(all(feature = "smb", target_family = "windows"))]
-use remotefs_smb::WNetSmbCredentials as SmbFs;
+use remotefs_smb::WNetSmbFs as SmbFs;
 #[cfg(feature = "ssh")]
 use remotefs_ssh::{NoCheckServerKey, RusshSession};
 

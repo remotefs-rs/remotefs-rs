@@ -4,9 +4,7 @@ use remotefs_smb::{
     PavaoSmbCredentials as SmbCredentials, PavaoSmbFs as SmbFs, PavaoSmbOptions as SmbOptions,
 };
 #[cfg(windows)]
-use remotefs_smb::{
-    WNetSmbCredentials as SmbCredentials, WNetSmbFs as SmbFs, WNetSmbOptions as SmbOptions,
-};
+use remotefs_smb::{WNetSmbCredentials as SmbCredentials, WNetSmbFs as SmbFs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg(unix)]

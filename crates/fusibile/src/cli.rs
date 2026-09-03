@@ -144,9 +144,7 @@ impl CliArgs {
             #[cfg(all(feature = "smb", target_family = "unix"))]
             RemoteArgs::Smb(args) => RemoteFsWrapper::Smb(remotefs_smb::PavaoSmbFs::from(args)),
             #[cfg(all(feature = "smb", target_family = "windows"))]
-            RemoteArgs::Smb(args) => {
-                RemoteFsWrapper::Smb(remotefs_smb::WNetSmbCredentials::from(args))
-            }
+            RemoteArgs::Smb(args) => RemoteFsWrapper::Smb(remotefs_smb::WNetSmbFs::from(args)),
             #[cfg(feature = "webdav")]
             RemoteArgs::Webdav(args) => {
                 RemoteFsWrapper::Webdav(remotefs_webdav::WebDAVFs::from(args))

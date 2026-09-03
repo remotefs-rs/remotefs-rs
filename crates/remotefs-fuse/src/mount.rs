@@ -82,9 +82,7 @@ where
             // For reference <https://github.com/dokan-dev/dokan-rust/blob/master/dokan/examples/memfs/main.rs>
             let mut mounter =
                 dokan::FileSystemMounter::new(&self.driver, &self.mountpoint, &options);
-            mounter
-                .mount()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            mounter.mount().map_err(std::io::Error::other)?;
         }
 
         Ok(())
@@ -123,10 +121,7 @@ impl Unmount {
 
         #[cfg(windows)]
         if !dokan::unmount(&self.mountpoint) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to unmount",
-            ));
+            return Err(std::io::Error::other("Failed to unmount"));
         }
 
         Ok(())
