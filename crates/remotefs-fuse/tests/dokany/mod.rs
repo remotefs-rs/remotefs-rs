@@ -10,7 +10,7 @@ use serial_test::serial;
 use crate::driver::mounted_file_path;
 
 pub type UnmountLock = Arc<Mutex<Option<Unmount>>>;
-    
+
 static AVAILABLE_DRIVES: &[&str] = &["Z", "Y", "X", "W", "V", "U", "T", "S", "R", "Q"];
 static CURRENT_DRIVE: AtomicUsize = AtomicUsize::new(0);
 
