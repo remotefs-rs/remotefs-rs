@@ -141,8 +141,12 @@ impl CliArgs {
             RemoteArgs::Scp(args) => RemoteFsWrapper::Scp(remotefs_ssh::ScpFs::from(args)),
             #[cfg(feature = "ssh")]
             RemoteArgs::Sftp(args) => RemoteFsWrapper::Sftp(remotefs_ssh::SftpFs::from(args)),
-            #[cfg(feature = "smb")]
-            RemoteArgs::Smb(args) => RemoteFsWrapper::Smb(remotefs_smb::SmbFs::from(args)),
+            #[cfg(all(feature = "smb", target_family = "unix"))]
+            RemoteArgs::Smb(args) => RemoteFsWrapper::Smb(remotefs_smb::PavaoSmbFs::from(args)),
+            #[cfg(all(feature = "smb", target_family = "windows"))]
+            RemoteArgs::Smb(args) => {
+                RemoteFsWrapper::Smb(remotefs_smb::WNetSmbCredentials::from(args))
+            }
             #[cfg(feature = "webdav")]
             RemoteArgs::Webdav(args) => {
                 RemoteFsWrapper::Webdav(remotefs_webdav::WebDAVFs::from(args))

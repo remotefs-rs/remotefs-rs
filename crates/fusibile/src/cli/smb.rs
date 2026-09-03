@@ -1,5 +1,61 @@
 use argh::FromArgs;
-use remotefs_smb::{SmbCredentials, SmbFs};
+#[cfg(unix)]
+use remotefs_smb::{
+    PavaoSmbCredentials as SmbCredentials, PavaoSmbFs as SmbFs, PavaoSmbOptions as SmbOptions,
+};
+#[cfg(windows)]
+use remotefs_smb::{
+    WNetSmbCredentials as SmbCredentials, WNetSmbFs as SmbFs, WNetSmbOptions as SmbOptions,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(unix)]
+pub enum SmbDialect {
+    /// Automatically negotiate the dialect to use
+    Auto,
+    /// Use NT1 (SMB1) dialect
+    Nt1,
+    /// Use SMB2 dialect
+    Smb2,
+    /// Use SMB3 dialect
+    Smb3,
+}
+
+#[cfg(unix)]
+impl std::str::FromStr for SmbDialect {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "auto" => Ok(SmbDialect::Auto),
+            "smb1" | "nt1" => Ok(SmbDialect::Nt1),
+            "smb2" => Ok(SmbDialect::Smb2),
+            "smb3" => Ok(SmbDialect::Smb3),
+            _ => Err(format!("Invalid SMB dialect: {s}")),
+        }
+    }
+}
+
+#[cfg(unix)]
+impl SmbDialect {
+    pub fn min_max_dialect(&self) -> (remotefs_smb::SmbDialect, remotefs_smb::SmbDialect) {
+        match self {
+            SmbDialect::Auto => (
+                remotefs_smb::SmbDialect::Smb202,
+                remotefs_smb::SmbDialect::Smb311,
+            ),
+            SmbDialect::Nt1 => (remotefs_smb::SmbDialect::Nt1, remotefs_smb::SmbDialect::Nt1),
+            SmbDialect::Smb2 => (
+                remotefs_smb::SmbDialect::Smb202,
+                remotefs_smb::SmbDialect::Smb210,
+            ),
+            SmbDialect::Smb3 => (
+                remotefs_smb::SmbDialect::Smb300,
+                remotefs_smb::SmbDialect::Smb311,
+            ),
+        }
+    }
+}
 
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "smb")]
@@ -25,6 +81,10 @@ pub struct SmbArgs {
     #[cfg(unix)]
     #[argh(option)]
     workgroup: Option<String>,
+    #[cfg(unix)]
+    /// SMB dialect to use (auto, smb1, smb2, smb3)
+    #[argh(option, default = "SmbDialect::Auto")]
+    dialect: SmbDialect,
 }
 
 #[cfg(unix)]
@@ -44,21 +104,16 @@ impl From<SmbArgs> for SmbFs {
             credentials = credentials.workgroup(workgroup);
         }
 
-        #[cfg(unix)]
-        {
-            SmbFs::try_new(
-                credentials,
-                remotefs_smb::SmbOptions::default()
-                    .one_share_per_server(true)
-                    .case_sensitive(false),
-            )
-            .expect("Failed to create SMB client")
-        }
-
-        #[cfg(windows)]
-        {
-            SmbFs::new(credentials)
-        }
+        let (dialect_min, dialect_max) = args.dialect.min_max_dialect();
+        SmbFs::try_new_with_dialect(
+            credentials,
+            SmbOptions::default()
+                .one_share_per_server(true)
+                .case_sensitive(false),
+            dialect_min,
+            dialect_max,
+        )
+        .expect("Failed to create SMB client")
     }
 }
 

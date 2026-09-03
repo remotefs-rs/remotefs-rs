@@ -198,6 +198,7 @@ where protocol options are
   - `--username <username>` (optional)
   - `--password <password>` (optional)
   - `--workgroup <workgroup>` (optional; Linux/Mac only)
+  - `--dialect <dialect>` (optional; Linux/Mac only; possible values: `Auto`, `Nt1`, `Smb2`, `Smb3`; default: `Auto`)
 - scp / sftp
   - `--hostname <hostname>`
   - `--port <port>` (default `22`)

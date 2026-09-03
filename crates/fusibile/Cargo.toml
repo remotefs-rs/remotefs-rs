@@ -30,11 +30,10 @@ env_logger = { workspace = true }
 log = { workspace = true }
 remotefs = { workspace = true }
 remotefs-aws-s3 = { workspace = true, optional = true }
-
 remotefs-fuse = { workspace = true }
 remotefs-kube = { workspace = true, optional = true }
 remotefs-memory = { workspace = true }
-remotefs-smb = { workspace = true, optional = true }
+remotefs-smb = { workspace = true, optional = true, features = ["find", "pavao"] }
 remotefs-ssh = { workspace = true, optional = true }
 remotefs-webdav = { workspace = true, optional = true }
 thiserror = { workspace = true }

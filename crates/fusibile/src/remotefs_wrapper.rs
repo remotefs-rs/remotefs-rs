@@ -2,6 +2,10 @@ use std::path::PathBuf;
 
 use remotefs::fs::UnixPex;
 use remotefs::{RemoteFs, RemoteResult};
+#[cfg(all(feature = "smb", target_family = "unix"))]
+use remotefs_smb::PavaoSmbFs as SmbFs;
+#[cfg(all(feature = "smb", target_family = "windows"))]
+use remotefs_smb::WNetSmbCredentials as SmbFs;
 
 /// Wrapper around the different [`RemoteFs`] implementations
 #[allow(clippy::large_enum_variant)]
@@ -18,7 +22,7 @@ pub enum RemoteFsWrapper {
     #[cfg(feature = "ssh")]
     Sftp(remotefs_ssh::SftpFs),
     #[cfg(feature = "smb")]
-    Smb(remotefs_smb::SmbFs),
+    Smb(SmbFs),
     #[cfg(feature = "webdav")]
     Webdav(remotefs_webdav::WebDAVFs),
 }
