@@ -26,6 +26,7 @@ webdav = ["dep:remotefs-webdav"]
 anyhow = { workspace = true }
 argh = { workspace = true }
 ctrlc = { workspace = true }
+dirs = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
 remotefs = { workspace = true }
@@ -34,7 +35,7 @@ remotefs-fuse = { workspace = true }
 remotefs-kube = { workspace = true, optional = true }
 remotefs-memory = { workspace = true }
 remotefs-smb = { workspace = true, optional = true, features = ["find", "pavao"] }
-remotefs-ssh = { workspace = true, optional = true }
+remotefs-ssh = { workspace = true, optional = true, features = ["find", "russh"] }
 remotefs-webdav = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

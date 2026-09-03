@@ -6,6 +6,8 @@ use remotefs::{RemoteFs, RemoteResult};
 use remotefs_smb::PavaoSmbFs as SmbFs;
 #[cfg(all(feature = "smb", target_family = "windows"))]
 use remotefs_smb::WNetSmbCredentials as SmbFs;
+#[cfg(feature = "ssh")]
+use remotefs_ssh::{NoCheckServerKey, RusshSession};
 
 /// Wrapper around the different [`RemoteFs`] implementations
 #[allow(clippy::large_enum_variant)]
@@ -18,9 +20,9 @@ pub enum RemoteFsWrapper {
     Kube(remotefs_kube::KubeMultiPodFs),
     Memory(remotefs_memory::MemoryFs),
     #[cfg(feature = "ssh")]
-    Scp(remotefs_ssh::ScpFs),
+    Scp(remotefs_ssh::ScpFs<RusshSession<NoCheckServerKey>>),
     #[cfg(feature = "ssh")]
-    Sftp(remotefs_ssh::SftpFs),
+    Sftp(remotefs_ssh::SftpFs<RusshSession<NoCheckServerKey>>),
     #[cfg(feature = "smb")]
     Smb(SmbFs),
     #[cfg(feature = "webdav")]
