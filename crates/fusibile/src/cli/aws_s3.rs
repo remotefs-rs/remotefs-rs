@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use argh::FromArgs;
 use remotefs_aws_s3::AwsS3Fs;
 
@@ -33,7 +35,15 @@ pub struct AwsS3Args {
 
 impl From<AwsS3Args> for AwsS3Fs {
     fn from(args: AwsS3Args) -> Self {
-        let mut fs = AwsS3Fs::new(args.bucket).new_path_style(args.new_path_style);
+        let rt = Arc::new(
+            tokio::runtime::Builder::new_current_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .expect("Unable to create tokio runtime"),
+        );
+
+        let mut fs = AwsS3Fs::new(args.bucket, &rt).new_path_style(args.new_path_style);
         if let Some(region) = args.region {
             fs = fs.region(region);
         }
