@@ -4,20 +4,20 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use remotefs_fuse::{Mount, Umount};
+use remotefs_fuse::{Mount, Unmount};
 use serial_test::serial;
 
 use crate::driver::mounted_file_path;
 
-pub type UmountLock = Arc<Mutex<Option<Umount>>>;
-
+pub type UnmountLock = Arc<Mutex<Option<Unmount>>>;
+    
 static AVAILABLE_DRIVES: &[&str] = &["Z", "Y", "X", "W", "V", "U", "T", "S", "R", "Q"];
 static CURRENT_DRIVE: AtomicUsize = AtomicUsize::new(0);
 
 /// Mounts the filesystem in a separate thread.
 ///
 /// The filesystem must be unmounted manually and then the thread must be joined.
-fn mount(p: &Path) -> (UmountLock, JoinHandle<()>) {
+fn mount(p: &Path) -> (UnmountLock, JoinHandle<()>) {
     let mountpoint = p.to_path_buf();
 
     let error_flag = Arc::new(AtomicBool::new(false));
@@ -48,13 +48,13 @@ fn mount(p: &Path) -> (UmountLock, JoinHandle<()>) {
     (umount, join)
 }
 
-fn umount(umount: UmountLock) {
+fn umount(umount: UnmountLock) {
     umount
         .lock()
         .unwrap()
         .as_mut()
         .unwrap()
-        .umount()
+        .unmount()
         .expect("Failed to unmount");
 }
 
