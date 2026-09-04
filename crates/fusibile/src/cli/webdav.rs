@@ -18,6 +18,6 @@ pub struct WebdavArgs {
 
 impl From<WebdavArgs> for WebDAVFs {
     fn from(args: WebdavArgs) -> Self {
-        WebDAVFs::new(&args.url, &args.username, &args.password)
+        WebDAVFs::new(&args.username, &args.password, &args.url)
     }
 }
