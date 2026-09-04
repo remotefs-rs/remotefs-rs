@@ -440,7 +440,7 @@ where
         // Get the inode and save it to the database
         self.database.inode_for(&path);
 
-        info!(
+        debug!(
             "lookup_name() called with {:?} {:?} -> {:?}",
             parent, name, path
         );
@@ -865,7 +865,7 @@ where
 
     /// Look up a directory entry by name and get its attributes.
     fn lookup(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        info!("lookup() called with {:?} {:?}", parent, name);
+        debug!("lookup() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
@@ -901,7 +901,7 @@ where
     /// have a limited lifetime. On unmount it is not guaranteed, that all referenced
     /// inodes will receive a forget message.
     fn forget(&mut self, _req: &Request, ino: INodeNo, _nlookup: u64) {
-        info!("forget() called with {ino}");
+        debug!("forget() called with {ino}");
         self.database.forget(ino.0);
     }
 
@@ -913,7 +913,7 @@ where
         _fh: Option<FuserFileHandle>,
         reply: ReplyAttr,
     ) {
-        info!("getattr() called with {ino}");
+        debug!("getattr() called with {ino}");
         let attrs = match self.get_inode(ino.0) {
             Err(err) => {
                 error!("Failed to get file attributes for {ino}: {err}");
@@ -949,7 +949,7 @@ where
         _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
-        info!(
+        debug!(
             "setattr() called with mode: {:?}, uid: {:?}, gid: {:?}, size: {:?}, atime: {:?}, mtime: {:?}, ctime: {:?}",
             mode, uid, gid, size, atime, mtime, ctime
         );
@@ -1005,7 +1005,7 @@ where
 
     /// Read symbolic link.
     fn readlink(&mut self, _req: &Request, ino: INodeNo, reply: ReplyData) {
-        info!("readlink() called with {:?}", ino);
+        debug!("readlink() called with {:?}", ino);
         let (file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
@@ -1058,7 +1058,7 @@ where
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        info!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
+        debug!("mknod() called with {:?} {:?} {:o}", parent, name, mode);
 
         let mode = SFlag::from_bits_retain(mode as mode_t);
         let file_type = mode & SFlag::S_IFMT;
@@ -1142,7 +1142,7 @@ where
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        info!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
+        debug!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
         let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
@@ -1178,7 +1178,7 @@ where
 
     /// Remove a file
     fn unlink(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        info!("unlink() called with {:?} {:?}", parent, name);
+        debug!("unlink() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
@@ -1206,7 +1206,7 @@ where
 
     /// Remove a directory
     fn rmdir(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        info!("rmdir() called with {:?} {:?}", parent, name);
+        debug!("rmdir() called with {:?} {:?}", parent, name);
         let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
@@ -1241,7 +1241,7 @@ where
         link: &Path,
         reply: ReplyEntry,
     ) {
-        info!("symlink() called with {:?} {:?} {:?}", parent, name, link);
+        debug!("symlink() called with {:?} {:?} {:?}", parent, name, link);
         let path = match self.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
@@ -1289,7 +1289,7 @@ where
         _flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
-        info!(
+        debug!(
             "rename() called with {:?} {:?} {:?} {:?}",
             parent, name, newparent, newname
         );
@@ -1358,7 +1358,7 @@ where
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        info!("open() called for {ino}");
+        debug!("open() called for {ino}");
         let flags = OFlag::from_bits_truncate(flags.0);
         let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
             OFlag::O_RDONLY => {
@@ -1427,7 +1427,7 @@ where
         _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
-        info!("read() called for {ino} {size} bytes at {offset}");
+        debug!("read() called for {ino} {size} bytes at {offset}");
         // check access
         if !self
             .file_handlers
@@ -1482,7 +1482,7 @@ where
         _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
-        info!("write() called for {ino} {} bytes at {offset}", data.len());
+        debug!("write() called for {ino} {} bytes at {offset}", data.len());
         // check access
         if !self
             .file_handlers
@@ -1534,7 +1534,7 @@ where
         _lock_owner: LockOwner,
         reply: ReplyEmpty,
     ) {
-        info!("flush() called for {ino}");
+        debug!("flush() called for {ino}");
 
         // get fh
         if self.file_handlers.get(req.pid(), fh.0).is_none() {
@@ -1622,7 +1622,7 @@ where
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
     fn opendir(&mut self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        info!("opendir() called on {:?}", ino);
+        debug!("opendir() called on {:?}", ino);
         let flags = OFlag::from_bits_truncate(flags.0);
         let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
             OFlag::O_RDONLY => {
@@ -1675,7 +1675,7 @@ where
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        info!("readdir() called on {:?}", ino);
+        debug!("readdir() called on {:?}", ino);
         // check fh with read permissions
         match self.file_handlers.get(req.pid(), fh.0) {
             Some(handler) if !handler.read => {
@@ -1777,7 +1777,7 @@ where
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-        info!("fsyncdir() called for {ino}");
+        debug!("fsyncdir() called for {ino}");
         // get fh
         if self.file_handlers.get(req.pid(), fh.0).is_none() {
             error!(
@@ -1792,7 +1792,7 @@ where
 
     /// Get file system statistics.
     fn statfs(&mut self, _req: &Request, ino: INodeNo, reply: ReplyStatfs) {
-        info!("statfs() called for {ino}");
+        debug!("statfs() called for {ino}");
 
         // get statfs
         struct FsStats {
@@ -1856,7 +1856,7 @@ where
         _position: u32,
         reply: ReplyEmpty,
     ) {
-        info!("setxattr() called on {:?} {:?} {:?}", ino, name, value);
+        debug!("setxattr() called on {:?} {:?} {:?}", ino, name, value);
         // not supported
         reply.error(fuser::Errno::ENOSYS);
     }
@@ -1873,7 +1873,7 @@ where
         _size: u32,
         reply: ReplyXattr,
     ) {
-        info!("getxattr() called on {:?} {:?}", ino, name);
+        debug!("getxattr() called on {:?} {:?}", ino, name);
         // not supported
         reply.error(fuser::Errno::ENOSYS);
     }
@@ -1883,14 +1883,14 @@ where
     /// If `size` is not 0, and the value fits, send it with `reply.data()`, or
     /// `reply.error(ERANGE)` if it doesn't.
     fn listxattr(&mut self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
-        info!("listxattr() called on {:?} {:?}", ino, size);
+        debug!("listxattr() called on {:?} {:?}", ino, size);
         // not supported
         reply.error(fuser::Errno::ENOSYS);
     }
 
     /// Remove an extended attribute.
     fn removexattr(&mut self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        info!("removexattr() called on {:?} {:?}", ino, name);
+        debug!("removexattr() called on {:?} {:?}", ino, name);
         // not supported
         reply.error(fuser::Errno::ENOSYS);
     }
@@ -1900,7 +1900,7 @@ where
     /// mount option is given, this method is not called. This method is not called
     /// under Linux kernel versions 2.4.x
     fn access(&mut self, req: &Request, ino: INodeNo, mask: FuserAccessFlags, reply: ReplyEmpty) {
-        info!("access() called on {:?} {:o}", ino, mask);
+        debug!("access() called on {:?} {:o}", ino, mask);
         let file = match self.get_inode(ino.0) {
             Ok((file, _)) => file,
             Err(err) => {
@@ -1947,7 +1947,7 @@ where
         flags: i32,
         reply: ReplyCreate,
     ) {
-        info!("create() called with {:?} {:?} {:o}", parent, name, mode);
+        debug!("create() called with {:?} {:?} {:o}", parent, name, mode);
 
         let flags = OFlag::from_bits_truncate(flags);
         let (read, write) = match flags & OFlag::O_ACCMODE {

@@ -635,7 +635,7 @@ where
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
         let file_name_path = Self::path_info(file_name).path;
-        info!(
+        debug!(
             "create_file({file_name_path:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})"
         );
 
@@ -917,7 +917,7 @@ where
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) {
-        info!("cleanup({file_name:?}, {context:?})");
+        debug!("cleanup({file_name:?}, {context:?})");
         let stat = match context.stat.read() {
             Err(_) => {
                 error!("mutex poisoned");
@@ -958,7 +958,7 @@ where
         }
 
         if will_delete {
-            info!(
+            debug!(
                 "removing file: {}; delete_on_close: {}; stat.delete_on_close: {}; delete_pending: {}",
                 stat.file.path().display(),
                 context.delete_on_close,
@@ -993,7 +993,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) {
-        info!("close_file({file_name:?}, {context:?})");
+        debug!("close_file({file_name:?}, {context:?})");
 
         let key = file_name.to_ucstring();
         self.file_handlers.remove(&key);
@@ -1014,7 +1014,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        info!("read_file({file_name:?}, {offset})");
+        debug!("read_file({file_name:?}, {offset})");
         // read file
         let file = match context.stat.read() {
             Err(_) => {
@@ -1065,7 +1065,7 @@ where
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        info!("write_file({file_name:?}, {offset})");
+        debug!("write_file({file_name:?}, {offset})");
         // read file
         let file = match context.stat.read() {
             Err(_) => {
@@ -1118,7 +1118,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("flush_file_buffers({file_name:?}, {context:?})");
+        debug!("flush_file_buffers({file_name:?}, {context:?})");
 
         let file = match context.stat.read() {
             Err(_) => {
@@ -1145,7 +1145,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<FileInfo> {
-        info!("get_file_information({file_name:?}, {context:?})");
+        debug!("get_file_information({file_name:?}, {context:?})");
 
         let file = match context.stat.read() {
             Err(_) => {
@@ -1183,7 +1183,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("find_files({file_name:?}, {context:?})");
+        debug!("find_files({file_name:?}, {context:?})");
 
         let alt_stream = match context.alt_stream.read() {
             Err(_) => {
@@ -1231,7 +1231,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("find_files_with_pattern({file_name:?}, {pattern:?}, {context:?})");
+        debug!("find_files_with_pattern({file_name:?}, {pattern:?}, {context:?})");
 
         /*
         let alt_stream = match context.alt_stream.read() {
@@ -1275,7 +1275,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("set_file_attributes({file_name:?}, {file_attributes:?}, {context:?})");
+        debug!("set_file_attributes({file_name:?}, {file_attributes:?}, {context:?})");
 
         Ok(())
     }
@@ -1294,7 +1294,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!(
+        debug!(
             "set_file_time({file_name:?}, {creation_time:?}, {last_access_time:?}, {last_write_time:?}, {context:?})"
         );
         let file = match context.stat.read() {
@@ -1343,7 +1343,7 @@ where
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("delete_file({file_name:?}, {context:?})");
+        debug!("delete_file({file_name:?}, {context:?})");
         let is_dir = match context.stat.read() {
             Ok(stat) => stat.file.is_dir(),
             Err(_) => {
@@ -1396,7 +1396,7 @@ where
         info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("delete_directory({file_name:?}, {context:?})");
+        debug!("delete_directory({file_name:?}, {context:?})");
 
         if Self::try_alt_stream(context, |_alt_stream| Ok(())).is_some() {
             error!("alt stream found: {file_name:?}");
@@ -1469,7 +1469,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("move_file({file_name:?}, {new_file_name:?}, {replace_if_existing:?}, {context:?})");
+        debug!("move_file({file_name:?}, {new_file_name:?}, {replace_if_existing:?}, {context:?})");
 
         let dest = Self::path_info(new_file_name);
         // check if destination exists
@@ -1514,7 +1514,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("set_end_of_file({file_name:?}, {offset}, {context:?})");
+        debug!("set_end_of_file({file_name:?}, {offset}, {context:?})");
 
         Self::try_alt_stream(context, |alt_stream| {
             alt_stream.data.truncate(offset as usize);
@@ -1542,7 +1542,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("set_allocation_size({file_name:?}, {alloc_size}, {context:?})");
+        debug!("set_allocation_size({file_name:?}, {alloc_size}, {context:?})");
 
         Self::try_alt_stream(context, |alt_stream: &mut AltStream| {
             alt_stream.data = vec![0; alloc_size as usize];
@@ -1574,7 +1574,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<u32> {
-        info!(
+        debug!(
             "get_file_security({file_name:?}, {security_information:?}, {buffer_length}, {context:?})"
         );
         let stat = match context.stat.read() {
@@ -1603,7 +1603,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("set_file_security({file_name:?}, {security_information:?}, {context:?})");
+        debug!("set_file_security({file_name:?}, {security_information:?}, {context:?})");
 
         let mut stat = match context.stat.write() {
             Ok(stat) => stat,
@@ -1632,7 +1632,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
         context: &'c Self::Context,
     ) -> OperationResult<()> {
-        info!("find_streams({file_name:?}, {context:?})");
+        debug!("find_streams({file_name:?}, {context:?})");
 
         let file = match context.stat.read() {
             Err(_) => {
@@ -1676,7 +1676,7 @@ where
         &'h self,
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<VolumeInfo> {
-        info!("get_volume_information()");
+        debug!("get_volume_information()");
 
         Ok(VolumeInfo {
             name: U16CString::from_str("remotefs-fuse").expect("failed to create U16CString"),
@@ -1716,7 +1716,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<DiskSpaceInfo> {
         const DEFAULT_SIZE: u64 = 1024 * 1024 * 1024 * 128; // 128GB
-        info!("get_disk_free_space()");
+        debug!("get_disk_free_space()");
         Ok(DiskSpaceInfo {
             free_byte_count: DEFAULT_SIZE,
             byte_count: DEFAULT_SIZE,
