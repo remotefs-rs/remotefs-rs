@@ -129,7 +129,7 @@ on Intel macOS.
 First of all you need to add **remotefs-fuse** to your project dependencies:
 
 ```toml
-remotefs-fuse = "0.1"
+remotefs-fuse = "0.2"
 ```
 
 these features are supported:
