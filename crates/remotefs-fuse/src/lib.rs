@@ -12,7 +12,8 @@
 //! - **Linux**: you need to have `fuse3` installed on your system.
 //!
 //!   Of course, you also need to have the `FUSE` kernel module installed.
-//!   To build `remotefs-fuse` on Linux, you need to have the `libfuse3` development package installed.
+//!   To build `remotefs-fuse` on Linux with the default `libfuse` feature, you also need the
+//!   `libfuse3` development package. Building with `--no-default-features` needs only `fuse3`.
 //!
 //!   In Ubuntu, you can install it with:
 //!
@@ -50,8 +51,20 @@
 //!
 //! | name                | description                                              | default |
 //! |----------------------|----------------------------------------------------------|---------|
+//! | `libfuse`           | Link against the system `libfuse3` (Unix only). See below. | ✅       |
 //! | `no-log`            | Disable logging. By default, this library logs via the `log` crate. |         |
 //! | `integration-tests` | Enable tests that mount a real filesystem; only meant for this crate's own test suite. |         |
+//!
+//! `libfuse` *(enabled by default, Unix only)*: link against the system `libfuse3`.
+//!
+//! With the feature disabled, `fuser` uses its pure-Rust mount implementation instead:
+//! nothing is linked at build time, so `libfuse3-dev` is not needed to compile, and
+//! mounting shells out to the `fusermount3` binary from the `fuse3` package. Either way
+//! `fusermount3` must be present at runtime for unprivileged mounts, so the practical
+//! difference is only in what you need in order to *build*.
+//!
+//! The feature is inert on macOS and Windows: on macOS `fuser` always links macFUSE, and
+//! on Windows the driver is Dokany.
 //!
 //! ## Example
 //!

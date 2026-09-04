@@ -73,6 +73,9 @@ remotefs-fuse = "0.1"
 
 these features are supported:
 
+- `libfuse` (enabled by default, Unix only): link against the system `libfuse3`. Disable it to
+  use `fuser`'s pure-Rust mount implementation, which needs no `libfuse3-dev` at build time and
+  shells out to `fusermount3` instead. Inert on macOS and Windows.
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ## Example

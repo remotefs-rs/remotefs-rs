@@ -89,12 +89,19 @@ protocol
 - `ftp`
 - `gcs`
 - `kube`
+- `libfuse`: link against the system `libfuse3` on Unix; see the
+  [`remotefs-fuse` docs](https://docs.rs/remotefs-fuse) for what disabling it changes
 - `smb`: requires `libsmbclient` on MacOS and GNU/Linux systems
+- `smb-vendored` (UNIX only): build Samba from source instead of linking the system
+  `libsmbclient`, so the resulting binary carries no `libsmbclient` dependency. **Not enabled by
+  default** — it adds well over an hour to a build. The released Linux and macOS binaries are
+  built with it. It has no effect on Windows, where the SMB client is `WNetSmbFs` on the Win32
+  WNet API and needs no external library at all.
 - `ssh` (enables **both sftp and scp**); requires `libssh2` on MacOS and GNU/Linux systems
 - `webdav`
 
-All the features are enabled by default; so if you want to build it with only certain features,
-pass the `--no-default-features` option.
+All the features except `smb-vendored` are enabled by default; so if you want to build it with
+only certain features, pass the `--no-default-features` option.
 
 ## Usage
 
