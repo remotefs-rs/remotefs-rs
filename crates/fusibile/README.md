@@ -152,7 +152,7 @@ where protocol options are
   - `--port <port>` (default `22`)
   - `--username <username>`
   - `--password <password>`
-  - `--config-file <path>` (optional; default: `~/.ssh/config`)
+  - `--ssh-config <path>` (optional; default: `~/.ssh/config`)
 - webdav
   - `--url <url>`
   - `--username <username>`

@@ -130,9 +130,11 @@ impl CliArgs {
                 remotefs_memory::MemoryFs::from(args),
             )),
             #[cfg(feature = "ssh")]
-            RemoteArgs::Scp(args) => Ok(RemoteFsWrapper::Scp(remotefs_ssh::ScpFs::from(args))),
+            RemoteArgs::Scp(args) => Ok(RemoteFsWrapper::Scp(remotefs_ssh::ScpFs::try_from(args)?)),
             #[cfg(feature = "ssh")]
-            RemoteArgs::Sftp(args) => Ok(RemoteFsWrapper::Sftp(remotefs_ssh::SftpFs::from(args))),
+            RemoteArgs::Sftp(args) => {
+                Ok(RemoteFsWrapper::Sftp(remotefs_ssh::SftpFs::try_from(args)?))
+            }
             #[cfg(all(feature = "smb", target_family = "unix"))]
             RemoteArgs::Smb(args) => Ok(RemoteFsWrapper::Smb(remotefs_smb::PavaoSmbFs::try_from(
                 args,

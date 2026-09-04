@@ -23,7 +23,7 @@ pub struct ScpArgs {
     password: String,
     /// path to the SSH config file
     #[arg(long, default_value_os_t = default_ssh_config_path())]
-    config_file: std::path::PathBuf,
+    ssh_config: PathBuf,
 }
 
 impl std::fmt::Debug for ScpArgs {
@@ -33,13 +33,15 @@ impl std::fmt::Debug for ScpArgs {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
-            .field("config_file", &self.config_file)
+            .field("ssh_config", &self.ssh_config)
             .finish()
     }
 }
 
-impl From<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
-    fn from(args: ScpArgs) -> Self {
+impl TryFrom<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
+    type Error = anyhow::Error;
+
+    fn try_from(args: ScpArgs) -> Result<Self, Self::Error> {
         let rt = Arc::new(
             tokio::runtime::Builder::new_current_thread()
                 .worker_threads(1)
@@ -48,16 +50,16 @@ impl From<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
                 .expect("Unable to create tokio runtime"),
         );
 
-        ScpFs::russh(
+        Ok(ScpFs::russh(
             build_ssh_opts(
                 &args.hostname,
                 args.port,
                 &args.username,
                 &args.password,
-                &args.config_file,
-            ),
+                &args.ssh_config,
+            )?,
             rt,
-        )
+        ))
     }
 }
 
@@ -78,7 +80,7 @@ pub struct SftpArgs {
     password: String,
     /// path to the SSH config file
     #[arg(long, default_value_os_t = default_ssh_config_path())]
-    config_file: std::path::PathBuf,
+    ssh_config: PathBuf,
 }
 
 impl std::fmt::Debug for SftpArgs {
@@ -88,13 +90,15 @@ impl std::fmt::Debug for SftpArgs {
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
-            .field("config_file", &self.config_file)
+            .field("ssh_config", &self.ssh_config)
             .finish()
     }
 }
 
-impl From<SftpArgs> for SftpFs<RusshSession<NoCheckServerKey>> {
-    fn from(args: SftpArgs) -> Self {
+impl TryFrom<SftpArgs> for SftpFs<RusshSession<NoCheckServerKey>> {
+    type Error = anyhow::Error;
+
+    fn try_from(args: SftpArgs) -> Result<Self, Self::Error> {
         let rt = Arc::new(
             tokio::runtime::Builder::new_current_thread()
                 .worker_threads(1)
@@ -103,16 +107,16 @@ impl From<SftpArgs> for SftpFs<RusshSession<NoCheckServerKey>> {
                 .expect("Unable to create tokio runtime"),
         );
 
-        SftpFs::russh(
+        Ok(SftpFs::russh(
             build_ssh_opts(
                 &args.hostname,
                 args.port,
                 &args.username,
                 &args.password,
-                &args.config_file,
-            ),
+                &args.ssh_config,
+            )?,
             rt,
-        )
+        ))
     }
 }
 
@@ -122,13 +126,31 @@ fn build_ssh_opts(
     username: &str,
     password: &str,
     ssh_config_path: &Path,
-) -> SshOpts {
-    SshOpts::new(hostname)
+) -> anyhow::Result<SshOpts> {
+    let is_ssh_config_path_default = ssh_config_path == default_ssh_config_path().as_path();
+    let ssh_config_path_exists = ssh_config_path.exists();
+    if !is_ssh_config_path_default && !ssh_config_path_exists {
+        anyhow::bail!(
+            "SSH config file does not exist at path: {path}",
+            path = ssh_config_path.display()
+        );
+    }
+
+    let opts = SshOpts::new(hostname)
         .port(port)
         .username(username)
         .password(password)
-        .ssh_agent_identity(Some(SshAgentIdentity::All))
-        .config_file(ssh_config_path, SshConfigParseRule::ALLOW_UNKNOWN_FIELDS)
+        .ssh_agent_identity(Some(SshAgentIdentity::All));
+
+    if ssh_config_path_exists {
+        Ok(opts.config_file(ssh_config_path, SshConfigParseRule::ALLOW_UNKNOWN_FIELDS))
+    } else {
+        log::debug!(
+            "SSH config file does not exist at path: {path}, using default options",
+            path = ssh_config_path.display()
+        );
+        Ok(opts)
+    }
 }
 
 fn default_ssh_config_path() -> PathBuf {
@@ -181,8 +203,8 @@ mod tests {
         let sftp_args =
             SftpArgs::from_arg_matches(&sftp_matches).expect("valid SFTP arguments should parse");
 
-        assert_eq!(scp_args.config_file, expected);
-        assert_eq!(sftp_args.config_file, expected);
+        assert_eq!(scp_args.ssh_config, expected);
+        assert_eq!(sftp_args.ssh_config, expected);
     }
 
     #[test]
@@ -194,7 +216,7 @@ mod tests {
             port: 22,
             username: "user".to_string(),
             password: secret.to_string(),
-            config_file: PathBuf::from("/dev/null"),
+            ssh_config: PathBuf::from("/dev/null"),
         };
         let rendered = format!("{scp_args:?}");
         assert!(!rendered.contains(secret));
@@ -205,7 +227,7 @@ mod tests {
             port: 22,
             username: "user".to_string(),
             password: secret.to_string(),
-            config_file: PathBuf::from("/dev/null"),
+            ssh_config: PathBuf::from("/dev/null"),
         };
         let rendered = format!("{sftp_args:?}");
         assert!(!rendered.contains(secret));
