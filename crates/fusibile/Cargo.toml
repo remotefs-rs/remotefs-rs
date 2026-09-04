@@ -1,14 +1,14 @@
 [package]
-name = "remotefs-fuse-cli"
+name = "fusibile"
 version = { workspace = true }
 authors = { workspace = true }
 categories = ["command-line-utilities", "network-programming"]
-documentation = "https://docs.rs/remotefs-fuse-cli"
+documentation = "https://docs.rs/fusibile"
 edition = { workspace = true }
-include = ["src/**/*", "../../LICENSE", "../../README.md", "../../CHANGELOG.md"]
+include = ["src/**/*", "../../LICENSE", "README.md", "../../CHANGELOG.md"]
 keywords = { workspace = true }
 license = { workspace = true }
-readme = "../../README.md"
+readme = "README.md"
 repository = { workspace = true }
 rust-version = { workspace = true }
 description = "A CLI to mount remote file systems locally via FUSE or Dokany"
@@ -51,5 +51,5 @@ remotefs-ftp = { workspace = true, features = ["native-tls", "native-tls-vendore
 remotefs-ftp = { workspace = true, features = ["native-tls"], optional = true }
 
 [[bin]]
-name = "remotefs-fuse-cli"
+name = "fusibile"
 path = "src/main.rs"

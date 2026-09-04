@@ -59,11 +59,12 @@
 
 remotefs-fuse mounts any [`remotefs`](https://github.com/remotefs-rs/remotefs-rs) `RemoteFs`
 implementation (SFTP/SCP, FTP, AWS S3, Google Cloud Storage, SMB, WebDAV, Kube, in-memory, ...) as
-a local filesystem, via FUSE on Linux/macOS and Dokany on Windows. It ships as two crates:
+a local filesystem, via FUSE on Linux/macOS and Dokany on Windows. It's the library (`Mount`,
+`MountOption`, `Driver`) to embed in your own project.
 
-- **remotefs-fuse**: the library (`Mount`, `MountOption`, `Driver`), to embed in your own project.
-- **remotefs-fuse-cli**: a ready-to-use CLI that wires a chosen `remotefs` backend into
-  `remotefs-fuse` for you.
+If you're looking for a ready-to-use CLI instead, check out
+[`fusibile`](https://github.com/remotefs-rs/remotefs-rs-fuse/tree/main/crates/fusibile), which
+wires a chosen `remotefs` backend into `remotefs-fuse` for you.
 
 ---
 
@@ -140,89 +141,6 @@ mount.run().expect("Failed to run filesystem event loop");
 - **Windows**: you need to have the `dokany` service installed on your system.
 
   You can install it from <https://github.com/dokan-dev/dokany?tab=readme-ov-file#installation>
-
-## CLI Tool
-
-remotefs-fuse comes with a CLI tool **remotefs-fuse-cli** to mount remote file systems with FUSE or Dokany.
-
-```sh
-cargo install remotefs-fuse-cli
-```
-
-### Features
-
-remotefs-fuse-cli can be built with the features below; each feature enables a different file transfer protocol
-
-- `aws-s3`
-- `ftp`
-- `gcs`
-- `kube`
-- `smb`: requires `libsmbclient` on MacOS and GNU/Linux systems
-- `ssh` (enables **both sftp and scp**); requires `libssh2` on MacOS and GNU/Linux systems
-- `webdav`
-
-All the features are enabled by default; so if you want to build it with only certain features, pass the `--no-default-features` option.
-
-### Usage
-
-```sh
-remotefs-fuse-cli -o opt1 -o opt2=abc --to /mnt/to --volume <volume-name> <aws-s3|ftp|gcs|kube|smb|scp|sftp|webdav> [protocol-options...]
-```
-
-On Windows the mountpoint can be specified simply using the drive letter `--to M` will mount the FS to `M:\`
-
-where protocol options are
-
-- aws-s3
-  - `--bucket <name>`
-  - `--region <region>` (optional)
-  - `--endpoint <endpoint_url>` (optional)
-  - `--profile <profile_name>` (optional)
-  - `--access-key <access_key>` (optional)
-  - `--security-token <security_access_token>` (optional)
-  - `--new-path-style` use new path style
-- ftp
-  - `--hostname <host>`
-  - `--port <port>` (default 21)
-  - `--username <username>` (default: `anonymous`)
-  - `--password <password>` (optional)
-  - `--secure` specify it if you want to use FTPS
-  - `--active` specify it if you want to use ACTIVE mode
-- gcs
-  - `--bucket <name>`
-  - `--endpoint <endpoint_url>` (optional; default: `https://storage.googleapis.com`)
-  - `--service-account-key <path>` path to a service-account JSON file (optional; defaults to
-    application-default credentials)
-- kube
-  - `--namespace <namespace>` (default: `default`)
-  - `--cluster-url <url>`
-- memory: runs a virtual file system in memory
-- smb
-  - `--address <address>`
-  - `--port <port>` (default: `139`; Linux/Mac only)
-  - `--share <share_name>`
-  - `--username <username>` (optional)
-  - `--password <password>` (optional)
-  - `--workgroup <workgroup>` (optional; Linux/Mac only)
-  - `--dialect <dialect>` (optional; Linux/Mac only; possible values: `Auto`, `Nt1`, `Smb2`, `Smb3`; default: `Auto`)
-- scp / sftp
-  - `--hostname <hostname>`
-  - `--port <port>` (default `22`)
-  - `--username <username>`
-  - `--password <password>`
-  - `--config-file <path>` (optional; default: `~/.ssh/config`)
-- webdav
-  - `--url <url>`
-  - `--username <username>`
-  - `--password <password>`
-
-Other options are:
-
-- `--uid <uid>`: specify the UID to overwrite when mounting the remote fs. See [UID and GID override](#uid-and-gid-override).
-- `--gid <gid>`: specify the GID to overwrite when mounting the remote fs. See [UID and GID override](#uid-and-gid-override).
-- `--default-mode <mode>`: set the default file mode to use when the remote fs doesn't support it.
-
-Mount options can be viewed in the docs at <https://docs.rs/remotefs-fuse/latest/remotefs-fuse/enum.MountOption.html>.
 
 ## UID and GID override
 
