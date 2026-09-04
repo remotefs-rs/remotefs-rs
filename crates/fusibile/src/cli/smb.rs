@@ -1,4 +1,4 @@
-use argh::FromArgs;
+use clap::Args;
 #[cfg(unix)]
 use remotefs_smb::{
     PavaoSmbCredentials as SmbCredentials, PavaoSmbFs as SmbFs, PavaoSmbOptions as SmbOptions,
@@ -55,33 +55,32 @@ impl SmbDialect {
     }
 }
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "smb")]
 /// Mount a SMB share filesystem
+#[derive(Args, Debug)]
 pub struct SmbArgs {
     /// hostname of the SCP server
-    #[argh(option)]
+    #[arg(long)]
     address: String,
     /// port of the SCP server
     #[cfg(unix)]
-    #[argh(option, default = "139")]
+    #[arg(long, default_value_t = 139)]
     port: u16,
     /// username to authenticate with
-    #[argh(option)]
+    #[arg(long)]
     username: Option<String>,
     /// password to authenticate with
-    #[argh(option)]
+    #[arg(long)]
     password: Option<String>,
     /// share to mount
-    #[argh(option)]
+    #[arg(long)]
     share: String,
     /// workgroup to authenticate with
     #[cfg(unix)]
-    #[argh(option)]
+    #[arg(long)]
     workgroup: Option<String>,
     #[cfg(unix)]
     /// SMB dialect to use (auto, smb1, smb2, smb3)
-    #[argh(option, default = "SmbDialect::Auto")]
+    #[arg(long, default_value = "auto")]
     dialect: SmbDialect,
 }
 

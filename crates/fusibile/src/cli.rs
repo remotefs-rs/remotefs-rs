@@ -16,7 +16,7 @@ mod webdav;
 
 use std::path::PathBuf;
 
-use argh::FromArgs;
+use clap::{Parser, Subcommand};
 use remotefs_fuse::MountOption;
 
 #[cfg(feature = "aws-s3")]
@@ -39,40 +39,39 @@ use crate::remotefs_wrapper::RemoteFsWrapper;
 /// RemoteFS FUSE CLI
 ///
 /// CLI tool to mount a remote filesystem using FUSE.
-#[derive(FromArgs, Debug)]
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
 pub struct CliArgs {
     /// path where the remote filesystem will be mounted to
-    #[argh(option)]
+    #[arg(long)]
     pub to: PathBuf,
     /// name of mounted filesystem volume
     #[cfg(unix)]
-    #[argh(option)]
+    #[arg(long)]
     pub volume: String,
     /// uid to use for the mounted filesystem
     #[cfg(unix)]
-    #[argh(option)]
+    #[arg(long)]
     pub uid: Option<u32>,
     /// gid to use for the mounted filesystem
-    #[argh(option)]
+    #[arg(long)]
     #[cfg(unix)]
     pub gid: Option<u32>,
     /// default file permissions for those remote file protocols that don't support file permissions.
     ///
     /// this is a 3-digit octal number, e.g. 644
-    #[argh(option, from_str_fn(from_octal))]
+    #[arg(long, value_parser = from_octal)]
     #[cfg(unix)]
     pub default_mode: Option<u32>,
     /// mount options
     ///
     /// Mount options are specific to the underlying filesystem and are passed as key=value pairs.
-    #[argh(option, short = 'o')]
+    #[arg(short = 'o', long = "option")]
     pub option: Vec<MountOption>,
-    /// enable verbose logging.
-    ///
-    /// use multiple times to increase verbosity
-    #[argh(option, short = 'l', default = r#""info".to_string()"#)]
-    log_level: String,
-    #[argh(subcommand)]
+    /// log verbosity level
+    #[arg(short = 'l', long, default_value_t = log::LevelFilter::Info)]
+    log_level: log::LevelFilter,
+    #[command(subcommand)]
     remote: RemoteArgs,
 }
 
@@ -82,34 +81,15 @@ fn from_octal(s: &str) -> Result<u32, String> {
 }
 
 impl CliArgs {
-    pub fn init_logger(&self) -> anyhow::Result<()> {
-        match self.log_level.as_str() {
-            "error" => env_logger::builder()
-                .filter_level(log::LevelFilter::Error)
-                .init(),
-            "warn" => env_logger::builder()
-                .filter_level(log::LevelFilter::Warn)
-                .init(),
-            "info" => env_logger::builder()
-                .filter_level(log::LevelFilter::Info)
-                .init(),
-            "debug" => env_logger::builder()
-                .filter_level(log::LevelFilter::Debug)
-                .init(),
-            "trace" => env_logger::builder()
-                .filter_level(log::LevelFilter::Trace)
-                .init(),
-            _ => anyhow::bail!("Invalid log level: {}", self.log_level),
-        }
-
-        Ok(())
+    pub fn init_logger(&self) {
+        env_logger::builder().filter_level(self.log_level).init();
     }
 }
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand)]
+#[derive(Subcommand, Debug)]
 pub enum RemoteArgs {
     #[cfg(feature = "aws-s3")]
+    #[command(name = "aws-s3")]
     AwsS3(AwsS3Args),
     #[cfg(feature = "ftp")]
     Ftp(FtpArgs),

@@ -4,25 +4,24 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
-use argh::FromArgs;
+use clap::Args;
 use remotefs_gcs::credentials::service_account;
 use remotefs_gcs::{GoogleCloudStorageCredentials, GoogleCloudStorageFs};
 
 /// Google Cloud Storage's default JSON API endpoint.
 const DEFAULT_GCS_ENDPOINT: &str = "https://storage.googleapis.com";
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "gcs")]
 /// Mount a Google Cloud Storage bucket
+#[derive(Args, Debug)]
 pub struct GcsArgs {
     /// the name of the bucket to mount
-    #[argh(option)]
+    #[arg(long)]
     bucket: String,
     /// the Google Cloud Storage endpoint URL.
-    #[argh(option, default = "DEFAULT_GCS_ENDPOINT.to_string()")]
+    #[arg(long, default_value = DEFAULT_GCS_ENDPOINT)]
     endpoint: String,
     /// optional path to a service-account JSON file.
-    #[argh(option)]
+    #[arg(long)]
     service_account_key: Option<PathBuf>,
 }
 

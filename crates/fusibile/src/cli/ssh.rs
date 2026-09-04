@@ -1,29 +1,28 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use argh::FromArgs;
+use clap::Args;
 use remotefs_ssh::{
     NoCheckServerKey, RusshSession, ScpFs, SftpFs, SshAgentIdentity, SshConfigParseRule, SshOpts,
 };
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "scp")]
 /// Mount a SCP server filesystem
+#[derive(Args, Debug)]
 pub struct ScpArgs {
     /// hostname of the SCP server
-    #[argh(option)]
+    #[arg(long)]
     hostname: String,
     /// port of the SCP server
-    #[argh(option, default = "22")]
+    #[arg(long, default_value_t = 22)]
     port: u16,
     /// username to authenticate with
-    #[argh(option)]
+    #[arg(long)]
     username: String,
     /// password to authenticate with
-    #[argh(option)]
+    #[arg(long)]
     password: String,
     /// path to the SSH config file
-    #[argh(option, default = "default_ssh_config_path()")]
+    #[arg(long, default_value_os_t = default_ssh_config_path())]
     config_file: std::path::PathBuf,
 }
 
@@ -50,24 +49,23 @@ impl From<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
     }
 }
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "sftp")]
 /// Mount a SFTP server filesystem
+#[derive(Args, Debug)]
 pub struct SftpArgs {
     /// hostname of the SCP server
-    #[argh(option)]
+    #[arg(long)]
     hostname: String,
     /// port of the SCP server
-    #[argh(option, default = "22")]
+    #[arg(long, default_value_t = 22)]
     port: u16,
     /// username to authenticate with
-    #[argh(option)]
+    #[arg(long)]
     username: String,
     /// password to authenticate with
-    #[argh(option)]
+    #[arg(long)]
     password: String,
     /// path to the SSH config file
-    #[argh(option, default = "default_ssh_config_path()")]
+    #[arg(long, default_value_os_t = default_ssh_config_path())]
     config_file: std::path::PathBuf,
 }
 
@@ -118,7 +116,7 @@ fn default_ssh_config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use argh::FromArgs;
+    use clap::{Args, Command, FromArgMatches};
 
     use super::{ScpArgs, SftpArgs};
 
@@ -128,30 +126,34 @@ mod tests {
             .expect("the test platform should provide a home directory")
             .join(".ssh")
             .join("config");
-        let scp_args = ScpArgs::from_args(
-            &["scp"],
-            &[
+
+        let scp_matches = ScpArgs::augment_args(Command::new("scp"))
+            .try_get_matches_from([
+                "scp",
                 "--hostname",
                 "localhost",
                 "--username",
                 "user",
                 "--password",
                 "password",
-            ],
-        )
-        .expect("valid SCP arguments should parse");
-        let sftp_args = SftpArgs::from_args(
-            &["sftp"],
-            &[
+            ])
+            .expect("valid SCP arguments should parse");
+        let scp_args =
+            ScpArgs::from_arg_matches(&scp_matches).expect("valid SCP arguments should parse");
+
+        let sftp_matches = SftpArgs::augment_args(Command::new("sftp"))
+            .try_get_matches_from([
+                "sftp",
                 "--hostname",
                 "localhost",
                 "--username",
                 "user",
                 "--password",
                 "password",
-            ],
-        )
-        .expect("valid SFTP arguments should parse");
+            ])
+            .expect("valid SFTP arguments should parse");
+        let sftp_args =
+            SftpArgs::from_arg_matches(&sftp_matches).expect("valid SFTP arguments should parse");
 
         assert_eq!(scp_args.config_file, expected);
         assert_eq!(sftp_args.config_file, expected);

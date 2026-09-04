@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
-use argh::FromArgs;
+use clap::Args;
 use remotefs::fs::UnixPex;
 use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "memory")]
 /// Mount a Virtual Memory filesystem
+#[derive(Args, Debug)]
 pub struct MemoryArgs {}
 
 impl From<MemoryArgs> for MemoryFs {

@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
-use argh::FromArgs;
+use clap::Args;
 use remotefs_kube::{Config, KubeMultiPodFs};
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "kube")]
 /// Mount a Kube multipod filesystem
+#[derive(Args, Debug)]
 pub struct KubeArgs {
     /// namespace
-    #[argh(option, default = "String::from(\"default\")")]
+    #[arg(long, default_value = "default")]
     namespace: String,
     /// kubernetes cluster URL
-    #[argh(option)]
+    #[arg(long)]
     cluster_url: String,
 }
 

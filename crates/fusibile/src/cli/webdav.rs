@@ -1,18 +1,17 @@
-use argh::FromArgs;
+use clap::Args;
 use remotefs_webdav::WebDAVFs;
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "webdav")]
 /// Mount a WebDAV server filesystem
+#[derive(Args, Debug)]
 pub struct WebdavArgs {
     /// webDAV url
-    #[argh(option)]
+    #[arg(long)]
     url: String,
     /// webDAV username
-    #[argh(option)]
+    #[arg(long)]
     username: String,
     /// webDAV password
-    #[argh(option)]
+    #[arg(long)]
     password: String,
 }
 

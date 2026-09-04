@@ -25,7 +25,7 @@ webdav = ["dep:remotefs-webdav"]
 
 [dependencies]
 anyhow = { workspace = true }
-argh = { workspace = true }
+clap = { workspace = true, features = ["color", "derive", "env", "help", "std", "suggestions", "usage"] }
 ctrlc = { workspace = true }
 dirs = { workspace = true }
 env_logger = { workspace = true }

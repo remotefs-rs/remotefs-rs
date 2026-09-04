@@ -1,11 +1,12 @@
 mod cli;
 mod remotefs_wrapper;
 
+use clap::Parser;
 use remotefs_fuse::Mount;
 
 fn main() -> anyhow::Result<()> {
-    let args = argh::from_env::<cli::CliArgs>();
-    args.init_logger()?;
+    let args = cli::CliArgs::parse();
+    args.init_logger();
     #[cfg(unix)]
     let volume = args.volume.clone();
     let mount_path = args.to.clone();

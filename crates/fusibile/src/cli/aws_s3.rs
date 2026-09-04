@@ -1,35 +1,34 @@
 use std::sync::Arc;
 
-use argh::FromArgs;
+use clap::Args;
 use remotefs_aws_s3::AwsS3Fs;
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "aws-s3")]
 /// Mount an AWS S3 bucket
+#[derive(Args, Debug)]
 pub struct AwsS3Args {
     /// the name of the bucket to mount
-    #[argh(option)]
+    #[arg(long)]
     bucket: String,
     /// the region of the bucket
-    #[argh(option)]
+    #[arg(long)]
     region: Option<String>,
     /// custom endpoint
-    #[argh(option)]
+    #[arg(long)]
     endpoint: Option<String>,
     /// aws profile
-    #[argh(option)]
+    #[arg(long)]
     profile: Option<String>,
     /// access key
-    #[argh(option)]
+    #[arg(long)]
     access_key: Option<String>,
     /// secret key
-    #[argh(option)]
+    #[arg(long)]
     secret_access_key: Option<String>,
     /// security token
-    #[argh(option)]
+    #[arg(long)]
     security_token: Option<String>,
     /// new path style
-    #[argh(switch)]
+    #[arg(long)]
     new_path_style: bool,
 }
 

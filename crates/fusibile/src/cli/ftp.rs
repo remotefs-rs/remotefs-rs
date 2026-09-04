@@ -1,27 +1,26 @@
-use argh::FromArgs;
+use clap::Args;
 use remotefs_ftp::FtpFs;
 
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "ftp")]
 /// Mount an FTP server filesystem
+#[derive(Args, Debug)]
 pub struct FtpArgs {
     /// FTP server hostname
-    #[argh(option)]
+    #[arg(long)]
     hostname: String,
     /// FTP server port
-    #[argh(option, default = "21")]
+    #[arg(long, default_value_t = 21)]
     port: u16,
     /// FTP server username
-    #[argh(option, default = "String::from(\"anonymous\")")]
+    #[arg(long, default_value = "anonymous")]
     username: String,
     /// FTP server password
-    #[argh(option)]
+    #[arg(long)]
     password: Option<String>,
     /// use FTPS (FTP over TLS)
-    #[argh(switch)]
+    #[arg(long)]
     secure: bool,
     /// active mode; default passive
-    #[argh(switch)]
+    #[arg(long)]
     active: bool,
 }
 
