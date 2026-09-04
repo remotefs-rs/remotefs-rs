@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Install fusibile</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        line-height: 1.6;
+        margin: 0 auto;
+        max-width: 44rem;
+        padding: 2rem 1rem;
+      }
+      pre {
+        background: rgba(127, 127, 127, 0.12);
+        border-radius: 6px;
+        overflow-x: auto;
+        padding: 0.75rem 1rem;
+      }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </head>
+  <body>
+    <h1>fusibile</h1>
+    <p>
+      Mount any <a href="https://github.com/remotefs-rs/remotefs-rs">remotefs</a> backend
+      (SFTP/SCP, FTP, S3, GCS, SMB, WebDAV, Kube) as a local filesystem.
+    </p>
+
+    <h2>Linux and macOS</h2>
+    <pre><code>curl -sSLf https://remotefs-rs.github.io/remotefs-rs-fuse/install.sh | sh</code></pre>
+
+    <h2>Windows</h2>
+    <pre><code>irm https://remotefs-rs.github.io/remotefs-rs-fuse/install.ps1 | iex</code></pre>
+
+    <h2>Homebrew</h2>
+    <pre><code>brew install remotefs-rs/fusibile/fusibile</code></pre>
+
+    <h2>Cargo</h2>
+    <pre><code>cargo install fusibile --locked</code></pre>
+
+    <p>
+      <a href="https://github.com/remotefs-rs/remotefs-rs-fuse">Source</a> &middot;
+      <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/releases">Releases</a>
+    </p>
+  </body>
+</html>
