@@ -24,6 +24,7 @@ gcs = ["dep:remotefs-gcs", "dep:serde_json"]
 kube = ["dep:remotefs-kube"]
 libfuse = ["remotefs-fuse/libfuse"]
 smb = ["dep:remotefs-smb"]
+smb-vendored = ["remotefs-smb/vendored"]
 ssh = ["dep:remotefs-ssh"]
 webdav = ["dep:remotefs-webdav"]
 
