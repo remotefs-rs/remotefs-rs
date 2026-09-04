@@ -15,8 +15,9 @@ description = "A CLI to mount remote file systems locally via FUSE or Dokany"
 
 [features]
 aws-s3 = ["dep:remotefs-aws-s3"]
-default = ["aws-s3", "ftp", "kube", "smb", "ssh", "webdav"]
+default = ["aws-s3", "ftp", "gcs", "kube", "smb", "ssh", "webdav"]
 ftp = ["dep:remotefs-ftp"]
+gcs = ["dep:remotefs-gcs", "dep:serde_json"]
 kube = ["dep:remotefs-kube"]
 smb = ["dep:remotefs-smb"]
 ssh = ["dep:remotefs-ssh"]
@@ -32,11 +33,13 @@ log = { workspace = true }
 remotefs = { workspace = true }
 remotefs-aws-s3 = { workspace = true, optional = true }
 remotefs-fuse = { workspace = true }
+remotefs-gcs = { workspace = true, optional = true }
 remotefs-kube = { workspace = true, optional = true }
 remotefs-memory = { workspace = true }
 remotefs-smb = { workspace = true, optional = true, features = ["find", "pavao"] }
 remotefs-ssh = { workspace = true, optional = true, features = ["find", "russh"] }
 remotefs-webdav = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 

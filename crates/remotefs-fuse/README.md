@@ -58,8 +58,8 @@
 ## About remotefs-fuse ☁️
 
 remotefs-fuse mounts any [`remotefs`](https://github.com/remotefs-rs/remotefs-rs) `RemoteFs`
-implementation (SFTP/SCP, FTP, AWS S3, SMB, WebDAV, Kube, in-memory, ...) as a local filesystem,
-via FUSE on Linux/macOS and Dokany on Windows. It ships as two crates:
+implementation (SFTP/SCP, FTP, AWS S3, Google Cloud Storage, SMB, WebDAV, Kube, in-memory, ...) as
+a local filesystem, via FUSE on Linux/macOS and Dokany on Windows. It ships as two crates:
 
 - **remotefs-fuse**: the library (`Mount`, `MountOption`, `Driver`), to embed in your own project.
 - **remotefs-fuse-cli**: a ready-to-use CLI that wires a chosen `remotefs` backend into
@@ -155,6 +155,7 @@ remotefs-fuse-cli can be built with the features below; each feature enables a d
 
 - `aws-s3`
 - `ftp`
+- `gcs`
 - `kube`
 - `smb`: requires `libsmbclient` on MacOS and GNU/Linux systems
 - `ssh` (enables **both sftp and scp**); requires `libssh2` on MacOS and GNU/Linux systems
@@ -165,7 +166,7 @@ All the features are enabled by default; so if you want to build it with only ce
 ### Usage
 
 ```sh
-remotefs-fuse-cli -o opt1 -o opt2=abc --to /mnt/to --volume <volume-name> <aws-s3|ftp|kube|smb|scp|sftp|webdav> [protocol-options...]
+remotefs-fuse-cli -o opt1 -o opt2=abc --to /mnt/to --volume <volume-name> <aws-s3|ftp|gcs|kube|smb|scp|sftp|webdav> [protocol-options...]
 ```
 
 On Windows the mountpoint can be specified simply using the drive letter `--to M` will mount the FS to `M:\`
@@ -187,6 +188,11 @@ where protocol options are
   - `--password <password>` (optional)
   - `--secure` specify it if you want to use FTPS
   - `--active` specify it if you want to use ACTIVE mode
+- gcs
+  - `--bucket <name>`
+  - `--endpoint <endpoint_url>` (optional; default: `https://storage.googleapis.com`)
+  - `--service-account-key <path>` path to a service-account JSON file (optional; defaults to
+    application-default credentials)
 - kube
   - `--namespace <namespace>` (default: `default`)
   - `--cluster-url <url>`

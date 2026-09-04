@@ -2,6 +2,8 @@
 mod aws_s3;
 #[cfg(feature = "ftp")]
 mod ftp;
+#[cfg(feature = "gcs")]
+mod gcs;
 #[cfg(feature = "kube")]
 mod kube;
 mod memory;
@@ -21,6 +23,8 @@ use remotefs_fuse::MountOption;
 use self::aws_s3::AwsS3Args;
 #[cfg(feature = "ftp")]
 use self::ftp::FtpArgs;
+#[cfg(feature = "gcs")]
+use self::gcs::GcsArgs;
 #[cfg(feature = "kube")]
 use self::kube::KubeArgs;
 use self::memory::MemoryArgs;
@@ -111,6 +115,8 @@ pub enum RemoteArgs {
     Ftp(FtpArgs),
     #[cfg(feature = "kube")]
     Kube(KubeArgs),
+    #[cfg(feature = "gcs")]
+    Gcs(GcsArgs),
     Memory(MemoryArgs),
     #[cfg(feature = "ssh")]
     Scp(ScpArgs),
@@ -124,31 +130,39 @@ pub enum RemoteArgs {
 
 impl CliArgs {
     /// Create a RemoteFs instance from the CLI arguments
-    pub fn remote(self) -> RemoteFsWrapper {
+    pub fn remote(self) -> anyhow::Result<RemoteFsWrapper> {
         match self.remote {
             #[cfg(feature = "aws-s3")]
-            RemoteArgs::AwsS3(args) => RemoteFsWrapper::Aws(remotefs_aws_s3::AwsS3Fs::from(args)),
+            RemoteArgs::AwsS3(args) => {
+                Ok(RemoteFsWrapper::Aws(remotefs_aws_s3::AwsS3Fs::from(args)))
+            }
             #[cfg(feature = "ftp")]
-            RemoteArgs::Ftp(args) => RemoteFsWrapper::Ftp(remotefs_ftp::FtpFs::from(args)),
+            RemoteArgs::Ftp(args) => Ok(RemoteFsWrapper::Ftp(remotefs_ftp::FtpFs::from(args))),
+            #[cfg(feature = "gcs")]
+            RemoteArgs::Gcs(args) => Ok(RemoteFsWrapper::Gcs(
+                remotefs_gcs::GoogleCloudStorageFs::try_from(args)?,
+            )),
             #[cfg(feature = "kube")]
-            RemoteArgs::Kube(args) => {
-                RemoteFsWrapper::Kube(remotefs_kube::KubeMultiPodFs::from(args))
-            }
-            RemoteArgs::Memory(args) => {
-                RemoteFsWrapper::Memory(remotefs_memory::MemoryFs::from(args))
-            }
+            RemoteArgs::Kube(args) => Ok(RemoteFsWrapper::Kube(
+                remotefs_kube::KubeMultiPodFs::from(args),
+            )),
+            RemoteArgs::Memory(args) => Ok(RemoteFsWrapper::Memory(
+                remotefs_memory::MemoryFs::from(args),
+            )),
             #[cfg(feature = "ssh")]
-            RemoteArgs::Scp(args) => RemoteFsWrapper::Scp(remotefs_ssh::ScpFs::from(args)),
+            RemoteArgs::Scp(args) => Ok(RemoteFsWrapper::Scp(remotefs_ssh::ScpFs::from(args))),
             #[cfg(feature = "ssh")]
-            RemoteArgs::Sftp(args) => RemoteFsWrapper::Sftp(remotefs_ssh::SftpFs::from(args)),
+            RemoteArgs::Sftp(args) => Ok(RemoteFsWrapper::Sftp(remotefs_ssh::SftpFs::from(args))),
             #[cfg(all(feature = "smb", target_family = "unix"))]
-            RemoteArgs::Smb(args) => RemoteFsWrapper::Smb(remotefs_smb::PavaoSmbFs::from(args)),
+            RemoteArgs::Smb(args) => Ok(RemoteFsWrapper::Smb(remotefs_smb::PavaoSmbFs::try_from(
+                args,
+            )?)),
             #[cfg(all(feature = "smb", target_family = "windows"))]
-            RemoteArgs::Smb(args) => RemoteFsWrapper::Smb(remotefs_smb::WNetSmbFs::from(args)),
+            RemoteArgs::Smb(args) => Ok(RemoteFsWrapper::Smb(remotefs_smb::WNetSmbFs::from(args))),
             #[cfg(feature = "webdav")]
-            RemoteArgs::Webdav(args) => {
-                RemoteFsWrapper::Webdav(remotefs_webdav::WebDAVFs::from(args))
-            }
+            RemoteArgs::Webdav(args) => Ok(RemoteFsWrapper::Webdav(
+                remotefs_webdav::WebDAVFs::from(args),
+            )),
         }
     }
 }

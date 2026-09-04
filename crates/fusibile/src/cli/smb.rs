@@ -86,8 +86,10 @@ pub struct SmbArgs {
 }
 
 #[cfg(unix)]
-impl From<SmbArgs> for SmbFs {
-    fn from(args: SmbArgs) -> Self {
+impl TryFrom<SmbArgs> for SmbFs {
+    type Error = anyhow::Error;
+
+    fn try_from(args: SmbArgs) -> Result<Self, Self::Error> {
         let mut credentials = SmbCredentials::default()
             .server(format!("smb://{}:{}", args.address, args.port))
             .share(args.share);
@@ -103,6 +105,7 @@ impl From<SmbArgs> for SmbFs {
         }
 
         let (dialect_min, dialect_max) = args.dialect.min_max_dialect();
+
         SmbFs::try_new_with_dialect(
             credentials,
             SmbOptions::default()
@@ -111,7 +114,7 @@ impl From<SmbArgs> for SmbFs {
             dialect_min,
             dialect_max,
         )
-        .expect("Failed to create SMB client")
+        .map_err(anyhow::Error::from)
     }
 }
 

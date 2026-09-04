@@ -16,6 +16,8 @@ pub enum RemoteFsWrapper {
     Aws(remotefs_aws_s3::AwsS3Fs),
     #[cfg(feature = "ftp")]
     Ftp(remotefs_ftp::FtpFs),
+    #[cfg(feature = "gcs")]
+    Gcs(remotefs_gcs::GoogleCloudStorageFs),
     #[cfg(feature = "kube")]
     Kube(remotefs_kube::KubeMultiPodFs),
     Memory(remotefs_memory::MemoryFs),
@@ -40,6 +42,8 @@ impl RemoteFsWrapper {
             RemoteFsWrapper::Aws(fs) => f(fs),
             #[cfg(feature = "ftp")]
             RemoteFsWrapper::Ftp(fs) => f(fs),
+            #[cfg(feature = "gcs")]
+            RemoteFsWrapper::Gcs(fs) => f(fs),
             #[cfg(feature = "kube")]
             RemoteFsWrapper::Kube(fs) => f(fs),
             RemoteFsWrapper::Memory(fs) => f(fs),
