@@ -5,7 +5,7 @@ authors = { workspace = true }
 categories = { workspace = true }
 documentation = "https://docs.rs/remotefs-fuse"
 edition = { workspace = true }
-include = ["src/**/*", "../../LICENSE", "../../README.md", "../../CHANGELOG.md"]
+include = ["src/**/*", "LICENSE"]
 keywords = { workspace = true }
 license = { workspace = true }
 readme = "../../README.md"
@@ -17,8 +17,9 @@ description = "A FUSE Driver for remote-fs"
 workspace = true
 
 [features]
-default = []
+default = ["libfuse"]
 integration-tests = []
+libfuse = ["fuser/libfuse"]
 no-log = ["log/max_level_off"]
 
 [dependencies]
@@ -28,7 +29,7 @@ seahash = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-fuser = { workspace = true, features = ["libfuse"] }
+fuser = { workspace = true }
 libc = { workspace = true }
 nix = { workspace = true, features = ["fs"] }
 

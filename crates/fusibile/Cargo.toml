@@ -5,7 +5,7 @@ authors = { workspace = true }
 categories = ["command-line-utilities", "network-programming"]
 documentation = "https://docs.rs/fusibile"
 edition = { workspace = true }
-include = ["src/**/*", "../../LICENSE", "README.md", "../../CHANGELOG.md"]
+include = ["src/**/*", "LICENSE", "README.md"]
 keywords = { workspace = true }
 license = { workspace = true }
 readme = "README.md"
@@ -18,10 +18,11 @@ workspace = true
 
 [features]
 aws-s3 = ["dep:remotefs-aws-s3"]
-default = ["aws-s3", "ftp", "gcs", "kube", "smb", "ssh", "webdav"]
+default = ["aws-s3", "ftp", "gcs", "kube", "libfuse", "smb", "ssh", "webdav"]
 ftp = ["dep:remotefs-ftp"]
 gcs = ["dep:remotefs-gcs", "dep:serde_json"]
 kube = ["dep:remotefs-kube"]
+libfuse = ["remotefs-fuse/libfuse"]
 smb = ["dep:remotefs-smb"]
 ssh = ["dep:remotefs-ssh"]
 webdav = ["dep:remotefs-webdav"]
