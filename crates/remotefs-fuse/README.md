@@ -63,6 +63,62 @@ wires a chosen `remotefs` backend into `remotefs-fuse` for you.
 
 ---
 
+## Install fusibile 📦
+
+`fusibile` is the CLI. Pick whichever suits you:
+
+### Linux and macOS
+
+```sh
+curl -sSLf https://remotefs-rs.github.io/remotefs-rs-fuse/install.sh | sh
+```
+
+The script uses Homebrew when it is available and falls back to downloading the release binary,
+verifying its SHA-256 checksum. Pass `--version X.Y.Z` for a specific release, `--yes` to skip the
+prompt, or set `BIN_DIR` to change the install directory (default `/usr/local/bin`).
+
+### Windows
+
+```powershell
+irm https://remotefs-rs.github.io/remotefs-rs-fuse/install.ps1 | iex
+```
+
+### Homebrew
+
+```sh
+brew install remotefs-rs/fusibile/fusibile
+```
+
+### Cargo
+
+```sh
+cargo install fusibile --locked
+```
+
+### Manual download
+
+Grab an archive from the [releases page](https://github.com/remotefs-rs/remotefs-rs-fuse/releases).
+Assets are named `fusibile-v<version>-<target>.tar.gz` (`.zip` on Windows), each with a matching
+`<target>.sha256`. Prebuilt targets:
+
+| Platform            | Target                                |
+| ------------------- | ------------------------------------- |
+| Linux x86_64        | `x86_64-unknown-linux-musl` (static)  |
+| Linux aarch64       | `aarch64-unknown-linux-musl` (static) |
+| macOS Apple Silicon | `aarch64-apple-darwin`                |
+| macOS Intel         | `x86_64-apple-darwin`                 |
+| Windows x86_64      | `x86_64-pc-windows-msvc`              |
+
+Windows on ARM64 is not available yet: `fusibile` depends on Dokany, whose Rust bindings have no
+aarch64 support.
+
+### Runtime requirements
+
+- **Linux**: the `fuse3` package, for its setuid `fusermount3` binary
+  (`sudo apt-get install fuse3`)
+- **macOS**: [macFUSE](https://osxfuse.github.io/) (`brew install --cask macfuse`)
+- **Windows**: [Dokany](https://github.com/dokan-dev/dokany/releases) (`choco install dokany`)
+
 ## Get started 🚀
 
 First of all you need to add **remotefs-fuse** to your project dependencies:
