@@ -10,23 +10,38 @@ use remotefs_smb::WNetSmbFs as SmbFs;
 use remotefs_ssh::{NoCheckServerKey, RusshSession};
 
 /// Wrapper around the different [`RemoteFs`] implementations
-#[allow(clippy::large_enum_variant)]
+// `#[expect]` isn't usable here: whether this lint fires depends on which backend features are
+// enabled (with a single feature, or none, there's no size disparity to flag), so an `#[expect]`
+// would spuriously fail the build on those feature combinations.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "backends have very different sizes (e.g. SSH session buffers vs the trivial in-memory backend); this enum is only ever constructed once at startup, so boxing the large variants would only add indirection for no real benefit"
+)]
 pub enum RemoteFsWrapper {
+    /// AWS S3 backend.
     #[cfg(feature = "aws-s3")]
     Aws(remotefs_aws_s3::AwsS3Fs),
+    /// FTP/FTPS backend.
     #[cfg(feature = "ftp")]
     Ftp(remotefs_ftp::FtpFs),
+    /// Google Cloud Storage backend.
     #[cfg(feature = "gcs")]
     Gcs(remotefs_gcs::GoogleCloudStorageFs),
+    /// Kubernetes pod backend.
     #[cfg(feature = "kube")]
     Kube(remotefs_kube::KubeMultiPodFs),
+    /// In-memory backend, mostly useful for testing.
     Memory(remotefs_memory::MemoryFs),
+    /// SCP backend.
     #[cfg(feature = "ssh")]
     Scp(remotefs_ssh::ScpFs<RusshSession<NoCheckServerKey>>),
+    /// SFTP backend.
     #[cfg(feature = "ssh")]
     Sftp(remotefs_ssh::SftpFs<RusshSession<NoCheckServerKey>>),
+    /// SMB backend.
     #[cfg(feature = "smb")]
     Smb(SmbFs),
+    /// WebDAV backend.
     #[cfg(feature = "webdav")]
     Webdav(remotefs_webdav::WebDAVFs),
 }

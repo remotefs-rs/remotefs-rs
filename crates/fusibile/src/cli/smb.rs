@@ -56,7 +56,7 @@ impl SmbDialect {
 }
 
 /// Mount a SMB share filesystem
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct SmbArgs {
     /// hostname of the SCP server
     #[arg(long)]
@@ -82,6 +82,24 @@ pub struct SmbArgs {
     /// SMB dialect to use (auto, smb1, smb2, smb3)
     #[arg(long, default_value = "auto")]
     dialect: SmbDialect,
+}
+
+impl std::fmt::Debug for SmbArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug_struct = f.debug_struct("SmbArgs");
+        debug_struct.field("address", &self.address);
+        #[cfg(unix)]
+        debug_struct.field("port", &self.port);
+        debug_struct
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("share", &self.share);
+        #[cfg(unix)]
+        debug_struct
+            .field("workgroup", &self.workgroup)
+            .field("dialect", &self.dialect);
+        debug_struct.finish()
+    }
 }
 
 #[cfg(unix)]
@@ -130,5 +148,28 @@ impl From<SmbArgs> for SmbFs {
         }
 
         SmbFs::new(credentials)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::{SmbArgs, SmbDialect};
+
+    #[test]
+    fn debug_should_redact_password() {
+        let secret = "super-secret-password";
+
+        let args = SmbArgs {
+            address: "localhost".to_string(),
+            port: 139,
+            username: Some("user".to_string()),
+            password: Some(secret.to_string()),
+            share: "share".to_string(),
+            workgroup: None,
+            dialect: SmbDialect::Auto,
+        };
+        let rendered = format!("{args:?}");
+        assert!(!rendered.contains(secret));
+        assert!(rendered.contains("[REDACTED]"));
     }
 }

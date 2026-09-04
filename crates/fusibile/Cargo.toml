@@ -13,6 +13,9 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 description = "A CLI to mount remote file systems locally via FUSE or Dokany"
 
+[lints]
+workspace = true
+
 [features]
 aws-s3 = ["dep:remotefs-aws-s3"]
 default = ["aws-s3", "ftp", "gcs", "kube", "smb", "ssh", "webdav"]

@@ -31,11 +31,6 @@
       src="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
-  <a href="https://docs.rs/fusibile"
-    ><img
-      src="https://img.shields.io/docsrs/fusibile?logo=rust"
-      alt="Docs"
-  /></a>
 </p>
 
 ---

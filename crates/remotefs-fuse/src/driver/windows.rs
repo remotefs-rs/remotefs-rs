@@ -4,9 +4,9 @@ mod security;
 mod test;
 
 use std::hash::{Hash as _, Hasher as _};
-use std::io::{Cursor, Read as _, Seek as _};
+use std::io::{Cursor, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::UNIX_EPOCH;
 
 use dashmap::mapref::one::Ref;
@@ -21,7 +21,7 @@ use dokan_sys::win32::{
 };
 use entry::{EntryName, StatHandle};
 use path_slash::PathBufExt;
-use remotefs::fs::{Metadata, UnixPex};
+use remotefs::fs::{Metadata, UnixPex, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 use widestring::{U16CStr, U16CString, U16Str, U16String};
 use winapi::shared::ntstatus::{
@@ -59,6 +59,25 @@ impl AltStream {
             data: Vec::new(),
         }
     }
+}
+
+/// A write staged on a [`StatHandle`](entry::StatHandle) by `write_file`, not yet persisted to
+/// the remote filesystem.
+///
+/// Staging writes lets many `write_file` calls against the same handle share a single remote
+/// write (one streaming upload, or one buffered `create_file` call), rather than each call
+/// re-creating (and so truncating) the remote file on its own.
+pub enum PendingWriteState {
+    /// The remote exposes a streaming writer, opened once and kept alive across writes.
+    /// `next_offset` is the stream's current write cursor, used to seek only when a write isn't
+    /// a simple continuation of the previous one.
+    Stream {
+        stream: WriteStream,
+        next_offset: u64,
+    },
+    /// The remote doesn't support streaming writes; data is staged in memory and uploaded as a
+    /// single write when the handle is flushed.
+    Buffered(Vec<u8>),
 }
 
 impl<T> Driver<T>
@@ -171,9 +190,8 @@ where
             Ok(mut reader) => {
                 debug!("Reading file from stream: {:?} at {offset}", path);
                 if offset > 0 {
-                    // read file until offset
-                    let mut offset_buff = vec![0; offset as usize];
-                    reader.read_exact(&mut offset_buff).map_err(|err| {
+                    // skip to offset without allocating a buffer proportional to `offset`
+                    Self::skip_bytes(&mut reader, offset).map_err(|err| {
                         remotefs::RemoteError::new_ex(
                             remotefs::RemoteErrorType::IoError,
                             err.to_string(),
@@ -230,15 +248,14 @@ where
             ));
         };
 
-        // skip to offset
-        if offset > 0 {
-            let mut offset_buff = vec![0; offset as usize];
-            if let Err(err) = reader.read_exact(&mut offset_buff) {
-                error!("Failed to read file: {err}");
-                return Err(remotefs::RemoteError::new(
-                    remotefs::RemoteErrorType::IoError,
-                ));
-            }
+        // skip to offset without allocating a buffer proportional to `offset`
+        if offset > 0
+            && let Err(err) = Self::skip_bytes(&mut reader, offset)
+        {
+            error!("Failed to read file: {err}");
+            return Err(remotefs::RemoteError::new(
+                remotefs::RemoteErrorType::IoError,
+            ));
         }
 
         // read file
@@ -253,82 +270,147 @@ where
         Ok(buffer.len())
     }
 
-    /// Write data to a file.
-    fn write(&self, file: &File, data: &[u8], offset: u64) -> RemoteResult<u32> {
-        debug!(
-            "Write to file: {:?} {} bytes at {offset}",
-            file.path(),
-            data.len(),
-        );
-        // write data
-
-        let mut reader = Cursor::new(data);
-        let mut writer = match self.remote(|remote| remote.create(file.path(), file.metadata())) {
-            Ok(writer) => writer,
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) if offset > 0 => {
-                error!(
-                    "remote file system doesn't support stream, so it is not possible to write at offset"
-                );
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::UnsupportedFeature,
-                    "remote file system doesn't support stream, so it is not possible to write at offset".to_string(),
-                ));
-            }
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) => {
-                return self.write_wno_stream(file, data);
-            }
-            Err(err) => {
-                error!("Failed to write file: {err}");
-                return Err(err);
-            }
-        };
-        if offset > 0 {
-            // try to seek
-            if let Err(err) = writer.seek(std::io::SeekFrom::Start(offset)) {
-                error!(
-                    "Failed to seek file: {err}. Not that not all the remote filesystems support seeking"
-                );
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    err.to_string(),
-                ));
-            }
+    /// Discard `n` bytes from `reader` without allocating a buffer proportional to `n`.
+    ///
+    /// This is used to skip to a read offset on readers that only implement [`std::io::Read`]
+    /// (not [`std::io::Seek`]), such as remote file streams. A malicious or misbehaving remote
+    /// could otherwise cause an out-of-memory abort by reporting a huge offset.
+    fn skip_bytes(reader: &mut impl std::io::Read, n: u64) -> std::io::Result<()> {
+        let skipped = std::io::copy(&mut reader.by_ref().take(n), &mut std::io::sink())?;
+        if skipped != n {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "offset is beyond the end of the file",
+            ));
         }
-        // write
-        let bytes_written = match std::io::copy(&mut reader, &mut writer) {
-            Ok(bytes) => bytes as u32,
-            Err(err) => {
-                error!("Failed to write file: {err}");
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    err.to_string(),
-                ));
-            }
-        };
-        // on write
-        self.remote(|remote| remote.on_written(writer))
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-        Ok(bytes_written)
+        Ok(())
     }
 
-    /// Write data to a file without using a stream.
-    fn write_wno_stream(&self, file: &File, data: &[u8]) -> RemoteResult<u32> {
-        debug!(
-            "Writing file without stream: {:?} {} bytes",
-            file.path(),
-            data.len()
-        );
+    /// Write `data` at `offset` to the pending write staged on `context`, starting a new one
+    /// (against `file`) if this is the first write to this handle.
+    ///
+    /// The remote write is not finalized here: it stays staged until [`Self::finalize_pending_write`]
+    /// is called. This lets many `write_file` calls in a row share a single remote write (a
+    /// single streaming upload, or a single buffered `create_file` call), instead of each call
+    /// re-creating (and so truncating) the remote file on its own.
+    fn write_to_handle(
+        &self,
+        context: &StatHandle,
+        file: &File,
+        data: &[u8],
+        offset: u64,
+    ) -> RemoteResult<u32> {
+        let mut pending = context
+            .pending_write
+            .lock()
+            .map_err(|_| RemoteError::new_ex(RemoteErrorType::IoError, "mutex poisoned"))?;
 
-        let reader = Cursor::new(data.to_vec());
-        self.remote(|remote| remote.create_file(file.path(), file.metadata(), Box::new(reader)))
-            .map(|len| len as u32)
+        if pending.is_none() {
+            let state = match self.remote(|remote| remote.create(file.path(), file.metadata())) {
+                Ok(stream) => PendingWriteState::Stream {
+                    stream,
+                    next_offset: 0,
+                },
+                Err(RemoteError {
+                    kind: RemoteErrorType::UnsupportedFeature,
+                    ..
+                }) => {
+                    debug!(
+                        "remote file system doesn't support streaming writes; buffering {:?} in memory",
+                        file.path()
+                    );
+                    PendingWriteState::Buffered(Vec::new())
+                }
+                Err(err) => {
+                    error!("Failed to open file for writing: {err}");
+                    return Err(err);
+                }
+            };
+            *pending = Some(state);
+        }
+
+        match pending.as_mut().expect("pending write was just inserted") {
+            PendingWriteState::Stream {
+                stream,
+                next_offset,
+            } => {
+                if *next_offset != offset {
+                    stream.seek(std::io::SeekFrom::Start(offset)).map_err(|err| {
+                        error!(
+                            "Failed to seek file: {err}. Note that not all the remote filesystems support seeking"
+                        );
+                        RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
+                    })?;
+                }
+                stream.write_all(data).map_err(|err| {
+                    error!("Failed to write file: {err}");
+                    RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
+                })?;
+                *next_offset = offset + data.len() as u64;
+                Ok(data.len() as u32)
+            }
+            PendingWriteState::Buffered(buffer) => {
+                let end = offset as usize + data.len();
+                if buffer.len() < end {
+                    buffer.resize(end, 0);
+                }
+                buffer[offset as usize..end].copy_from_slice(data);
+                Ok(data.len() as u32)
+            }
+        }
+    }
+
+    /// Create a new, empty remote file in a single call, without staging a pending write.
+    fn create_empty_file(&self, file: &File) -> RemoteResult<()> {
+        match self.remote(|remote| remote.create(file.path(), file.metadata())) {
+            Ok(stream) => self.remote(|remote| remote.on_written(stream)),
+            Err(RemoteError {
+                kind: RemoteErrorType::UnsupportedFeature,
+                ..
+            }) => self
+                .remote(|remote| {
+                    remote.create_file(
+                        file.path(),
+                        file.metadata(),
+                        Box::new(Cursor::new(Vec::new())),
+                    )
+                })
+                .map(|_| ()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Finalize the write staged on `context`, if any, actually persisting it to the remote
+    /// filesystem.
+    fn finalize_pending_write(&self, context: &StatHandle, file: &File) -> RemoteResult<()> {
+        let pending = {
+            let mut guard = context
+                .pending_write
+                .lock()
+                .map_err(|_| RemoteError::new_ex(RemoteErrorType::IoError, "mutex poisoned"))?;
+            guard.take()
+        };
+
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+
+        match pending {
+            PendingWriteState::Stream { stream, .. } => {
+                self.remote(|remote| remote.on_written(stream))
+            }
+            PendingWriteState::Buffered(buffer) => {
+                debug!(
+                    "uploading {} buffered bytes to {:?}",
+                    buffer.len(),
+                    file.path()
+                );
+                self.remote(|remote| {
+                    remote.create_file(file.path(), file.metadata(), Box::new(Cursor::new(buffer)))
+                })
+                .map(|_| ())
+            }
+        }
     }
 
     /// Append data to a file.
@@ -655,6 +737,7 @@ where
                     stat: stat.clone(),
                     alt_stream: RwLock::new(Some(stream)),
                     delete_on_close,
+                    pending_write: Mutex::new(None),
                 };
                 return Ok(CreateFileInfo {
                     context: handle,
@@ -693,6 +776,7 @@ where
                         stat: stat.clone(),
                         alt_stream: RwLock::new(None),
                         delete_on_close,
+                        pending_write: Mutex::new(None),
                     };
                     Ok(CreateFileInfo {
                         context: handle,
@@ -713,6 +797,7 @@ where
                                 stat: stat.clone(),
                                 alt_stream: RwLock::new(None),
                                 delete_on_close,
+                                pending_write: Mutex::new(None),
                             };
                             Ok(CreateFileInfo {
                                 context: handle,
@@ -739,15 +824,11 @@ where
                 // create file
                 debug!("create file: {file_name:?}");
                 let path_info = Self::path_info(file_name);
-                if let Err(err) = self.write(
-                    &File {
-                        path: path_info.path,
-                        metadata: Metadata::default().mode(UnixPex::from(0o644)).size(0),
-                    },
-                    &[],
-                    0,
-                ) {
-                    error!("write failed: {err}");
+                if let Err(err) = self.create_empty_file(&File {
+                    path: path_info.path,
+                    metadata: Metadata::default().mode(UnixPex::from(0o644)).size(0),
+                }) {
+                    error!("failed to create empty file: {err}");
                     return Err(ntstatus::STATUS_CONNECTION_DISCONNECTED);
                 }
 
@@ -763,6 +844,7 @@ where
                     stat: stat.value().clone(),
                     alt_stream: RwLock::new(None),
                     delete_on_close,
+                    pending_write: Mutex::new(None),
                 };
 
                 Ok(CreateFileInfo {
@@ -796,6 +878,7 @@ where
                     stat: stat.value().clone(),
                     alt_stream: RwLock::new(None),
                     delete_on_close,
+                    pending_write: Mutex::new(None),
                 };
                 Ok(CreateFileInfo {
                     context: handle,
@@ -861,11 +944,20 @@ where
             return;
         }
 
-        if context.delete_on_close
+        let will_delete = context.delete_on_close
             || stat.delete_on_close
             || stat.delete_pending
-            || info.delete_on_close()
-        {
+            || info.delete_on_close();
+
+        // defensively finalize any write flush_file_buffers never got a chance to persist (per
+        // Dokan's docs, cleanup can run with more I/O still pending, but this is the last
+        // reliable point before the handle, and possibly the file, goes away); skip it entirely
+        // if the file is about to be deleted anyway
+        if !will_delete && let Err(err) = self.finalize_pending_write(context, &stat.file) {
+            error!("failed to finalize write on cleanup: {err}");
+        }
+
+        if will_delete {
             info!(
                 "removing file: {}; delete_on_close: {}; stat.delete_on_close: {}; delete_pending: {}",
                 stat.file.path().display(),
@@ -935,7 +1027,11 @@ where
         // check alt stream
         if let Some(res) = Self::try_alt_stream(context, |alt_stream| {
             let offset = offset as usize;
-            let len = std::cmp::min(buffer.len(), alt_stream.data.len() - offset);
+            // reading past the end of the stream yields zero bytes, matching regular file reads
+            let Some(available) = alt_stream.data.len().checked_sub(offset) else {
+                return Ok(0);
+            };
+            let len = std::cmp::min(buffer.len(), available);
             buffer[0..len].copy_from_slice(&alt_stream.data[offset..offset + len]);
             Ok(len as u32)
         }) {
@@ -1003,7 +1099,7 @@ where
             self.append(&file, buffer)
         } else {
             debug!("write file: {file_name:?}");
-            self.write(&file, buffer, offset as u64)
+            self.write_to_handle(context, &file, buffer, offset as u64)
         }
         .map_err(|err| {
             error!("write failed: {err}");
@@ -1024,7 +1120,18 @@ where
     ) -> OperationResult<()> {
         info!("flush_file_buffers({file_name:?}, {context:?})");
 
-        Ok(())
+        let file = match context.stat.read() {
+            Err(_) => {
+                error!("mutex poisoned");
+                return Err(STATUS_INVALID_DEVICE_REQUEST);
+            }
+            Ok(stat) => stat.file.clone(),
+        };
+
+        self.finalize_pending_write(context, &file).map_err(|err| {
+            error!("failed to flush write: {err}");
+            STATUS_INVALID_DEVICE_REQUEST
+        })
     }
 
     /// Gets information about the file.
@@ -1237,7 +1344,14 @@ where
         context: &'c Self::Context,
     ) -> OperationResult<()> {
         info!("delete_file({file_name:?}, {context:?})");
-        if context.stat.read().expect("failed to read").file.is_dir() {
+        let is_dir = match context.stat.read() {
+            Ok(stat) => stat.file.is_dir(),
+            Err(_) => {
+                error!("mutex poisoned");
+                return Err(STATUS_INVALID_DEVICE_REQUEST);
+            }
+        };
+        if is_dir {
             error!("file is a directory: {file_name:?}");
             return Err(STATUS_CANNOT_DELETE);
         }

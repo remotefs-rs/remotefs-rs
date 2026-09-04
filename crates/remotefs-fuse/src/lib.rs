@@ -46,9 +46,12 @@
 //! remotefs-fuse = "^0.1.0"
 //! ```
 //!
-//! these features are supported:
+//! ## Feature flags
 //!
-//! - `no-log`: disable logging. By default, this library will log via the `log` crate.
+//! | name                | description                                              | default |
+//! |----------------------|----------------------------------------------------------|---------|
+//! | `no-log`            | Disable logging. By default, this library logs via the `log` crate. |         |
+//! | `integration-tests` | Enable tests that mount a real filesystem; only meant for this crate's own test suite. |         |
 //!
 //! ## Example
 //!
@@ -75,7 +78,9 @@
 //!
 //! // setup signal handler
 //! ctrlc::set_handler(move || {
-//!     umount.unmount().expect("Failed to unmount");
+//!     if let Err(err) = umount.unmount() {
+//!         eprintln!("Failed to unmount: {err}");
+//!     }
 //! })?;
 //!
 //! mount.run().expect("Failed to run filesystem event loop");

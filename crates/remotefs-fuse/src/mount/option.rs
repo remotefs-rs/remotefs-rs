@@ -17,9 +17,9 @@ pub enum MountOption {
     /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
     Uid(u32),
     #[cfg(unix)]
-    /// Treat all files as if they are owned by the given user.
+    /// Treat all files as if they are owned by the given group.
     /// This flag can be useful when mounting for instance sftp volumes,
-    /// where the uid/gid of the files may be different from the user mounting the filesystem.
+    /// where the uid/gid of the files may be different from the group mounting the filesystem.
     /// This doesn't change the ownership of the files, but allows the user to access them.
     /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
     Gid(u32),

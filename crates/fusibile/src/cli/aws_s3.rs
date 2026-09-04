@@ -4,7 +4,7 @@ use clap::Args;
 use remotefs_aws_s3::AwsS3Fs;
 
 /// Mount an AWS S3 bucket
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct AwsS3Args {
     /// the name of the bucket to mount
     #[arg(long)]
@@ -30,6 +30,30 @@ pub struct AwsS3Args {
     /// new path style
     #[arg(long)]
     new_path_style: bool,
+}
+
+impl std::fmt::Debug for AwsS3Args {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsS3Args")
+            .field("bucket", &self.bucket)
+            .field("region", &self.region)
+            .field("endpoint", &self.endpoint)
+            .field("profile", &self.profile)
+            .field(
+                "access_key",
+                &self.access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "secret_access_key",
+                &self.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "security_token",
+                &self.security_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("new_path_style", &self.new_path_style)
+            .finish()
+    }
 }
 
 impl From<AwsS3Args> for AwsS3Fs {
@@ -63,5 +87,31 @@ impl From<AwsS3Args> for AwsS3Fs {
         }
 
         fs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AwsS3Args;
+
+    #[test]
+    fn debug_should_redact_secrets() {
+        let secret_key = "super-secret-key";
+        let secret_token = "super-secret-token";
+
+        let args = AwsS3Args {
+            bucket: "bucket".to_string(),
+            region: None,
+            endpoint: None,
+            profile: None,
+            access_key: Some("access-key".to_string()),
+            secret_access_key: Some(secret_key.to_string()),
+            security_token: Some(secret_token.to_string()),
+            new_path_style: false,
+        };
+        let rendered = format!("{args:?}");
+        assert!(!rendered.contains(secret_key));
+        assert!(!rendered.contains(secret_token));
+        assert!(rendered.contains("[REDACTED]"));
     }
 }

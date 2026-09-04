@@ -13,6 +13,9 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 description = "A FUSE Driver for remote-fs"
 
+[lints]
+workspace = true
+
 [features]
 default = []
 integration-tests = []

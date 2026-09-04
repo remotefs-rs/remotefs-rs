@@ -7,7 +7,7 @@ use remotefs_ssh::{
 };
 
 /// Mount a SCP server filesystem
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct ScpArgs {
     /// hostname of the SCP server
     #[arg(long)]
@@ -24,6 +24,18 @@ pub struct ScpArgs {
     /// path to the SSH config file
     #[arg(long, default_value_os_t = default_ssh_config_path())]
     config_file: std::path::PathBuf,
+}
+
+impl std::fmt::Debug for ScpArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScpArgs")
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("config_file", &self.config_file)
+            .finish()
+    }
 }
 
 impl From<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
@@ -50,7 +62,7 @@ impl From<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
 }
 
 /// Mount a SFTP server filesystem
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct SftpArgs {
     /// hostname of the SCP server
     #[arg(long)]
@@ -67,6 +79,18 @@ pub struct SftpArgs {
     /// path to the SSH config file
     #[arg(long, default_value_os_t = default_ssh_config_path())]
     config_file: std::path::PathBuf,
+}
+
+impl std::fmt::Debug for SftpArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SftpArgs")
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("config_file", &self.config_file)
+            .finish()
+    }
 }
 
 impl From<SftpArgs> for SftpFs<RusshSession<NoCheckServerKey>> {
@@ -116,6 +140,8 @@ fn default_ssh_config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use clap::{Args, Command, FromArgMatches};
 
     use super::{ScpArgs, SftpArgs};
@@ -157,5 +183,32 @@ mod tests {
 
         assert_eq!(scp_args.config_file, expected);
         assert_eq!(sftp_args.config_file, expected);
+    }
+
+    #[test]
+    fn debug_should_redact_password() {
+        let secret = "super-secret-password";
+
+        let scp_args = ScpArgs {
+            hostname: "localhost".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            password: secret.to_string(),
+            config_file: PathBuf::from("/dev/null"),
+        };
+        let rendered = format!("{scp_args:?}");
+        assert!(!rendered.contains(secret));
+        assert!(rendered.contains("[REDACTED]"));
+
+        let sftp_args = SftpArgs {
+            hostname: "localhost".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            password: secret.to_string(),
+            config_file: PathBuf::from("/dev/null"),
+        };
+        let rendered = format!("{sftp_args:?}");
+        assert!(!rendered.contains(secret));
+        assert!(rendered.contains("[REDACTED]"));
     }
 }

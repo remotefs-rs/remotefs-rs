@@ -15,6 +15,7 @@ use crate::MountOption;
 ///
 /// The driver will use the [`fuser`](https://crates.io/crates/fuser) crate to mount the filesystem, on Unix systems, while
 /// it will use [dokan](https://crates.io/crates/dokan) on Windows.
+#[derive(Debug)]
 pub struct Driver<T: RemoteFs> {
     /// Unix filesystem state.
     #[cfg(unix)]

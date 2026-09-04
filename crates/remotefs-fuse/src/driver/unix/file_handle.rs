@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use remotefs::File;
+use remotefs::fs::WriteStream;
+
 use super::inode::Inode;
 
 /// Pid is a process identifier.
@@ -7,11 +10,40 @@ pub type Pid = u32;
 /// Fh is a file handle number.
 pub type Fh = u64;
 
+/// Staged state for a write in progress on a file handle, spanning possibly many `write()`
+/// calls between `open()` and `flush()`/`release()`. The remote write is only finalized (and,
+/// for [`PendingWriteState::Buffered`], actually uploaded) once the handle is flushed.
+pub(crate) struct PendingWrite {
+    pub(crate) file: File,
+    pub(crate) state: PendingWriteState,
+}
+
+pub(crate) enum PendingWriteState {
+    /// The remote exposes a streaming writer, opened once and kept alive across writes.
+    /// `next_offset` is the stream's current write cursor, used to seek only when a write isn't
+    /// a simple continuation of the previous one.
+    Stream {
+        stream: WriteStream,
+        next_offset: u64,
+    },
+    /// The remote doesn't support streaming writes; data is staged in memory and uploaded as a
+    /// single write when the handle is flushed.
+    Buffered(Vec<u8>),
+}
+
 /// FileHandlersDb is a database of file handles for each process.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct FileHandlersDb {
     /// Database of file handles for each process.
     handlers: HashMap<Pid, ProcessFileHandlers>,
+}
+
+impl std::fmt::Debug for FileHandlersDb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileHandlersDb")
+            .field("handlers", &self.handlers.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl FileHandlersDb {
@@ -55,16 +87,40 @@ impl FileHandlersDb {
             self.handlers.remove(&pid);
         }
     }
+
+    /// Get the pending write staged for a file handle, if a write has started one.
+    pub(crate) fn pending_write(&mut self, pid: Pid, fh: Fh) -> Option<&mut PendingWrite> {
+        self.handlers.get_mut(&pid)?.pending_writes.get_mut(&fh)
+    }
+
+    /// Stage a new pending write for a file handle. Replaces any previous one for the same
+    /// handle, if any.
+    pub(crate) fn start_pending_write(&mut self, pid: Pid, fh: Fh, pending: PendingWrite) {
+        self.handlers
+            .entry(pid)
+            .or_default()
+            .pending_writes
+            .insert(fh, pending);
+    }
+
+    /// Remove and return the pending write staged for a file handle, if any.
+    pub(crate) fn take_pending_write(&mut self, pid: Pid, fh: Fh) -> Option<PendingWrite> {
+        self.handlers.get_mut(&pid)?.pending_writes.remove(&fh)
+    }
 }
 
 /// ProcessFileHandlers is a database of file handles. It is used to store file handles for open files.
 ///
 /// It is a map between the file handle number and the [`FileHandle`] struct.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ProcessFileHandlers {
     handles: HashMap<Fh, FileHandle>,
-    /// Next file handle number
+    /// Next file handle number that has never been assigned before
     next: u64,
+    /// Previously assigned file handle numbers that were closed and can be reused
+    free: Vec<Fh>,
+    /// Write staged for a handle but not yet flushed to the remote.
+    pending_writes: HashMap<Fh, PendingWrite>,
 }
 
 /// FileHandle is a handle to an open file.
@@ -83,9 +139,12 @@ impl ProcessFileHandlers {
     ///
     /// Returns the created file handle number.
     fn open(&mut self, inode: Inode, read: bool, write: bool) -> u64 {
-        let fh = self.next;
+        let fh = self.free.pop().unwrap_or_else(|| {
+            let fh = self.next;
+            self.next += 1;
+            fh
+        });
         self.handles.insert(fh, FileHandle { inode, read, write });
-        self.next = self.handles.len() as u64;
 
         fh
     }
@@ -98,10 +157,12 @@ impl ProcessFileHandlers {
     /// Close a file handle.
     ///
     /// This will remove the file handle from the database.
-    /// The file handle number will be reused next.
+    /// The file handle number becomes eligible for reuse by a future [`ProcessFileHandlers::open`] call.
     fn close(&mut self, fh: u64) {
-        self.handles.remove(&fh);
-        self.next = fh;
+        if self.handles.remove(&fh).is_some() {
+            self.free.push(fh);
+        }
+        self.pending_writes.remove(&fh);
     }
 }
 
@@ -217,5 +278,31 @@ mod test {
         // next should be 3
         let fh5 = db.open(5, true, false);
         assert_eq!(fh5, 3);
+    }
+
+    #[test]
+    fn test_should_not_collide_still_open_fh_after_closing_lower_fhs() {
+        let mut db = ProcessFileHandlers::default();
+
+        let fh0 = db.open(10, true, false);
+        let fh1 = db.open(11, true, false);
+        let fh2 = db.open(12, true, false);
+
+        db.close(fh1);
+        db.close(fh0);
+
+        let reopened_a = db.open(20, true, false);
+        let reopened_b = db.open(21, true, false);
+
+        assert_ne!(reopened_a, fh2);
+        assert_ne!(reopened_b, fh2);
+        assert_eq!(
+            db.get(fh2),
+            Some(&FileHandle {
+                inode: 12,
+                read: true,
+                write: false
+            })
+        );
     }
 }

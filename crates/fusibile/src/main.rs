@@ -1,3 +1,23 @@
+//! # fusibile
+//!
+//! A CLI to mount remote file systems locally via FUSE (Unix) or Dokany (Windows), backed by
+//! [`remotefs-fuse`](https://docs.rs/remotefs-fuse).
+//!
+//! ## Feature flags
+//!
+//! Each flag enables the corresponding remote backend as a mountable subcommand. Use
+//! `--no-default-features --features <subset>` to build with only the backends you need.
+//!
+//! | name      | description                        | default |
+//! |-----------|-------------------------------------|---------|
+//! | `aws-s3`  | Mount an AWS S3 bucket.             | ✔       |
+//! | `ftp`     | Mount an FTP/FTPS server.           | ✔       |
+//! | `gcs`     | Mount a Google Cloud Storage bucket. | ✔      |
+//! | `kube`    | Mount a Kubernetes pod filesystem.  | ✔       |
+//! | `smb`     | Mount an SMB share.                 | ✔       |
+//! | `ssh`     | Mount an SCP or SFTP server.        | ✔       |
+//! | `webdav`  | Mount a WebDAV server.              | ✔       |
+
 mod cli;
 mod remotefs_wrapper;
 
@@ -59,7 +79,9 @@ fn main() -> anyhow::Result<()> {
     // setup signal handler
     ctrlc::set_handler(move || {
         log::info!("Received SIGINT, unmounting filesystem");
-        umount.unmount().expect("Failed to unmount");
+        if let Err(err) = umount.unmount() {
+            log::error!("Failed to unmount: {err}");
+        }
     })?;
 
     log::info!("Running filesystem event loop");

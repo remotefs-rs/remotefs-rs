@@ -29,11 +29,6 @@
       src="https://img.shields.io/crates/v/remotefs-fuse.svg?logo=rust"
       alt="Latest version"
   /></a>
-  <a href="https://ko-fi.com/veeso">
-    <img
-      src="https://img.shields.io/badge/donate-ko--fi-red"
-      alt="Ko-fi"
-  /></a>
   <a href="https://conventionalcommits.org"
     ><img
       src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white"
@@ -190,18 +185,6 @@ feature and need the platform FUSE/Dokany service installed (see [Requirements](
 ```sh
 just test "--features integration-tests"
 ```
-
----
-
-## Support the developer ☕
-
-If you like remotefs-fuse and you're grateful for the work I've done, please consider a little donation 🥳
-
-You can make a donation with one of these platforms:
-
-[![ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/veeso)
-[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.me/chrisintin)
-[![bitcoin](https://img.shields.io/badge/Bitcoin-ff9416?style=for-the-badge&logo=bitcoin&logoColor=white)](https://btc.com/bc1qvlmykjn7htz0vuprmjrlkwtv9m9pan6kylsr8w)
 
 ---
 

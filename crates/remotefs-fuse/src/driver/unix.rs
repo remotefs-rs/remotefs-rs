@@ -5,8 +5,7 @@ mod test;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::hash::{Hash as _, Hasher as _};
-use std::io::{Cursor, Read as _, Seek as _};
+use std::io::{Cursor, Read as _, Seek as _, Write as _};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,7 +16,7 @@ use fuser::{
     RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
-use inode::{Inode, ROOT_INODE};
+use inode::Inode;
 use libc::{c_int, mode_t};
 use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
@@ -26,6 +25,7 @@ use remotefs::fs::UnixPex;
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
 pub use self::file_handle::FileHandlersDb;
+use self::file_handle::{PendingWrite, PendingWriteState};
 pub use self::inode::InodeDb;
 use super::Driver;
 use crate::MountOption;
@@ -34,6 +34,7 @@ const BLOCK_SIZE: usize = 512;
 const FMODE_EXEC: c_int = 0x20;
 const ROOT_UID: u32 = 0;
 
+#[derive(Debug)]
 pub(crate) struct DriverInner<T: RemoteFs> {
     pub(crate) database: InodeDb,
     pub(crate) file_handlers: FileHandlersDb,
@@ -350,13 +351,11 @@ fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
     }
 }
 
-/// Convert a [`File`] from [`remotefs`] to a [`FileAttr`] from [`fuser`]
-fn convert_file<T>(value: &File) -> FileAttr
-where
-    T: RemoteFs,
-{
+/// Convert a [`File`] from [`remotefs`] to a [`FileAttr`] from [`fuser`], using the given
+/// pre-resolved `inode` number.
+fn convert_file(value: &File, inode: Inode) -> FileAttr {
     FileAttr {
-        ino: INodeNo(Driver::<T>::inode(value.path())),
+        ino: INodeNo(inode),
         size: value.metadata().size,
         blocks: value.metadata().size.div_ceil(BLOCK_SIZE as u64),
         atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
@@ -401,22 +400,6 @@ fn as_file_kind(mut mode: SFlag) -> Option<FileType> {
     }
 }
 
-impl<T> Driver<T>
-where
-    T: RemoteFs,
-{
-    /// Get the inode as [`Inode`] ([`u64`]) number for a [`Path`].
-    fn inode(path: &Path) -> Inode {
-        if path == Path::new("/") {
-            return ROOT_INODE;
-        }
-
-        let mut hasher = seahash::SeaHasher::new();
-        path.hash(&mut hasher);
-        hasher.finish()
-    }
-}
-
 impl<T> DriverInner<T>
 where
     T: RemoteFs,
@@ -425,15 +408,11 @@ where
     ///
     /// If the inode is not in the database, it will be fetched from the remote filesystem.
     fn get_inode_from_path(&mut self, path: &Path) -> RemoteResult<(File, FileAttr)> {
+        let inode = self.database.inode_for(path);
         let (file, attrs) = self.remote.stat(path).map(|file| {
-            let attrs = convert_file::<T>(&file);
+            let attrs = convert_file(&file, inode);
             (file, attrs)
         })?;
-
-        // Save the inode to the database
-        if !self.database.has(attrs.ino.0) {
-            self.database.put(attrs.ino.0, path.to_path_buf());
-        }
 
         Ok((file, attrs))
     }
@@ -459,10 +438,7 @@ where
         let path = parent_path.join(name);
 
         // Get the inode and save it to the database
-        let inode = Driver::<T>::inode(&path);
-        if !self.database.has(inode) {
-            self.database.put(inode, path.clone());
-        }
+        self.database.inode_for(&path);
 
         info!(
             "lookup_name() called with {:?} {:?} -> {:?}",
@@ -561,9 +537,8 @@ where
             Ok(mut reader) => {
                 debug!("Reading file from stream: {:?} at {offset}", path);
                 if offset > 0 {
-                    // read file until offset
-                    let mut offset_buff = vec![0; offset as usize];
-                    reader.read_exact(&mut offset_buff).map_err(|err| {
+                    // skip to offset without allocating a buffer proportional to `offset`
+                    Self::skip_bytes(&mut reader, offset).map_err(|err| {
                         remotefs::RemoteError::new_ex(
                             remotefs::RemoteErrorType::IoError,
                             err.to_string(),
@@ -622,15 +597,14 @@ where
             ));
         };
 
-        // skip to offset
-        if offset > 0 {
-            let mut offset_buff = vec![0; offset as usize];
-            if let Err(err) = reader.read_exact(&mut offset_buff) {
-                error!("Failed to read file: {err}");
-                return Err(remotefs::RemoteError::new(
-                    remotefs::RemoteErrorType::IoError,
-                ));
-            }
+        // skip to offset without allocating a buffer proportional to `offset`
+        if offset > 0
+            && let Err(err) = Self::skip_bytes(&mut reader, offset)
+        {
+            error!("Failed to read file: {err}");
+            return Err(remotefs::RemoteError::new(
+                remotefs::RemoteErrorType::IoError,
+            ));
         }
 
         // read file
@@ -645,77 +619,123 @@ where
         Ok(buffer.len())
     }
 
-    /// Write data to a file.
-    fn write_remote_file(&mut self, file: &File, data: &[u8], offset: u64) -> RemoteResult<u32> {
-        // write data
-        let mut reader = Cursor::new(data);
-        let mut writer = match self.remote.create(file.path(), file.metadata()) {
-            Ok(writer) => writer,
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) if offset > 0 => {
-                error!(
-                    "remote file system doesn't support stream, so it is not possible to write at offset"
-                );
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::UnsupportedFeature,
-                    "remote file system doesn't support stream, so it is not possible to write at offset".to_string(),
-                ));
-            }
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) => {
-                return self.write_wno_stream(file, data);
-            }
-            Err(err) => {
-                error!("Failed to write file: {err}");
-                return Err(err);
-            }
-        };
-        if offset > 0 {
-            // try to seek
-            if let Err(err) = writer.seek(std::io::SeekFrom::Start(offset)) {
-                error!(
-                    "Failed to seek file: {err}. Not that not all the remote filesystems support seeking"
-                );
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    err.to_string(),
-                ));
-            }
+    /// Discard `n` bytes from `reader` without allocating a buffer proportional to `n`.
+    ///
+    /// This is used to skip to a read offset on readers that only implement [`std::io::Read`]
+    /// (not [`std::io::Seek`]), such as remote file streams. A malicious or misbehaving remote
+    /// could otherwise cause an out-of-memory abort by reporting a huge offset.
+    fn skip_bytes(reader: &mut impl std::io::Read, n: u64) -> std::io::Result<()> {
+        let skipped = std::io::copy(&mut reader.by_ref().take(n), &mut std::io::sink())?;
+        if skipped != n {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "offset is beyond the end of the file",
+            ));
         }
-        // write
-        let bytes_written = match std::io::copy(&mut reader, &mut writer) {
-            Ok(bytes) => bytes as u32,
-            Err(err) => {
-                error!("Failed to write file: {err}");
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    err.to_string(),
-                ));
-            }
-        };
-        // on write
-        self.remote
-            .on_written(writer)
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-        Ok(bytes_written)
+        Ok(())
     }
 
-    /// Write data to a file without using a stream.
-    fn write_wno_stream(&mut self, file: &File, data: &[u8]) -> RemoteResult<u32> {
-        debug!(
-            "Writing file without stream: {:?} {} bytes",
-            file.path(),
-            data.len()
-        );
-        let reader = Cursor::new(data.to_vec());
-        self.remote
-            .create_file(file.path(), file.metadata(), Box::new(reader))
-            .map(|len| len as u32)
+    /// Write `data` at `offset` to the pending write staged for `(pid, fh)`, starting a new one
+    /// (against `file`) if this is the first write to this handle.
+    ///
+    /// The remote write is not finalized here: it stays staged until [`Self::finalize_pending_write`]
+    /// is called from `flush()`/`release()`. This lets many `write()` calls in a row share a
+    /// single remote write (a single streaming upload, or a single buffered `create_file` call),
+    /// instead of each call re-creating (and so truncating) the remote file on its own.
+    fn write_to_handle(
+        &mut self,
+        pid: u32,
+        fh: u64,
+        file: &File,
+        data: &[u8],
+        offset: u64,
+    ) -> RemoteResult<u32> {
+        if self.file_handlers.pending_write(pid, fh).is_none() {
+            let state = match self.remote.create(file.path(), file.metadata()) {
+                Ok(stream) => PendingWriteState::Stream {
+                    stream,
+                    next_offset: 0,
+                },
+                Err(RemoteError {
+                    kind: RemoteErrorType::UnsupportedFeature,
+                    ..
+                }) => {
+                    debug!(
+                        "remote file system doesn't support streaming writes; buffering {:?} in memory",
+                        file.path()
+                    );
+                    PendingWriteState::Buffered(Vec::new())
+                }
+                Err(err) => {
+                    error!("Failed to open file for writing: {err}");
+                    return Err(err);
+                }
+            };
+            self.file_handlers.start_pending_write(
+                pid,
+                fh,
+                PendingWrite {
+                    file: file.clone(),
+                    state,
+                },
+            );
+        }
+
+        let pending = self
+            .file_handlers
+            .pending_write(pid, fh)
+            .expect("pending write was just inserted");
+
+        match &mut pending.state {
+            PendingWriteState::Stream {
+                stream,
+                next_offset,
+            } => {
+                if *next_offset != offset {
+                    stream.seek(std::io::SeekFrom::Start(offset)).map_err(|err| {
+                        error!(
+                            "Failed to seek file: {err}. Note that not all the remote filesystems support seeking"
+                        );
+                        RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
+                    })?;
+                }
+                stream.write_all(data).map_err(|err| {
+                    error!("Failed to write file: {err}");
+                    RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
+                })?;
+                *next_offset = offset + data.len() as u64;
+                Ok(data.len() as u32)
+            }
+            PendingWriteState::Buffered(buffer) => {
+                let end = offset as usize + data.len();
+                if buffer.len() < end {
+                    buffer.resize(end, 0);
+                }
+                buffer[offset as usize..end].copy_from_slice(data);
+                Ok(data.len() as u32)
+            }
+        }
+    }
+
+    /// Finalize a pending write, actually persisting it to the remote filesystem.
+    fn finalize_pending_write(&mut self, pending: PendingWrite) -> RemoteResult<()> {
+        match pending.state {
+            PendingWriteState::Stream { stream, .. } => self.remote.on_written(stream),
+            PendingWriteState::Buffered(buffer) => {
+                debug!(
+                    "uploading {} buffered bytes to {:?}",
+                    buffer.len(),
+                    pending.file.path()
+                );
+                self.remote
+                    .create_file(
+                        pending.file.path(),
+                        pending.file.metadata(),
+                        Box::new(Cursor::new(buffer)),
+                    )
+                    .map(|_| ())
+            }
+        }
     }
 
     /// Get the specified uid from the mount options.
@@ -767,8 +787,41 @@ where
     }
 
     #[cfg(test)]
+    fn inode_for(&self, path: &Path) -> Inode {
+        self.with_inner(|inner| inner.database.inode_for(path))
+    }
+
+    #[cfg(test)]
+    fn read_remote_file(&self, path: &Path, buffer: &mut [u8], offset: u64) -> RemoteResult<usize> {
+        self.with_inner(|inner| inner.read_remote_file(path, buffer, offset))
+    }
+
+    #[cfg(test)]
     fn check_access(&self, file: &File, uid: u32, gid: u32, access_mask: AccessFlags) -> bool {
         self.with_inner(|inner| inner.check_access(file, uid, gid, access_mask))
+    }
+
+    #[cfg(test)]
+    fn write_to_handle(
+        &self,
+        pid: u32,
+        fh: u64,
+        file: &File,
+        data: &[u8],
+        offset: u64,
+    ) -> RemoteResult<u32> {
+        self.with_inner(|inner| inner.write_to_handle(pid, fh, file, data, offset))
+    }
+
+    #[cfg(test)]
+    fn finalize_write(&self, pid: u32, fh: u64) -> RemoteResult<()> {
+        self.with_inner(|inner| {
+            let pending = inner
+                .file_handlers
+                .take_pending_write(pid, fh)
+                .expect("no pending write to finalize");
+            inner.finalize_pending_write(pending)
+        })
     }
 
     #[cfg(test)]
@@ -782,7 +835,6 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 impl<T> DriverInner<T>
 where
     T: RemoteFs,
@@ -875,6 +927,10 @@ where
     }
 
     /// Set file attributes.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::setattr"
+    )]
     fn setattr(
         &mut self,
         req: &Request,
@@ -937,7 +993,7 @@ where
         // set attributes
         match self.remote.setstat(file.path(), file.metadata().clone()) {
             Ok(_) => {
-                let attrs = convert_file::<T>(&file);
+                let attrs = convert_file(&file, ino.0);
                 reply.attr(&Duration::new(0, 0), &attrs);
             }
             Err(err) => {
@@ -959,7 +1015,17 @@ where
             }
         };
 
-        let mut buffer = vec![0; file.metadata().size as usize];
+        // symlink targets are always short paths; refuse to allocate a buffer sized from a
+        // remote-reported length that couldn't possibly be a real symlink target, which could
+        // otherwise let a misbehaving remote trigger a huge allocation
+        let size = file.metadata().size;
+        if size > libc::PATH_MAX as u64 {
+            error!("symlink target size {size} exceeds PATH_MAX");
+            reply.error(fuser::Errno::EIO);
+            return;
+        }
+
+        let mut buffer = vec![0; size as usize];
         if let Err(err) = self.read_remote_file(file.path(), &mut buffer, 0) {
             error!("Failed to read file: {err}");
             reply.error(fuser::Errno::EIO);
@@ -971,7 +1037,17 @@ where
 
     /// Create file node.
     /// Create a regular file, character device, block device, fifo or socket node.
-    #[allow(clippy::unnecessary_cast)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::mknod"
+    )]
+    #[cfg_attr(
+        target_os = "linux",
+        expect(
+            clippy::unnecessary_cast,
+            reason = "mode_t is u32 on Linux (same as `mode`'s type) but a narrower type on macOS/BSD, so the cast is only redundant on Linux"
+        )
+    )]
     fn mknod(
         &mut self,
         req: &Request,
@@ -1199,6 +1275,10 @@ where
     }
 
     /// Rename a file
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::rename"
+    )]
     fn rename(
         &mut self,
         req: &Request,
@@ -1251,9 +1331,6 @@ where
             reply.error(fuser::Errno::EIO);
             return;
         }
-
-        // Update the database
-        self.database.put(Driver::<T>::inode(&dest), dest);
 
         reply.ok();
     }
@@ -1335,6 +1412,10 @@ where
     /// return value of the read system call will reflect the return value of this
     /// operation. fh will contain the value set by the open method, or will be undefined
     /// if the open method didn't set any value.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::read"
+    )]
     fn read(
         &mut self,
         req: &Request,
@@ -1385,6 +1466,10 @@ where
     /// which case the return value of the write system call will reflect the return
     /// value of this operation. fh will contain the value set by the open method, or
     /// will be undefined if the open method didn't set any value.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::write"
+    )]
     fn write(
         &mut self,
         req: &Request,
@@ -1418,8 +1503,8 @@ where
             }
         };
 
-        // write data
-        let bytes_written = match self.write_remote_file(&file, data, offset) {
+        // stage the write; it is only persisted to the remote once the handle is flushed
+        let bytes_written = match self.write_to_handle(req.pid(), fh.0, &file, data, offset) {
             Ok(bytes) => bytes,
             Err(err) => {
                 error!("Failed to write file: {err}");
@@ -1458,7 +1543,17 @@ where
             return;
         }
 
-        // nop and ok
+        // persist any write staged by write() and surface errors to the caller's close();
+        // note this can leave the handle able to stage a new (truncating) write if more writes
+        // follow this flush on the same, dup'd, file descriptor
+        if let Some(pending) = self.file_handlers.take_pending_write(req.pid(), fh.0)
+            && let Err(err) = self.finalize_pending_write(pending)
+        {
+            error!("Failed to flush write: {err}");
+            reply.error(fuser::Errno::EIO);
+            return;
+        }
+
         reply.ok();
     }
 
@@ -1470,6 +1565,10 @@ where
     /// the release. fh will contain the value set by the open method, or will be undefined
     /// if the open method didn't set any value. flags will contain the same flags as for
     /// open.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::release"
+    )]
     fn release(
         &mut self,
         req: &Request,
@@ -1485,6 +1584,15 @@ where
             error!("no file handler found for {fh} and pid {}", req.pid());
             reply.error(fuser::Errno::ENOENT);
             return;
+        }
+
+        // defensively finalize any write that flush() never got a chance to (per fuser's docs,
+        // flush is not guaranteed to be called); errors here can't be reported back to the
+        // process that called close(), so just log them
+        if let Some(pending) = self.file_handlers.take_pending_write(req.pid(), fh.0)
+            && let Err(err) = self.finalize_pending_write(pending)
+        {
+            error!("Failed to finalize write on release: {err}");
         }
 
         // remove fh and ok
@@ -1605,7 +1713,7 @@ where
         };
 
         for (index, entry) in entries.into_iter().skip(offset as usize).enumerate() {
-            let inode = Driver::<T>::inode(entry.path());
+            let inode = self.database.inode_for(entry.path());
             debug!("Reading entry {inode} {index} {}", entry.path().display());
             let name = match entry.path().file_name() {
                 Some(name) => OsStr::from_bytes(name.as_bytes()),
@@ -1734,6 +1842,10 @@ where
     }
 
     /// Set an extended attribute.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::setxattr"
+    )]
     fn setxattr(
         &mut self,
         _req: &Request,
@@ -1821,6 +1933,10 @@ where
     /// structure in <fuse_common.h> for more details. If this method is not
     /// implemented or under Linux kernel versions earlier than 2.6.15, the mknod()
     /// and open() methods will be called instead.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors the fixed argument list of fuser::Filesystem::create"
+    )]
     fn create(
         &mut self,
         req: &Request,
@@ -1868,7 +1984,7 @@ where
             return;
         }
 
-        let inode = Driver::<T>::inode(&path);
+        let inode = self.database.inode_for(&path);
 
         // return created
         match self.get_inode(inode) {

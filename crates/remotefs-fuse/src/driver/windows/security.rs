@@ -7,6 +7,9 @@ use winapi::shared::{minwindef, winerror};
 use winapi::um::errhandlingapi::GetLastError;
 use winapi::um::{heapapi, securitybaseapi, winnt};
 
+/// A self-relative Windows security descriptor, heap-allocated via the Win32 security APIs.
+///
+/// The wrapped pointer is freed from the process heap on [`Drop`].
 #[derive(Debug)]
 pub struct SecurityDescriptor {
     desc_ptr: winnt::PSECURITY_DESCRIPTOR,
@@ -111,6 +114,9 @@ const FILE_GENERIC_MAPPING: winnt::GENERIC_MAPPING = winnt::GENERIC_MAPPING {
 };
 
 impl SecurityDescriptor {
+    /// Build a default security descriptor: owned by `SYSTEM`, granting full access to
+    /// administrators and `SYSTEM`, read/write/execute/delete to authenticated users, and
+    /// read/execute to the built-in users group.
     pub fn new_default() -> OperationResult<Self> {
         let owner_sid = Pin::new(get_well_known_sid(winnt::WinLocalSystemSid)?);
         let group_sid = Pin::new(get_well_known_sid(winnt::WinLocalSystemSid)?);
@@ -173,6 +179,10 @@ impl SecurityDescriptor {
         }
     }
 
+    /// Copy this descriptor into `sec_desc`, restricted to the parts requested by `sec_info`.
+    ///
+    /// Returns the descriptor's total length in bytes. If `sec_desc_len` is smaller than that,
+    /// nothing is copied and the caller should retry with a large enough buffer.
     pub fn get_security_info(
         &self,
         sec_info: winnt::SECURITY_INFORMATION,
@@ -200,6 +210,7 @@ impl SecurityDescriptor {
         }
     }
 
+    /// Replace the parts of this descriptor selected by `sec_info` with those from `sec_desc`.
     pub fn set_security_info(
         &mut self,
         sec_info: winnt::SECURITY_INFORMATION,

@@ -2,7 +2,7 @@ use clap::Args;
 use remotefs_ftp::FtpFs;
 
 /// Mount an FTP server filesystem
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub struct FtpArgs {
     /// FTP server hostname
     #[arg(long)]
@@ -24,6 +24,19 @@ pub struct FtpArgs {
     active: bool,
 }
 
+impl std::fmt::Debug for FtpArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FtpArgs")
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[REDACTED]"))
+            .field("secure", &self.secure)
+            .field("active", &self.active)
+            .finish()
+    }
+}
+
 impl From<FtpArgs> for FtpFs {
     fn from(args: FtpArgs) -> Self {
         let mut ftp = FtpFs::new(args.hostname, args.port).username(args.username);
@@ -43,5 +56,27 @@ impl From<FtpArgs> for FtpFs {
         } else {
             ftp
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FtpArgs;
+
+    #[test]
+    fn debug_should_redact_password() {
+        let secret = "super-secret-password";
+
+        let args = FtpArgs {
+            hostname: "localhost".to_string(),
+            port: 21,
+            username: "anonymous".to_string(),
+            password: Some(secret.to_string()),
+            secure: false,
+            active: false,
+        };
+        let rendered = format!("{args:?}");
+        assert!(!rendered.contains(secret));
+        assert!(rendered.contains("[REDACTED]"));
     }
 }

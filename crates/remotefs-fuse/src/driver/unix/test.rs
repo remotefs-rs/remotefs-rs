@@ -141,14 +141,74 @@ fn test_should_get_configured_gid() {
 
 #[test]
 fn test_should_get_unique_inode() {
+    let driver = setup_driver();
+
     let p = PathBuf::from("/tmp/test.txt");
-    let inode_a = Driver::<MemoryFs>::inode(&p);
-    let inode_b = Driver::<MemoryFs>::inode(&p);
+    let inode_a = driver.inode_for(&p);
+    let inode_b = driver.inode_for(&p);
     assert_eq!(inode_a, inode_b);
 
     let p = PathBuf::from("/dev/null");
-    let inode_c = Driver::<MemoryFs>::inode(&p);
+    let inode_c = driver.inode_for(&p);
     assert_ne!(inode_a, inode_c);
+}
+
+#[test]
+fn test_should_write_multiple_chunks_to_the_same_handle_without_truncating() {
+    let mut driver = setup_driver();
+    let file_path = Path::new("/tmp/test.txt");
+    make_file_at(&mut driver, file_path, b"");
+
+    let (file, _) = driver
+        .get_inode_from_path(file_path)
+        .expect("failed to get inode");
+
+    // simulate the kernel splitting one large write into several write() calls on the same
+    // file handle, as it does for any file bigger than a single write buffer
+    let pid = 1;
+    let fh = 42;
+    driver
+        .write_to_handle(pid, fh, &file, b"hello ", 0)
+        .expect("failed to write first chunk");
+    driver
+        .write_to_handle(pid, fh, &file, b"world", 6)
+        .expect("failed to write second chunk");
+    driver
+        .finalize_write(pid, fh)
+        .expect("failed to finalize write");
+
+    let mut buffer = [0u8; 11];
+    driver
+        .read_remote_file(file_path, &mut buffer, 0)
+        .expect("failed to read file back");
+    assert_eq!(&buffer, b"hello world");
+}
+
+#[test]
+fn test_should_write_at_offset_leaving_a_gap() {
+    let mut driver = setup_driver();
+    let file_path = Path::new("/tmp/test.txt");
+    make_file_at(&mut driver, file_path, b"");
+
+    let (file, _) = driver
+        .get_inode_from_path(file_path)
+        .expect("failed to get inode");
+
+    let pid = 1;
+    let fh = 43;
+    // non-sequential write: leaves a zero-filled gap before the offset
+    driver
+        .write_to_handle(pid, fh, &file, b"world", 6)
+        .expect("failed to write chunk");
+    driver
+        .finalize_write(pid, fh)
+        .expect("failed to finalize write");
+
+    let mut buffer = [0u8; 11];
+    driver
+        .read_remote_file(file_path, &mut buffer, 0)
+        .expect("failed to read file back");
+    assert_eq!(&buffer[6..], b"world");
 }
 
 #[test]
@@ -183,6 +243,35 @@ fn test_should_get_inode_from_path() {
 }
 
 #[test]
+fn test_should_read_file_at_offset() {
+    let mut driver = setup_driver();
+    let file_path = Path::new("/tmp/test.txt");
+    make_file_at(&mut driver, file_path, b"hello world");
+
+    let mut buffer = [0u8; 5];
+    let read = driver
+        .read_remote_file(file_path, &mut buffer, 6)
+        .expect("failed to read file at offset");
+
+    assert_eq!(read, 5);
+    assert_eq!(&buffer, b"world");
+}
+
+#[test]
+fn test_should_error_when_reading_past_end_of_file() {
+    let mut driver = setup_driver();
+    let file_path = Path::new("/tmp/test.txt");
+    make_file_at(&mut driver, file_path, b"hello world");
+
+    let mut buffer = [0u8; 5];
+    // offset is far beyond the 11-byte file; this must return an error, not attempt to
+    // allocate or read a huge amount of data
+    let result = driver.read_remote_file(file_path, &mut buffer, 1_000_000);
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_should_lookup_name() {
     let mut driver = setup_driver();
     // make dir
@@ -204,7 +293,7 @@ fn test_should_lookup_name() {
     assert_eq!(looked_up_path, expected_file_path);
 
     // inode for looked up file should be in the database
-    let child_inode = Driver::<MemoryFs>::inode(&looked_up_path);
+    let child_inode = driver.inode_for(&looked_up_path);
     driver.with_inner(|inner| {
         assert_eq!(
             inner

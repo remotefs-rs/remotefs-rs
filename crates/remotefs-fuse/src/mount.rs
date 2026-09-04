@@ -8,6 +8,7 @@ pub use self::option::MountOption;
 use crate::driver::Driver;
 
 /// A struct to mount the filesystem.
+#[derive(Debug)]
 pub struct Mount<T>
 where
     T: RemoteFs + Sync + Send + 'static,
@@ -27,7 +28,10 @@ where
     /// Mount the filesystem implemented by `Driver` to the provided mountpoint.
     ///
     /// You can specify the mount options using the `options` parameter as an array of [`MountOption`].
-    #[allow(clippy::self_named_constructors)]
+    #[expect(
+        clippy::self_named_constructors,
+        reason = "`Mount::mount` reads more naturally than `Mount::new` for a mount API"
+    )]
     #[cfg(unix)]
     pub fn mount(
         remote: T,
@@ -47,7 +51,10 @@ where
     ///
     /// You can specify the mount options using the `options` parameter as an array of [`MountOption`].
     #[cfg(windows)]
-    #[allow(clippy::self_named_constructors)]
+    #[expect(
+        clippy::self_named_constructors,
+        reason = "`Mount::mount` reads more naturally than `Mount::new` for a mount API"
+    )]
     pub fn mount(
         remote: T,
         mountpoint: &Path,
@@ -106,6 +113,7 @@ where
 }
 
 /// A thread-safe handle to unmount the filesystem.
+#[derive(Debug)]
 pub struct Unmount {
     #[cfg(unix)]
     umount: fuser::SessionUnmounter,
