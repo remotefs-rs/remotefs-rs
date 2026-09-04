@@ -112,6 +112,11 @@ Assets are named `fusibile-v<version>-<target>.tar.gz` (`.zip` on Windows), each
 Windows on ARM64 is not available yet: `fusibile` depends on Dokany, whose Rust bindings have no
 aarch64 support.
 
+The `x86_64-apple-darwin` (macOS Intel) release binary is built without the `smb` feature:
+vendoring Samba fails to link on that platform. Everything else, including SMB on Apple Silicon
+and Linux, is unaffected. Build from source with `cargo install fusibile --locked` if you need SMB
+on Intel macOS.
+
 ### Runtime requirements
 
 - **Linux**: the `fuse3` package, for its setuid `fusermount3` binary
