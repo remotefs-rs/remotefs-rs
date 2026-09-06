@@ -166,12 +166,12 @@ pub trait RemoteFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
+        reader: &mut (dyn Read + Send),
     ) -> RemoteResult<u64> {
         if self.is_connected() {
             trace!("Opened remote file");
             let mut stream = self.append(path, metadata)?;
-            let sz = io::copy(&mut reader, &mut stream)
+            let sz = io::copy(reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_written(stream)?;
             trace!("Written {} bytes to destination", sz);
@@ -194,12 +194,12 @@ pub trait RemoteFs {
         &mut self,
         path: &Path,
         metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
+        reader: &mut (dyn Read + Send),
     ) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.create(path, metadata)?;
             trace!("Opened remote file");
-            let sz = io::copy(&mut reader, &mut stream)
+            let sz = io::copy(reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_written(stream)?;
             trace!("Written {} bytes to destination", sz);
@@ -219,11 +219,11 @@ pub trait RemoteFs {
     /// ### Default implementation
     ///
     /// By default this function uses the streams function to copy content from reader to writer
-    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
+    fn open_file(&mut self, src: &Path, dest: &mut (dyn Write + Send)) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.open(src)?;
             trace!("File opened");
-            let sz = io::copy(&mut stream, &mut dest)
+            let sz = io::copy(&mut stream, dest)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_read(stream)?;
             trace!("Copied {} bytes to destination", sz);
