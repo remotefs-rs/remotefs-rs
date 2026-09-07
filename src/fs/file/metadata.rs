@@ -253,9 +253,9 @@ mod test {
         assert!(metadata.mode.is_some());
         assert_eq!(metadata.modified, Some(modified));
         assert_eq!(metadata.size, 1024);
-        assert_eq!(metadata.is_symlink(), true);
-        assert_eq!(metadata.is_dir(), false);
-        assert_eq!(metadata.is_file(), false);
+        assert!(metadata.is_symlink());
+        assert!(!metadata.is_dir());
+        assert!(!metadata.is_file());
         assert_eq!(
             metadata.symlink.as_deref().unwrap(),
             Path::new("/tmp/a.txt")

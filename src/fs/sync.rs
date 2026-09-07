@@ -4,6 +4,8 @@ use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use log::{debug, trace};
+
 use super::{
     File, Metadata, ReadStream, RemoteError, RemoteErrorType, UnixPex, Welcome, WriteStream,
 };
@@ -192,21 +194,21 @@ pub trait RemoteFs {
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
         if self.is_connected() {
             let path = crate::utils::path::absolutize(&self.pwd()?, path);
-            debug!("Removing {}...", path.display());
+            debug!("Removing {path}...", path = path.display());
             let entry = self.stat(path.as_path())?;
             if entry.is_dir() {
                 // list dir
                 debug!(
-                    "{} is a directory; removing all directory entries",
-                    entry.name()
+                    "{name} is a directory; removing all directory entries",
+                    name = entry.name()
                 );
                 let directory_content = self.list_dir(entry.path())?;
                 for entry in directory_content.iter() {
                     self.remove_dir_all(entry.path())?;
                 }
                 trace!(
-                    "Removed all files in {}; removing directory",
-                    entry.path().display()
+                    "Removed all files in {path}; removing directory",
+                    path = entry.path().display()
                 );
                 self.remove_dir(entry.path())
             } else {
@@ -386,7 +388,7 @@ pub trait RemoteFs {
             let sz = io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_written(stream)?;
-            trace!("Written {} bytes to destination", sz);
+            trace!("Written {sz} bytes to destination");
             Ok(sz)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -423,7 +425,7 @@ pub trait RemoteFs {
             let sz = io::copy(&mut reader, &mut stream)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_written(stream)?;
-            trace!("Written {} bytes to destination", sz);
+            trace!("Written {sz} bytes to destination");
             Ok(sz)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -454,7 +456,7 @@ pub trait RemoteFs {
             let sz = io::copy(&mut stream, &mut dest)
                 .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
             self.on_read(stream)?;
-            trace!("Copied {} bytes to destination", sz);
+            trace!("Copied {sz} bytes to destination");
             Ok(sz)
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))

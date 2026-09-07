@@ -20,20 +20,15 @@ use std::fs::FileType as StdFileType;
 /// assert!(!FileType::Symlink.is_file());
 /// assert_eq!(FileType::default(), FileType::File);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FileType {
     /// A directory.
     Directory,
     /// A regular file, and anything that is neither a directory nor a link.
+    #[default]
     File,
     /// A symbolic link, whatever it points at.
     Symlink,
-}
-
-impl Default for FileType {
-    fn default() -> Self {
-        Self::File
-    }
 }
 
 impl FileType {
@@ -68,20 +63,18 @@ impl From<StdFileType> for FileType {
 #[cfg(test)]
 mod test {
 
-    use pretty_assertions::assert_eq;
-
     use super::*;
 
     #[test]
     fn should_check_file_type() {
-        assert_eq!(FileType::Directory.is_dir(), true);
-        assert_eq!(FileType::Directory.is_file(), false);
-        assert_eq!(FileType::Directory.is_symlink(), false);
-        assert_eq!(FileType::File.is_dir(), false);
-        assert_eq!(FileType::File.is_file(), true);
-        assert_eq!(FileType::File.is_symlink(), false);
-        assert_eq!(FileType::Symlink.is_dir(), false);
-        assert_eq!(FileType::Symlink.is_file(), false);
-        assert_eq!(FileType::Symlink.is_symlink(), true);
+        assert!(FileType::Directory.is_dir());
+        assert!(!FileType::Directory.is_file());
+        assert!(!FileType::Directory.is_symlink());
+        assert!(!FileType::File.is_dir());
+        assert!(FileType::File.is_file());
+        assert!(!FileType::File.is_symlink());
+        assert!(!FileType::Symlink.is_dir());
+        assert!(!FileType::Symlink.is_file());
+        assert!(FileType::Symlink.is_symlink());
     }
 }

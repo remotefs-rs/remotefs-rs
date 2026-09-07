@@ -166,21 +166,21 @@ mod test {
     #[test]
     fn should_create_unix_pex_class() {
         let pex: UnixPexClass = UnixPexClass::from(4);
-        assert_eq!(pex.read(), true);
-        assert_eq!(pex.write(), false);
-        assert_eq!(pex.execute(), false);
+        assert!(pex.read());
+        assert!(!pex.write());
+        assert!(!pex.execute());
         let pex: UnixPexClass = UnixPexClass::from(0);
-        assert_eq!(pex.read(), false);
-        assert_eq!(pex.write(), false);
-        assert_eq!(pex.execute(), false);
+        assert!(!pex.read());
+        assert!(!pex.write());
+        assert!(!pex.execute());
         let pex: UnixPexClass = UnixPexClass::from(3);
-        assert_eq!(pex.read(), false);
-        assert_eq!(pex.write(), true);
-        assert_eq!(pex.execute(), true);
+        assert!(!pex.read());
+        assert!(pex.write());
+        assert!(pex.execute());
         let pex: UnixPexClass = UnixPexClass::from(7);
-        assert_eq!(pex.read(), true);
-        assert_eq!(pex.write(), true);
-        assert_eq!(pex.execute(), true);
+        assert!(pex.read());
+        assert!(pex.write());
+        assert!(pex.execute());
         let pex: UnixPexClass = UnixPexClass::from(3);
         assert_eq!(pex.as_byte(), 3);
         let pex: UnixPexClass = UnixPexClass::from(7);
