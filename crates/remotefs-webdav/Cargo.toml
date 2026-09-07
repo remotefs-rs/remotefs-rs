@@ -2,40 +2,17 @@
 name = "remotefs-webdav"
 version = "0.2.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
-edition = "2021"
 categories = ["network-programming"]
-description = "a remotefs client implementation for WebDAV"
-homepage = "https://github.com/veeso/remotefs-rs-webdav"
+documentation = "https://docs.rs/remotefs-webdav"
+edition = "2024"
+homepage = "https://github.com/remotefs-rs/remotefs-rs-webdav"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
-keywords = []
+keywords = ["remotefs", "webdav", "webdav-client", "rfc4918"]
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/veeso/remotefs-rs-webdav"
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-bytes = "1.5"
-log = "0.4"
-remotefs = "0.3"
-rustydav = "0.1.3"
-thiserror = "^1.0"
-
-# webdav-xml deps
-bytestring = "1.3.1"
-http = "1"
-httpdate = "1.0.3"
-indexmap = "2.2.3"
-mime = "0.3.17"
-nonempty = "0.9.0"
-quick-xml = "0.31.0"
-time = { version = "0.3.34", features = ["parsing", "formatting"] }
-
-
-[dev-dependencies]
-env_logger = "^0.11.0"
-pretty_assertions = "^1.0.0"
-serial_test = "^3"
-uuid = { version = "^1", features = ["v4"] }
+repository = "https://github.com/remotefs-rs/remotefs-rs-webdav"
+rust-version = "1.94.1"
+description = "remotefs WebDAV client library"
 
 [features]
 default = ["find"]
@@ -43,5 +20,30 @@ default = ["find"]
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
 # tests
-github-actions = []
 with-containers = []
+
+[dependencies]
+bytes = "1.5"
+log = "0.4"
+remotefs = "0.3"
+rustydav = "0.1.3"
+thiserror = "2"
+
+# vendored `webdav-xml` dependencies
+bytestring = "1.3"
+http = "1"
+httpdate = "1"
+indexmap = "2.2"
+mime = "0.3"
+nonempty = "0.12"
+quick-xml = "0.42"
+time = { version = "0.3.34", features = ["formatting", "parsing"] }
+
+[dev-dependencies]
+env_logger = "0.11"
+pretty_assertions = "1"
+serial_test = "4"
+uuid = { version = "1", features = ["v4"] }
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]

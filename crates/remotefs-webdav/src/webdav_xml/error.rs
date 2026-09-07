@@ -23,6 +23,10 @@ pub enum Error {
     Xml(#[from] quick_xml::Error),
     #[error("unexpected tag")]
     UnexpectedTag,
+    #[error("unknown entity reference: `&{0};`")]
+    UnknownEntity(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
     #[error(transparent)]

@@ -212,4 +212,29 @@ mod test {
         assert_eq!(build_rs.path, PathBuf::from("/ciao/build.rs"));
         assert_eq!(build_rs.metadata.size, 486);
     }
+
+    #[test]
+    fn test_should_parse_href_with_entity_references() {
+        let response = r#"<?xml version="1.0" encoding="utf-8"?>
+        <D:multistatus xmlns:D="DAV:">
+        <D:response>
+        <D:href>/ciao/rock%20&amp;%20roll%20&#38;%20more.txt</D:href>
+        <D:propstat>
+        <D:prop>
+        <D:resourcetype/>
+        <D:getcontentlength>7</D:getcontentlength>
+        </D:prop>
+        <D:status>HTTP/1.1 200 OK</D:status>
+        </D:propstat>
+        </D:response>
+        </D:multistatus>
+"#;
+
+        let files = ResponseParser::parse_propfind(response.as_bytes()).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(
+            files[0].path,
+            PathBuf::from("/ciao/rock%20&%20roll%20&%20more.txt")
+        );
+    }
 }
