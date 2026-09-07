@@ -10,8 +10,7 @@
 
 <p align="center">~ Remotefs WebDAV client ~</p>
 
-<p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.2.0 (30/09/2024)</p>
+<p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso</a></p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -120,17 +119,6 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | setstat        | No     |
 | stat           | Yes    |
 | symlink        | No     |
-
----
-
-## Support the developer ☕
-
-If you like remotefs-webdav and you're grateful for the work I've done, please consider a little donation 🥳
-
-You can make a donation with one of these platforms:
-
-[![ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/veeso)
-[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.me/chrisintin)
 
 ---
 
