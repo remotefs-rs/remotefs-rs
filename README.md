@@ -23,9 +23,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=badge"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs"
@@ -43,26 +43,21 @@
       src="https://img.shields.io/badge/donate-ko--fi-red"
       alt="Ko-fi"
   /></a>
+  <a href="https://conventionalcommits.org">
+    <img
+      src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white"
+      alt="Conventional commits"
+  /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veeso/remotefs-rs/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/veeso/remotefs-rs/workflows/Linux/badge.svg"
-      alt="Linux CI"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
+      alt="CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs/actions"
+  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs"
     ><img
-      src="https://github.com/veeso/remotefs-rs/workflows/MacOS/badge.svg"
-      alt="MacOS CI"
-  /></a>
-  <a href="https://github.com/veeso/remotefs-rs/actions"
-    ><img
-      src="https://github.com/veeso/remotefs-rs/workflows/Windows/badge.svg"
-      alt="Windows CI"
-  /></a>
-  <a href="https://coveralls.io/github/veeso/remotefs-rs"
-    ><img
-      src="https://coveralls.io/repos/github/veeso/remotefs-rs/badge.svg"
+      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs"
@@ -111,7 +106,7 @@ Using remotefs, this is no longer a problem: all you need is to configure the op
 First, add `remotefs` to your list of dependencies:
 
 ```toml
-remotefs = "^0.3.0"
+remotefs = "0.3"
 ```
 
 select over a variety of features:
