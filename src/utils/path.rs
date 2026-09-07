@@ -1,10 +1,12 @@
-//! ## Path
-//!
-//! path utilities
+//! Path helpers for resolving user-supplied paths against a working directory.
 
 use std::path::{Path, PathBuf};
 
-/// Absolutize target path if relative.
+/// Resolve `target` against `wrkdir` when it is relative.
+///
+/// An absolute `target` is returned unchanged. This mirrors what a protocol does
+/// with a path a caller passed without a leading separator, and it is what the
+/// defaulted [`crate::RemoteFs`] methods use before recursing.
 pub fn absolutize(wrkdir: &Path, target: &Path) -> PathBuf {
     match target.is_absolute() {
         true => target.to_path_buf(),

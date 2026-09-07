@@ -1,5 +1,3 @@
-//! ## Utils
-//!
-//! `utils` is the module which provides utilities of different kind
+//! Internal helpers shared by the default [`crate::RemoteFs`] implementations.
 
 pub mod path;

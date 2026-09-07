@@ -1,18 +1,32 @@
-//! ## File type
-//!
-//! represents the file type
+//! The kind of entry a [`super::File`] stands for.
 
 use std::fs::FileType as StdFileType;
 
-/// Describes the file type (directory, regular file or symlink)
+/// The kind of an entry: a directory, a regular file, or a symbolic link.
+///
+/// Every entry is exactly one of the three. A link is classified as
+/// [`FileType::Symlink`] whatever it points at, so resolving a link is the
+/// caller's decision, not the client's.
+///
+/// Anything a protocol reports that is none of the three — a socket, a FIFO, a
+/// device node — is reported as [`FileType::File`], which is also the default.
+///
+/// # Examples
+///
+/// ```
+/// use remotefs::fs::FileType;
+///
+/// assert!(FileType::Directory.is_dir());
+/// assert!(!FileType::Symlink.is_file());
+/// assert_eq!(FileType::default(), FileType::File);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FileType {
-    /// A directory
+    /// A directory.
     Directory,
-    /// Regular file
+    /// A regular file, and anything that is neither a directory nor a link.
     File,
-    /// Symbolic link. If the file is a symlink pointing to a directory,
-    /// this will be still considered a Symlink.
+    /// A symbolic link, whatever it points at.
     Symlink,
 }
 
@@ -23,17 +37,17 @@ impl Default for FileType {
 }
 
 impl FileType {
-    /// Returns whether file is a directory
+    /// Return whether the entry is a directory.
     pub fn is_dir(&self) -> bool {
         matches!(self, Self::Directory)
     }
 
-    /// Returns whether file is a regular file
+    /// Return whether the entry is a regular file.
     pub fn is_file(&self) -> bool {
         matches!(self, Self::File)
     }
 
-    /// Returns whether file is symlink
+    /// Return whether the entry is a symbolic link.
     pub fn is_symlink(&self) -> bool {
         matches!(self, Self::Symlink)
     }

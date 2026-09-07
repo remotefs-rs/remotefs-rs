@@ -1,17 +1,39 @@
-//! ## Welcome
-//!
-//! welcome data type
+//! The greeting a server may send once a connection is established.
 
-/// Structure holding all data related to a successful connection and authentication
-/// on remote host.
+/// The outcome of a successful connection and authentication.
+///
+/// Returned by [`crate::RemoteFs::connect`]. Some protocols — FTP and SSH among
+/// them — greet a client with a banner that is worth showing to a user; the ones
+/// that do not simply leave [`Welcome::banner`] empty.
+///
+/// The type exists so that a protocol can grow a second piece of connection
+/// metadata without breaking [`crate::RemoteFs::connect`]'s signature.
+///
+/// # Examples
+///
+/// ```
+/// use remotefs::fs::Welcome;
+///
+/// let welcome = Welcome::default().banner(Some("Hello, world!".to_string()));
+///
+/// assert_eq!(welcome.banner.as_deref(), Some("Hello, world!"));
+/// ```
 #[derive(Debug, Default, Clone)]
 pub struct Welcome {
-    /// Welcome message / banner
+    /// The welcome message or banner sent by the server, when there is one.
     pub banner: Option<String>,
 }
 
 impl Welcome {
-    /// Set welcome message or banner
+    /// Set the welcome message or banner, consuming and returning `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use remotefs::fs::Welcome;
+    ///
+    /// assert!(Welcome::default().banner(None).banner.is_none());
+    /// ```
     pub fn banner(mut self, banner: Option<String>) -> Self {
         self.banner = banner;
         self
