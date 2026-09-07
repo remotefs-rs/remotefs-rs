@@ -139,7 +139,7 @@ You can make a donation with one of these platforms:
 Contributions, bug reports, new features, and questions are welcome! 😉
 If you have any questions or concerns, or you want to suggest a new feature, or you want just want to improve remotefs, feel free to open an issue or a PR.
 
-Please follow [our contributing guidelines](CONTRIBUTING.md)
+Please follow [our contributing guidelines](CONTRIBUTING.md) and read the [AI policy](AI_POLICY.md) before opening a pull request.
 
 ---
 
