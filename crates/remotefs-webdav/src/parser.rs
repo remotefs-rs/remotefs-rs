@@ -71,9 +71,9 @@ impl ResponseParser {
                 }
             };
             debug!(
-                "found {} properties for {}",
-                propstats.len(),
-                path.0.to_string()
+                "found {count} properties for {path}",
+                count = propstats.len(),
+                path = path.0
             );
             for props in propstats.map(|x| x.prop) {
                 let mut metadata = Metadata::default();

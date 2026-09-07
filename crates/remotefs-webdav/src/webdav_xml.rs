@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// This module is a vendored copy of the `webdav-xml` crate. It keeps upstream's
+// full element and property set even though this client only reads a subset of
+// it, so that the fork stays easy to rebase.
+#![allow(dead_code)]
 #![allow(rustdoc::redundant_explicit_links)]
 
 //! Definitions and (de)serialization for WebDAV XML elements as defined
@@ -68,7 +72,6 @@ where
 /// As such, `IntoXml` shouldn't be implemented directly: [`Element`] and
 /// [`Into<Value>`] should be implemented instead, and you get the `IntoXml`
 /// implementation for free.
-#[allow(dead_code)]
 pub trait IntoXml: Sized {
     fn write_xml(self, writer: impl std::io::Write) -> Result<()>;
     fn into_xml(self) -> Result<Bytes> {

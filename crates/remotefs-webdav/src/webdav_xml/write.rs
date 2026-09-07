@@ -37,14 +37,14 @@ where
     W: std::io::Write,
 {
     fn add_namespace(&mut self, name: &ElementName<ByteString>) {
-        if let Some(namespace) = &name.namespace {
-            if !self.namespaces.contains_key(namespace) {
-                self.namespaces.insert(
-                    namespace.clone(),
-                    name.prefix.as_ref().cloned().unwrap_or_else(|| "NS".into()),
-                );
-                // TODO: handle collisions
-            }
+        if let Some(namespace) = &name.namespace
+            && !self.namespaces.contains_key(namespace)
+        {
+            self.namespaces.insert(
+                namespace.clone(),
+                name.prefix.as_ref().cloned().unwrap_or_else(|| "NS".into()),
+            );
+            // TODO: handle collisions
         }
     }
     fn resolve_namespaces(&mut self, name: &ElementName<ByteString>, value: &Value) {

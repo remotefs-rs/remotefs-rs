@@ -442,8 +442,10 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
         finalize_client(client);
@@ -514,8 +516,10 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert_eq!(
             client
                 .create_file(p, &metadata, Box::new(reader))
@@ -548,8 +552,10 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
         assert_eq!(client.exists(p).ok().unwrap(), true);
@@ -572,15 +578,17 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
         let file = client
             .list_dir(wrkdir.as_path())
             .ok()
             .unwrap()
-            .get(0)
+            .first()
             .unwrap()
             .clone();
         assert_eq!(file.name().as_str(), "a.txt");
@@ -603,8 +611,10 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         let dest = Path::new("b.txt");
         assert!(client.mov(p, dest).is_ok());
@@ -621,8 +631,10 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         // Verify size
         let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
@@ -659,8 +671,10 @@ mod test {
         file_path.push(Path::new("a.txt"));
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(
             client
                 .create_file(file_path.as_path(), &metadata, Box::new(reader))
@@ -710,8 +724,10 @@ mod test {
         let p = Path::new("a.txt");
         let file_data = "test data\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         assert!(client.remove_file(p).is_ok());
         finalize_client(client);
@@ -729,8 +745,10 @@ mod test {
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         assert!(
             client
@@ -763,8 +781,10 @@ mod test {
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         let entry = client.stat(p).ok().unwrap();
         assert_eq!(entry.name(), "a.sh");
@@ -798,8 +818,10 @@ mod test {
         let p = Path::new("a.sh");
         let file_data = "echo 5\n";
         let reader = Cursor::new(file_data.as_bytes());
-        let mut metadata = Metadata::default();
-        metadata.size = file_data.len() as u64;
+        let metadata = Metadata {
+            size: file_data.len() as u64,
+            ..Default::default()
+        };
         assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
         let symlink = Path::new("b.sh");
         assert!(client.symlink(symlink, p).is_err());
