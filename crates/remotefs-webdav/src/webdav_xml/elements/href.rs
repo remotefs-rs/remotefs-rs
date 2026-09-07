@@ -5,7 +5,7 @@
 use std::str::FromStr;
 
 use super::super::value::Value;
-use super::super::{Element, Error, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Element, Error};
 
 /// The `href` XML element as defined in [RFC 4918](http://webdav.org/specs/rfc4918.html#ELEMENT_href).
 #[derive(Clone, Debug, PartialEq)]

@@ -5,7 +5,7 @@
 use std::fmt::Display;
 use std::str::FromStr;
 
-use super::super::{Element, Error, Value, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Element, Error, Value};
 
 /// The `status` XML element as defined in [RFC 4918](http://webdav.org/specs/rfc4918.html#ELEMENT_status).
 #[derive(Clone, Copy, Debug, PartialEq)]

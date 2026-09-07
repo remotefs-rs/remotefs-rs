@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use bytes::Bytes;
-use nonempty::{nonempty, NonEmpty};
+use nonempty::{NonEmpty, nonempty};
 
 pub(crate) trait NonEmptyExt<T>: Sized {
     fn try_collect<E>(iter: impl IntoIterator<Item = Result<T, E>>) -> Result<Option<Self>, E>;

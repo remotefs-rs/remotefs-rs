@@ -4,10 +4,10 @@
 
 use bytestring::ByteString;
 use indexmap::IndexMap;
-use nonempty::{nonempty, NonEmpty};
+use nonempty::{NonEmpty, nonempty};
 
-use super::element::{Element, ElementExt, ElementName};
 use super::Error;
+use super::element::{Element, ElementExt, ElementName};
 
 /// Represents the content of an XML element.
 ///

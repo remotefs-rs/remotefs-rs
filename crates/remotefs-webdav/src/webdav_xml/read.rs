@@ -61,9 +61,7 @@ impl<'x> XmlReader<'x> {
                     }
 
                     Ok(ElementName {
-                        namespace: Some(
-                            xml.maybe_slice_ref(ns.as_ref().as_bytes()).try_into()?,
-                        ),
+                        namespace: Some(xml.maybe_slice_ref(ns.as_ref().as_bytes()).try_into()?),
                         prefix: None,
                         local_name: xml
                             .maybe_slice_ref(tag.local_name().as_ref().as_bytes())
@@ -85,15 +83,12 @@ impl<'x> XmlReader<'x> {
         loop {
             let (resolve_result, event) = self.read_resolved_event()?;
             match event {
-                Event::Text(text)
-                    if text.chars().all(char::is_whitespace) =>
-                {
+                Event::Text(text) if text.chars().all(char::is_whitespace) => {
                     continue;
                 }
                 Event::Text(text) => {
                     let head = unescape(&text).map_err(quick_xml::Error::from)?;
-                    let head: ByteString =
-                        xml.maybe_slice_ref(head.as_bytes()).try_into()?;
+                    let head: ByteString = xml.maybe_slice_ref(head.as_bytes()).try_into()?;
                     drop(text);
 
                     return Ok(Value::Text(self.read_trailing_text(head)?));

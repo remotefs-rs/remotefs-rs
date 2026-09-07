@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use super::super::{Element, Error, Todo, Value, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Element, Error, Todo, Value};
 
 /// Not yet implemented.
 ///

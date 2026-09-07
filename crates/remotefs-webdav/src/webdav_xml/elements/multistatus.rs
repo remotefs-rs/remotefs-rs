@@ -4,10 +4,10 @@
 
 use nonempty::NonEmpty;
 
-use super::super::elements::response::Response;
 use super::super::elements::ResponseDescription;
+use super::super::elements::response::Response;
 use super::super::value::ValueMap;
-use super::super::{Element, Error, Value, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Element, Error, Value};
 
 /// The `multistatus` XML element as defined in [RFC 4918](http://webdav.org/specs/rfc4918.html#ELEMENT_multistatus).
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -5,7 +5,7 @@
 use bytestring::ByteString;
 
 use super::super::elements::Properties;
-use super::super::{Element, Error, Value, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Element, Error, Value};
 
 /// The `propfind` XML element as defined in [RFC 4918](http://webdav.org/specs/rfc4918.html#ELEMENT_propfind).
 #[derive(Clone, Debug, PartialEq)]

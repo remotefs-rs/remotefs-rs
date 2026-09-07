@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
-use super::super::{Element, Error, Value, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Element, Error, Value};
 
 /// The `creationdate` property as defined in [RFC 4918](http://webdav.org/specs/rfc4918.html#PROPERTY_creationdate).
 #[derive(Clone, Debug, PartialEq)]

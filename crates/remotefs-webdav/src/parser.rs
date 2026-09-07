@@ -4,8 +4,8 @@ use remotefs::fs::{FileType, Metadata};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use rustydav::prelude::Response;
 
-use super::webdav_xml::elements::{Multistatus, Response as WebDAVResponse};
 use super::webdav_xml::FromXml;
+use super::webdav_xml::elements::{Multistatus, Response as WebDAVResponse};
 
 pub struct ResponseParser {
     response: Response,

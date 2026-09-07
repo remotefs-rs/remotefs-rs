@@ -5,7 +5,7 @@
 use super::super::element::Element;
 use super::super::properties::{ContentLength, CreationDate, LastModified};
 use super::super::value::{Value, ValueMap};
-use super::super::{Error, DAV_NAMESPACE, DAV_PREFIX};
+use super::super::{DAV_NAMESPACE, DAV_PREFIX, Error};
 
 /// The `prop` XML element as defined in [RFC 4918](http://webdav.org/specs/rfc4918.html#ELEMENT_prop).
 ///

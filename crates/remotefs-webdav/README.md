@@ -72,7 +72,7 @@ remotefs-webdav = "^0.2"
 
 these features are supported:
 
-- `find`: enable `find()` method on client (*enabled by default*)
+- `find`: enable `find()` method on client (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ---
@@ -84,7 +84,7 @@ The following table states the compatibility for the client client and the remot
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | webdav |
-|----------------|--------|
+| -------------- | ------ |
 | append_file    | No     |
 | append         | No     |
 | change_dir     | Yes    |
