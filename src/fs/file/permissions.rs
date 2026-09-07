@@ -1,28 +1,62 @@
-//! ## Permissions
+//! POSIX permission bits, split per user class.
 //!
-//! POSIX permissions
+//! A POSIX mode is three groups of three bits: read, write and execute, for the
+//! owning user, the owning group and everyone else. [`UnixPexClass`] models one
+//! group and [`UnixPex`] models all three, so a caller sets permissions by naming
+//! them rather than by assembling an octal literal.
+//!
+//! Both types convert to and from the packed integer form, which is what a
+//! protocol puts on the wire: `UnixPexClass` is one octal digit and `UnixPex` is
+//! the full `0o644`-style mode. Only the nine permission bits are modelled; the
+//! setuid, setgid and sticky bits are not.
 
-/// Describes the permissions on POSIX system.
+/// The POSIX permissions of an entry, for all three user classes.
+///
+/// # Examples
+///
+/// ```
+/// use remotefs::fs::{UnixPex, UnixPexClass};
+///
+/// let mode = UnixPex::from(0o644);
+///
+/// assert!(mode.user().read() && mode.user().write());
+/// assert!(!mode.others().write());
+/// assert_eq!(u32::from(mode), 0o644);
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UnixPex(UnixPexClass, UnixPexClass, UnixPexClass);
 
 impl UnixPex {
-    /// Create a new `UnixPex`
+    /// Build a mode from the permissions of the three user classes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use remotefs::fs::{UnixPex, UnixPexClass};
+    ///
+    /// let mode = UnixPex::new(
+    ///     UnixPexClass::new(true, true, true),
+    ///     UnixPexClass::new(true, false, true),
+    ///     UnixPexClass::new(true, false, true),
+    /// );
+    ///
+    /// assert_eq!(u32::from(mode), 0o755);
+    /// ```
     pub fn new(user: UnixPexClass, group: UnixPexClass, others: UnixPexClass) -> Self {
         Self(user, group, others)
     }
 
-    /// Returns unix permissions class for `user`
+    /// Return the permissions of the owning user.
     pub fn user(&self) -> UnixPexClass {
         self.0
     }
 
-    /// Returns unix permissions class for `group`
+    /// Return the permissions of the owning group.
     pub fn group(&self) -> UnixPexClass {
         self.1
     }
 
-    /// Returns unix permissions class for `others`
+    /// Return the permissions of everyone else.
     pub fn others(&self) -> UnixPexClass {
         self.2
     }
@@ -34,6 +68,7 @@ impl From<UnixPex> for u32 {
     }
 }
 
+/// Bits above the low nine are ignored, so a full `st_mode` converts cleanly.
 impl From<u32> for UnixPex {
     fn from(x: u32) -> Self {
         UnixPex::new(
@@ -44,7 +79,19 @@ impl From<u32> for UnixPex {
     }
 }
 
-/// Describes the permissions on POSIX system for a user class
+/// The read, write and execute permissions of one POSIX user class.
+///
+/// # Examples
+///
+/// ```
+/// use remotefs::fs::UnixPexClass;
+///
+/// let class = UnixPexClass::from(5);
+///
+/// assert!(class.read() && class.execute());
+/// assert!(!class.write());
+/// assert_eq!(class.as_byte(), 5);
+/// ```
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UnixPexClass {
     read: bool,
@@ -53,7 +100,7 @@ pub struct UnixPexClass {
 }
 
 impl UnixPexClass {
-    /// Instantiates a new `UnixPex`
+    /// Build the permissions of one user class from the three bits.
     pub fn new(read: bool, write: bool, execute: bool) -> Self {
         Self {
             read,
@@ -62,27 +109,37 @@ impl UnixPexClass {
         }
     }
 
-    /// Returns whether user can read
+    /// Return whether the class may read.
     pub fn read(&self) -> bool {
         self.read
     }
 
-    /// Returns whether user can write
+    /// Return whether the class may write.
     pub fn write(&self) -> bool {
         self.write
     }
 
-    /// Returns whether user can execute
+    /// Return whether the class may execute, or traverse a directory.
     pub fn execute(&self) -> bool {
         self.execute
     }
 
-    /// Convert permission to byte as on POSIX systems
+    /// Pack the three bits into the octal digit POSIX uses.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use remotefs::fs::UnixPexClass;
+    ///
+    /// assert_eq!(UnixPexClass::new(true, true, true).as_byte(), 7);
+    /// assert_eq!(UnixPexClass::new(false, false, false).as_byte(), 0);
+    /// ```
     pub fn as_byte(&self) -> u8 {
         ((self.read as u8) << 2) + ((self.write as u8) << 1) + (self.execute as u8)
     }
 }
 
+/// Bits above the low three are ignored.
 impl From<u8> for UnixPexClass {
     fn from(bits: u8) -> Self {
         Self {

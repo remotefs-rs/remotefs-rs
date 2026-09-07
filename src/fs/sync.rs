@@ -1,65 +1,194 @@
+//! The blocking [`RemoteFs`] trait every protocol client implements.
+
 use std::io;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-
-#[cfg(feature = "find")]
-use wildmatch::WildMatch;
 
 use super::{
     File, Metadata, ReadStream, RemoteError, RemoteErrorType, UnixPex, Welcome, WriteStream,
 };
 use crate::RemoteResult;
 
-/// Defines the methods which must be implemented in order to setup a Remote file system
+/// The blocking contract a protocol client implements to expose a remote host.
+///
+/// A client implements the required methods — the ones only the protocol can
+/// answer — and inherits the rest. The defaulted methods
+/// ([`RemoteFs::remove_dir_all`], [`RemoteFs::append_file`],
+/// [`RemoteFs::create_file`], [`RemoteFs::open_file`], [`RemoteFs::on_written`],
+/// [`RemoteFs::on_read`], and, behind the `find` feature, `find` and
+/// `iter_search`) are written on top of the required ones and are worth
+/// overriding only when the protocol offers a faster path.
+///
+/// # Not every protocol can do everything
+///
+/// The trait is the union of what the protocols can do, not the intersection.
+/// A method a protocol has no equivalent for returns
+/// [`RemoteErrorType::UnsupportedFeature`] — S3 cannot [`RemoteFs::exec`], SCP
+/// cannot [`RemoteFs::setstat`]. Treat that error as an answer, not a bug, and
+/// fall back accordingly: when [`RemoteFs::create`] is unsupported, for instance,
+/// [`RemoteFs::create_file`] transfers the whole file in one call instead.
+///
+/// # Connection state
+///
+/// Every method other than [`RemoteFs::connect`] and [`RemoteFs::is_connected`]
+/// requires an established connection, and returns
+/// [`RemoteErrorType::NotConnected`] without one. Connecting twice returns
+/// [`RemoteErrorType::AlreadyConnected`].
+///
+/// # Object safety
+///
+/// The trait is object-safe on purpose: consumers keep clients as
+/// `Box<dyn RemoteFs>` to choose a protocol at runtime. Do not add generic
+/// methods to it.
+///
+/// # Examples
+///
+/// ```
+/// use std::io::Cursor;
+///
+/// use remotefs::fs::Metadata;
+/// use remotefs::{RemoteFs, RemoteResult};
+///
+/// /// Upload `content` to `path`, whatever the protocol underneath is.
+/// fn upload<T>(client: &mut T, path: &str, content: Vec<u8>) -> RemoteResult<u64>
+/// where
+///     T: RemoteFs,
+/// {
+///     // SCP needs the size up front, so always set it.
+///     let metadata = Metadata::default().size(content.len() as u64);
+///
+///     client.create_file(path.as_ref(), &metadata, Box::new(Cursor::new(content)))
+/// }
+/// ```
 pub trait RemoteFs {
     /// Connect to the remote server and authenticate.
-    /// Can return banner / welcome message on success.
-    /// If client has already established connection, then [`RemoteErrorType::AlreadyConnected`] error is returned.
+    ///
+    /// On success returns the server's greeting, which carries a banner for the
+    /// protocols that send one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::AlreadyConnected`] when a connection is already
+    /// established, [`RemoteErrorType::AuthenticationFailed`] when the server
+    /// rejects the credentials, and [`RemoteErrorType::ConnectionError`] or
+    /// [`RemoteErrorType::BadAddress`] when the transport cannot be set up.
     fn connect(&mut self) -> RemoteResult<Welcome>;
 
-    /// Disconnect from the remote server
+    /// Close the connection to the remote server.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when there is nothing to close,
+    /// or [`RemoteErrorType::ProtocolError`] when the server refuses the
+    /// shutdown.
     fn disconnect(&mut self) -> RemoteResult<()>;
 
-    /// Gets whether the client is connected to remote
+    /// Return whether the client currently holds a connection.
+    ///
+    /// The receiver is `&mut self` because some protocols have to probe the
+    /// transport to answer.
     fn is_connected(&mut self) -> bool;
 
-    /// Get working directory
+    /// Return the current working directory on the remote host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected, or
+    /// [`RemoteErrorType::ProtocolError`] when the server answers unexpectedly.
     fn pwd(&mut self) -> RemoteResult<PathBuf>;
 
-    /// Change working directory.
-    /// Returns the realpath of new directory
+    /// Change the working directory, returning the real path of the new one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `dir` does not
+    /// exist, [`RemoteErrorType::PexError`] when it may not be entered, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
 
-    /// List directory entries at specified `path`
+    /// List the entries of the directory at `path`.
+    ///
+    /// The listing is not recursive and the order is whatever the server sent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
+    /// exist, [`RemoteErrorType::PexError`] when it may not be read, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>>;
 
-    /// Stat file at specified `path` and return [`File`]
+    /// Return the entry at `path` with its metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
+    /// exist, [`RemoteErrorType::StatFailed`] when the server has the entry but
+    /// will not describe it, and [`RemoteErrorType::NotConnected`] when not
+    /// connected.
     fn stat(&mut self, path: &Path) -> RemoteResult<File>;
 
-    /// Set metadata for file at specified `path`
+    /// Apply `metadata` to the entry at `path`.
+    ///
+    /// A client applies only the fields the protocol supports and the caller set;
+    /// an empty [`Option`] means "leave it alone".
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
+    /// notion of settable metadata, [`RemoteErrorType::NoSuchFileOrDirectory`]
+    /// when `path` does not exist, [`RemoteErrorType::PexError`] when the change
+    /// is not permitted, and [`RemoteErrorType::NotConnected`] when not
+    /// connected.
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
 
-    /// Returns whether file at specified `path` exists.
+    /// Return whether an entry exists at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected, or
+    /// [`RemoteErrorType::ProtocolError`] when the server answers in a way that
+    /// is neither "yes" nor "no". A missing entry is `Ok(false)`, not an error.
     fn exists(&mut self, path: &Path) -> RemoteResult<bool>;
 
-    /// Remove file at specified `path`.
-    /// Fails if is not a file or doesn't exist
+    /// Remove the file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
+    /// exist, [`RemoteErrorType::BadFile`] when it is not a file,
+    /// [`RemoteErrorType::CouldNotRemoveFile`] when the server refuses, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()>;
 
-    /// Remove directory at specified `path`
-    /// Directory is removed only if empty
+    /// Remove the directory at `path`, which must be empty.
+    ///
+    /// Use [`RemoteFs::remove_dir_all`] to remove a directory with contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::DirectoryNotEmpty`] when the directory still
+    /// has entries, [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does
+    /// not exist, [`RemoteErrorType::PexError`] when the removal is not
+    /// permitted, and [`RemoteErrorType::NotConnected`] when not connected.
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
 
-    /// Removes a directory at this path, after removing all its contents. **Use carefully!**
+    /// Remove the entry at `path` and everything below it. **Use carefully!**
     ///
-    /// If path is a [`crate::fs::FileType::File`], file is removed anyway, as it was a file (after all, directories are files!)
+    /// A [`crate::fs::FileType::File`] at `path` is removed as well, since a
+    /// directory is a file too. Symbolic links are removed, never followed.
     ///
-    /// This function does not follow symbolic links and it will simply remove the symbolic link itself.
+    /// # Default implementation
     ///
-    /// ### Default implementation
+    /// Walks the tree with [`RemoteFs::list_dir`] and removes what it finds with
+    /// [`RemoteFs::remove_dir`] and [`RemoteFs::remove_file`], depth first.
+    /// Override it when the protocol can delete a tree in one request.
     ///
-    /// By default this method will combine [`RemoteFs::remove_dir`] and [`RemoteFs::remove_file`] to remove all the content.
-    /// Implement this method when there is a faster way to achieve this
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected, and
+    /// whatever the underlying [`RemoteFs::stat`], [`RemoteFs::list_dir`],
+    /// [`RemoteFs::remove_dir`] or [`RemoteFs::remove_file`] call reported. A
+    /// failure partway through leaves the already-removed entries removed.
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
         if self.is_connected() {
             let path = crate::utils::path::absolutize(&self.pwd()?, path);
@@ -88,80 +217,163 @@ pub trait RemoteFs {
         }
     }
 
-    /// Create a directory at `path` with specified mode.
+    /// Create a directory at `path` with the given permissions.
     ///
-    /// If the directory already exists, it **MUST** return [`RemoteErrorType::DirectoryAlreadyExists`]
+    /// `mode` is ignored by protocols with no notion of POSIX permissions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::DirectoryAlreadyExists`] when something is
+    /// already there, [`RemoteErrorType::PexError`] when the parent may not be
+    /// written, and [`RemoteErrorType::NotConnected`] when not connected.
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
 
-    /// Create a symlink at `path` pointing at `target`
+    /// Create a symbolic link at `path` pointing at `target`.
+    ///
+    /// The link is created whether or not `target` exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
+    /// links, [`RemoteErrorType::FileCreateDenied`] when the server refuses, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()>;
 
-    /// Copy `src` to `dest`
+    /// Copy the entry at `src` to `dest` on the remote host.
+    ///
+    /// The copy happens server-side; nothing travels through the client.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol that cannot
+    /// copy server-side, [`RemoteErrorType::NoSuchFileOrDirectory`] when `src`
+    /// does not exist, [`RemoteErrorType::PexError`] when `dest` may not be
+    /// written, and [`RemoteErrorType::NotConnected`] when not connected.
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// move file/directory from `src` to `dest`
+    /// Move the entry at `src` to `dest` on the remote host.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `src` does not
+    /// exist, [`RemoteErrorType::PexError`] when `dest` may not be written, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// Execute a command on remote host if supported by host.
-    /// Returns command exit code and output (stdout)
+    /// Run `cmd` on the remote host, returning its exit code and stdout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
+    /// shell, [`RemoteErrorType::PexError`] when execution is not permitted, and
+    /// [`RemoteErrorType::NotConnected`] when not connected. A command that runs
+    /// and fails is `Ok` with a non-zero exit code, not an error.
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
 
-    /// Open file at `path` for appending data.
-    /// If the file doesn't exist, the file is created.
+    /// Open the file at `path` for appending, creating it when absent.
     ///
-    /// ### ⚠️ Warning
+    /// Hand the returned stream back to [`RemoteFs::on_written`] once the last
+    /// byte is written; dropping it is not enough on every protocol.
     ///
-    /// metadata should be the same of the local file.
-    /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
+    /// # ⚠️ Warning
+    ///
+    /// `metadata` should describe the local file being sent. Protocols such as
+    /// SCP take [`Metadata::size`] as the transfer size and will truncate or hang
+    /// if it is wrong.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol without
+    /// streamed writes — use [`RemoteFs::append_file`] then —
+    /// [`RemoteErrorType::CouldNotOpenFile`] when the server refuses, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream>;
 
-    /// Create file at path for write.
-    /// If the file already exists, its content will be overwritten
+    /// Open the file at `path` for writing, truncating any existing content.
     ///
-    /// ### ⚠️ Warning
+    /// Hand the returned stream back to [`RemoteFs::on_written`] once the last
+    /// byte is written; dropping it is not enough on every protocol.
     ///
-    /// metadata should be the same of the local file.
-    /// In some protocols, such as `scp` the `size` field is used to define the transfer size (required by the protocol)
+    /// # ⚠️ Warning
+    ///
+    /// `metadata` should describe the local file being sent. Protocols such as
+    /// SCP take [`Metadata::size`] as the transfer size and will truncate or hang
+    /// if it is wrong.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol without
+    /// streamed writes — use [`RemoteFs::create_file`] then —
+    /// [`RemoteErrorType::FileCreateDenied`] when the server refuses, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream>;
 
-    /// Open file at specified path for read.
+    /// Open the file at `path` for reading.
+    ///
+    /// Hand the returned stream back to [`RemoteFs::on_read`] once the last byte
+    /// is read; dropping it is not enough on every protocol.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol without
+    /// streamed reads — use [`RemoteFs::open_file`] then —
+    /// [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not exist,
+    /// [`RemoteErrorType::CouldNotOpenFile`] when the server refuses, and
+    /// [`RemoteErrorType::NotConnected`] when not connected.
     fn open(&mut self, path: &Path) -> RemoteResult<ReadStream>;
 
-    /// Finalize [`RemoteFs::create`] and [`RemoteFs::append`] methods.
-    /// This method must be implemented only if necessary; in case you don't need it, just return [`Ok`]
-    /// The purpose of this method is to finalize the connection with the peer when writing data.
-    /// This is necessary for some protocols such as FTP.
-    /// You must call this method each time you want to finalize the write of the remote file.
+    /// Finalize a write started by [`RemoteFs::create`] or [`RemoteFs::append`].
     ///
-    /// ### Default implementation
+    /// Call this every time a streamed write ends. FTP, for one, only counts the
+    /// transfer once the data connection is closed and the final reply read.
     ///
-    /// By default this function returns already [`Ok`]
+    /// # Default implementation
+    ///
+    /// Returns [`Ok`]. Override it only when the protocol has something to do.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::ProtocolError`] when the server rejects the
+    /// transfer at the very end, so a write is not durable until this returns
+    /// [`Ok`].
     fn on_written(&mut self, _writable: WriteStream) -> RemoteResult<()> {
         Ok(())
     }
 
-    /// Finalize [`RemoteFs::open`] method.
-    /// This method must be implemented only if necessary; in case you don't need it, just return [`Ok`]
-    /// The purpose of this method is to finalize the connection with the peer when reading data.
-    /// This might be necessary for some protocols.
-    /// You must call this method each time you want to finalize the read of the remote file.
+    /// Finalize a read started by [`RemoteFs::open`].
     ///
-    /// ### Default implementation
+    /// Call this every time a streamed read ends, for the same reason as
+    /// [`RemoteFs::on_written`].
     ///
-    /// By default this function returns already [`Ok`]
+    /// # Default implementation
+    ///
+    /// Returns [`Ok`]. Override it only when the protocol has something to do.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::ProtocolError`] when the server reports the
+    /// transfer was incomplete.
     fn on_read(&mut self, _readable: ReadStream) -> RemoteResult<()> {
         Ok(())
     }
 
-    /// Blocking implementation of [`RemoteFs::append`]
-    /// This method **SHOULD** be implemented **ONLY** when streams are not supported by the current file transfer.
-    /// The developer using the client should FIRST try with `create` followed by `on_written`
-    /// If the function returns error of kind [`RemoteErrorType::UnsupportedFeature`], then he should call this function.
-    /// In case of success, returns the amount of bytes written to the remote file
+    /// Append everything `reader` yields to `path`, returning the bytes written.
     ///
-    /// ### Default implementation
+    /// This is the one-shot form of [`RemoteFs::append`]: reach for it when
+    /// [`RemoteFs::append`] answered [`RemoteErrorType::UnsupportedFeature`], or
+    /// when you do not want to drive the stream yourself.
     ///
-    /// By default this function uses the streams function to copy content from reader to writer
+    /// # Default implementation
+    ///
+    /// Opens the file with [`RemoteFs::append`], copies the reader into it, and
+    /// finalizes with [`RemoteFs::on_written`]. Override it on a protocol with no
+    /// streamed writes at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected,
+    /// [`RemoteErrorType::ProtocolError`] when the copy fails, and whatever
+    /// [`RemoteFs::append`] reported.
     fn append_file(
         &mut self,
         path: &Path,
@@ -181,15 +393,24 @@ pub trait RemoteFs {
         }
     }
 
-    /// Blocking implementation of [`RemoteFs::create`]
-    /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
-    /// The developer using the client should FIRST try with `create` followed by `on_written`
-    /// If the function returns error of kind [`RemoteErrorType::UnsupportedFeature`], then he should call this function.
-    /// In case of success, returns the amount of bytes written to the remote file
+    /// Write everything `reader` yields to `path`, returning the bytes written.
     ///
-    /// ### Default implementation
+    /// This is the one-shot form of [`RemoteFs::create`]: reach for it when
+    /// [`RemoteFs::create`] answered [`RemoteErrorType::UnsupportedFeature`], or
+    /// when you do not want to drive the stream yourself. Any existing content at
+    /// `path` is replaced.
     ///
-    /// By default this function uses the streams function to copy content from reader to writer
+    /// # Default implementation
+    ///
+    /// Opens the file with [`RemoteFs::create`], copies the reader into it, and
+    /// finalizes with [`RemoteFs::on_written`]. Override it on a protocol with no
+    /// streamed writes at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected,
+    /// [`RemoteErrorType::ProtocolError`] when the copy fails, and whatever
+    /// [`RemoteFs::create`] reported.
     fn create_file(
         &mut self,
         path: &Path,
@@ -209,16 +430,23 @@ pub trait RemoteFs {
         }
     }
 
-    /// Blocking implementation of [`RemoteFs::open`]
-    /// This method SHOULD be implemented ONLY when streams are not supported by the current file transfer.
-    /// (since it would work thanks to the default implementation)
-    /// The developer using the client should FIRST try with [`RemoteFs::open`] followed by [`RemoteFs::on_read`]
-    /// If the function returns error of kind [`RemoteErrorType::UnsupportedFeature`], then he should call this function.
-    /// In case of success, returns the amount of bytes written to the local stream
+    /// Read `src` into `dest`, returning the bytes written.
     ///
-    /// ### Default implementation
+    /// This is the one-shot form of [`RemoteFs::open`]: reach for it when
+    /// [`RemoteFs::open`] answered [`RemoteErrorType::UnsupportedFeature`], or
+    /// when you do not want to drive the stream yourself.
     ///
-    /// By default this function uses the streams function to copy content from reader to writer
+    /// # Default implementation
+    ///
+    /// Opens the file with [`RemoteFs::open`], copies it into `dest`, and
+    /// finalizes with [`RemoteFs::on_read`]. Override it on a protocol with no
+    /// streamed reads at all.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected,
+    /// [`RemoteErrorType::ProtocolError`] when the copy fails, and whatever
+    /// [`RemoteFs::open`] reported.
     fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
         if self.is_connected() {
             let mut stream = self.open(src)?;
@@ -233,10 +461,26 @@ pub trait RemoteFs {
         }
     }
 
-    /// Find files from current directory (in all subdirectories) whose name matches the provided search
-    /// Search supports wildcards ('?', '*')
+    /// Search the working directory and below for names matching `search`.
+    ///
+    /// `search` is a wildcard pattern where `?` matches one character and `*`
+    /// matches any run of them. A matching directory is returned *and* descended
+    /// into.
+    ///
+    /// # Default implementation
+    ///
+    /// Walks the tree with [`RemoteFs::list_dir`] through
+    /// [`RemoteFs::iter_search`]. On a large tree this is one request per
+    /// directory; override it when the protocol can search server-side.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when not connected, and
+    /// whatever [`RemoteFs::pwd`] or [`RemoteFs::list_dir`] reported.
     #[cfg(feature = "find")]
     fn find(&mut self, search: &str) -> RemoteResult<Vec<File>> {
+        use wildmatch::WildMatch;
+
         match self.is_connected() {
             true => {
                 // Starting from current directory, iter dir
@@ -249,14 +493,24 @@ pub trait RemoteFs {
         }
     }
 
-    /// Search recursively in `dir` for file matching the wildcard.
+    /// Recursively collect the entries under `dir` matching `filter`.
     ///
-    /// ### ⚠️ Warning
+    /// # ⚠️ Warning
     ///
-    /// NOTE: DON'T RE-IMPLEMENT THIS FUNCTION, unless the file transfer provides a faster way to do so
-    /// NOTE: don't call this method from outside; consider it as private
+    /// This is the engine behind [`RemoteFs::find`] and is not meant to be called
+    /// from outside; treat it as private. Do not re-implement it unless the
+    /// protocol offers a faster way to walk a tree.
+    ///
+    /// # Errors
+    ///
+    /// Returns whatever [`RemoteFs::list_dir`] reported for `dir` or for any
+    /// directory below it.
     #[cfg(feature = "find")]
-    fn iter_search(&mut self, dir: &Path, filter: &WildMatch) -> RemoteResult<Vec<File>> {
+    fn iter_search(
+        &mut self,
+        dir: &Path,
+        filter: &wildmatch::WildMatch,
+    ) -> RemoteResult<Vec<File>> {
         let mut drained: Vec<File> = Vec::new();
         // Scan directory
         match self.list_dir(dir) {

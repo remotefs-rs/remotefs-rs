@@ -1,35 +1,61 @@
-//! ## Metadata
-//!
-//! file metadata
+//! What a remote host reports about one of its entries.
 
 use std::fs::Metadata as StdMetadata;
-#[cfg(target_family = "unix")]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::{FileType, UnixPex};
 
-/// File metadata
+/// The attributes of a remote entry, as far as the protocol could report them.
+///
+/// Every field a protocol may be unable to answer is an [`Option`]: an S3 bucket
+/// has no owner, a Windows share has no [`UnixPex`], and most FTP servers do not
+/// report a creation time. A client leaves such a field empty rather than filling
+/// it with a plausible value, so `None` means "the protocol did not say", never
+/// "zero".
+///
+/// The builder methods each set one field and return `self`, so metadata can be
+/// assembled in one expression. They are also what a caller passes to
+/// [`crate::RemoteFs::setstat`], and what
+/// [`crate::RemoteFs::create`]/[`crate::RemoteFs::append`] read for the transfer
+/// size that SCP requires up front.
+///
+/// # Examples
+///
+/// ```
+/// use std::time::SystemTime;
+///
+/// use remotefs::fs::{FileType, Metadata};
+///
+/// let metadata = Metadata::default()
+///     .file_type(FileType::Directory)
+///     .modified(SystemTime::UNIX_EPOCH)
+///     .uid(1000)
+///     .gid(1000);
+///
+/// assert!(metadata.is_dir());
+/// assert_eq!(metadata.size, 0);
+/// assert!(metadata.created.is_none());
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Metadata {
-    /// Last access time
+    /// Last access time, when the protocol reports one.
     pub accessed: Option<SystemTime>,
-    /// Creation time
+    /// Creation time, when the protocol reports one.
     pub created: Option<SystemTime>,
-    /// Group id
+    /// Owning group id, when the protocol has the notion.
     pub gid: Option<u32>,
-    /// Unix permissions
+    /// POSIX permissions, when the protocol has the notion.
     pub mode: Option<UnixPex>,
-    /// Modify time
+    /// Last modification time, when the protocol reports one.
     pub modified: Option<SystemTime>,
-    /// File size in bytes
+    /// Size in bytes; zero for entries that have no size.
     pub size: u64,
-    /// If file is symlink, contains the path of the file it is pointing to
+    /// For a symbolic link, the path it points at.
     pub symlink: Option<PathBuf>,
-    /// File type
+    /// Whether the entry is a directory, a file, or a link.
     pub file_type: FileType,
-    /// User id
+    /// Owning user id, when the protocol has the notion.
     pub uid: Option<u32>,
 }
 
@@ -50,81 +76,89 @@ impl Default for Metadata {
 }
 
 impl Metadata {
-    /// Construct metadata with accessed
+    /// Set the last access time, consuming and returning `self`.
     pub fn accessed(mut self, accessed: SystemTime) -> Self {
         self.accessed = Some(accessed);
         self
     }
 
-    /// Construct metadata with created
+    /// Set the creation time, consuming and returning `self`.
     pub fn created(mut self, created: SystemTime) -> Self {
         self.created = Some(created);
         self
     }
 
-    /// Construct metadata with group id
+    /// Set the owning group id, consuming and returning `self`.
     pub fn gid(mut self, gid: u32) -> Self {
         self.gid = Some(gid);
         self
     }
 
-    /// Construct metadata with UNIX permissions
+    /// Set the POSIX permissions, consuming and returning `self`.
     pub fn mode(mut self, mode: UnixPex) -> Self {
         self.mode = Some(mode);
         self
     }
 
-    /// Construct metadata with modify time
+    /// Set the last modification time, consuming and returning `self`.
     pub fn modified(mut self, modified: SystemTime) -> Self {
         self.modified = Some(modified);
         self
     }
 
-    /// Construct metadata with file size
+    /// Set the size in bytes, consuming and returning `self`.
+    ///
+    /// Set this before a [`crate::RemoteFs::create`] or
+    /// [`crate::RemoteFs::append`] on a protocol such as SCP, which needs the
+    /// transfer size before the first byte is sent.
     pub fn size(mut self, size: u64) -> Self {
         self.size = size;
         self
     }
 
-    /// Construct metadata with symlink
+    /// Set the path this link points at, consuming and returning `self`.
     pub fn symlink<P: AsRef<Path>>(mut self, p: P) -> Self {
         self.symlink = Some(p.as_ref().to_path_buf());
         self
     }
 
-    /// Construct metadata with type
+    /// Set the entry kind, consuming and returning `self`.
     pub fn file_type(mut self, t: FileType) -> Self {
         self.file_type = t;
         self
     }
 
-    /// Construct metadata with user id
+    /// Set the owning user id, consuming and returning `self`.
     pub fn uid(mut self, uid: u32) -> Self {
         self.uid = Some(uid);
         self
     }
 
-    /// Returns whether the file is a directory
+    /// Return whether the entry is a directory.
     pub fn is_dir(&self) -> bool {
         self.file_type.is_dir()
     }
 
-    /// Returns whether the file is a regular file
+    /// Return whether the entry is a regular file.
     pub fn is_file(&self) -> bool {
         self.file_type.is_file()
     }
 
-    /// Returns whether the file is a symbolic link
+    /// Return whether the entry is a symbolic link.
     pub fn is_symlink(&self) -> bool {
         self.file_type.is_symlink()
     }
 
-    /// Set symlink
+    /// Set the path this link points at, in place.
+    ///
+    /// Use this when the link target is resolved after the metadata was built,
+    /// which is what a client does when it stats a link in a second round trip.
     pub fn set_symlink<P: AsRef<Path>>(&mut self, p: P) {
         self.symlink = Some(p.as_ref().to_path_buf());
     }
 }
 
+/// Windows has no notion of owner or POSIX mode, so those fields stay empty.
 #[cfg(target_family = "windows")]
 impl From<StdMetadata> for Metadata {
     fn from(metadata: StdMetadata) -> Self {
@@ -142,9 +176,12 @@ impl From<StdMetadata> for Metadata {
     }
 }
 
+/// A directory reports its block size rather than its length, as `ls` does.
 #[cfg(target_family = "unix")]
 impl From<StdMetadata> for Metadata {
     fn from(metadata: StdMetadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
         Self {
             accessed: metadata.accessed().ok(),
             created: metadata.created().ok(),

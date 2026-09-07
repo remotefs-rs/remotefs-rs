@@ -1,27 +1,78 @@
-//! ## Stream
+//! The byte streams returned when a remote file is opened for read or write.
 //!
-//! this module exposes the streams returned by create, append and open methods
+//! [`crate::RemoteFs::open`] hands back a [`ReadStream`] and
+//! [`crate::RemoteFs::create`]/[`crate::RemoteFs::append`] hand back a
+//! [`WriteStream`]. Both wrap whatever the client actually opened, so a caller
+//! sees one concrete type per direction instead of a different boxed trait object
+//! per protocol.
+//!
+//! # Seeking
+//!
+//! Protocols disagree on random access: SFTP can seek, SCP streams a file once
+//! from start to end. Rather than expose two types, each stream carries either a
+//! plain reader/writer or one that also implements [`Seek`], and reports which
+//! through [`ReadStream::seekable`] and [`WriteStream::seekable`]. Both implement
+//! [`Seek`] unconditionally so they can be used where the bound is required;
+//! seeking a stream that cannot seek fails with [`IoErrorKind::Unsupported`]
+//! instead of panicking. Check `seekable()` first when the answer changes what
+//! you do.
+//!
+//! # Finalization
+//!
+//! A stream is not finished when it is dropped. Hand it back to
+//! [`crate::RemoteFs::on_written`] or [`crate::RemoteFs::on_read`] so the client
+//! can complete the exchange the protocol expects — FTP, for one, needs the data
+//! connection closed and a final reply read before the transfer counts.
+//!
+//! Every boxed trait object is [`Send`], so a transfer can be moved to another
+//! thread once it has been opened.
+//!
+//! # Examples
+//!
+//! ```
+//! use std::io::{Read, Seek};
+//!
+//! use remotefs::fs::ReadStream;
+//!
+//! # fn f(mut stream: ReadStream) -> std::io::Result<()> {
+//! if stream.seekable() {
+//!     stream.rewind()?;
+//! }
+//!
+//! let mut buffer = Vec::new();
+//! stream.read_to_end(&mut buffer)?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read, Seek, Write};
 
 // -- read stream
 
-/// A trait which combines [`Read`] and [`Seek`] together
+/// A [`Read`] that can also [`Seek`] and be sent across threads.
+///
+/// Implement this on a protocol's reader to let a client build a seekable
+/// [`ReadStream`] from it. The trait has no methods of its own; it exists so the
+/// three bounds can be named as one boxed trait object.
 pub trait ReadAndSeek: Read + Seek + Send {}
 
-/// The stream returned by [`crate::RemoteFs`] to read a file from the remote server
+/// A remote file opened for reading.
+///
+/// Built with [`From`] from either a `Box<dyn Read + Send>` or a
+/// `Box<dyn ReadAndSeek>`, depending on whether the protocol supports random
+/// access. See the [module documentation](self) for seeking and finalization.
 pub struct ReadStream {
     stream: StreamReader,
 }
 
-/// The kind of stream contained in the stream. Can be [`Read`] only or [`Read`] + [`Seek`]
+/// Whether the wrapped reader can seek.
 enum StreamReader {
     Read(Box<dyn Read + Send>),
     ReadAndSeek(Box<dyn ReadAndSeek>),
 }
 
 impl ReadStream {
-    /// Returns whether `ReadStream` is seekable
+    /// Return whether [`Seek`] on this stream will succeed.
     pub fn seekable(&self) -> bool {
         matches!(self.stream, StreamReader::ReadAndSeek(_))
     }
@@ -49,6 +100,7 @@ impl Read for ReadStream {
     }
 }
 
+/// Fails with [`IoErrorKind::Unsupported`] when the stream is not seekable.
 impl Seek for ReadStream {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         self.stream.seek(pos)
@@ -78,22 +130,31 @@ impl Seek for StreamReader {
 
 // -- write stream
 
-/// A trait which combines `io::Write` and `io::Seek` together
+/// A [`Write`] that can also [`Seek`] and be sent across threads.
+///
+/// The write-side counterpart of [`ReadAndSeek`].
 pub trait WriteAndSeek: Write + Seek + Send {}
 
-/// The stream returned by [`crate::RemoteFs`] to write a file from the remote server
+/// A remote file opened for writing or appending.
+///
+/// Built with [`From`] from either a `Box<dyn Write + Send>` or a
+/// `Box<dyn WriteAndSeek>`, depending on whether the protocol supports random
+/// access. See the [module documentation](self) for seeking and finalization.
 pub struct WriteStream {
+    /// The wrapped writer, exposed so a client can take it back on finalization.
     pub stream: StreamWriter,
 }
 
-/// The kind of stream contained in the stream. Can be Write only or [`Write`] + [`Seek`]
+/// Whether the wrapped writer can seek.
 pub enum StreamWriter {
+    /// A writer that cannot seek.
     Write(Box<dyn Write + Send>),
+    /// A writer that can seek.
     WriteAndSeek(Box<dyn WriteAndSeek>),
 }
 
 impl WriteStream {
-    /// Returns whether [`WriteStream`] is [`Seek`]
+    /// Return whether [`Seek`] on this stream will succeed.
     pub fn seekable(&self) -> bool {
         matches!(self.stream, StreamWriter::WriteAndSeek(_))
     }
@@ -125,6 +186,7 @@ impl Write for WriteStream {
     }
 }
 
+/// Fails with [`IoErrorKind::Unsupported`] when the stream is not seekable.
 impl Seek for WriteStream {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
         self.stream.seek(pos)

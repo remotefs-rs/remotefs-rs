@@ -1,10 +1,8 @@
-//! ## Mock
-//!
-//! Contains mock for test units
+//! A do-nothing [`RemoteFs`] used to exercise the trait itself in unit tests.
 
 use crate::RemoteFs;
 
-// -- mock
+/// A [`RemoteFs`] that reports success without touching anything.
 pub struct MockRemoteFs;
 
 impl RemoteFs for MockRemoteFs {
