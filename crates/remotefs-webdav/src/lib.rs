@@ -3,22 +3,54 @@
 
 //! # remotefs-webdav
 //!
-//! remotefs is a library that provides a client implementation of [Remotefs-rs](https://github.com/veeso/remotefs-rs)
-//! for the WebDAV protocol as specified in [RFC4918](https://www.rfc-editor.org/rfc/rfc4918).
+//! remotefs-webdav is a [remotefs](https://github.com/remotefs-rs/remotefs-rs)
+//! client implementation for the WebDAV protocol, as specified in
+//! [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918).
+//!
+//! It exposes a single type, [`WebDAVFs`], which implements the
+//! [`RemoteFs`] trait and can therefore be used
+//! interchangeably with any other remotefs client.
 //!
 //! ## Get started
 //!
-//! First of all you need to add **remotefs** and **remotefs-webdav** to your project dependencies:
+//! First of all you need to add **remotefs** and **remotefs-webdav** to your
+//! project dependencies:
 //!
 //! ```toml
 //! [dependencies]
-//! remotefs = "^0.3"
-//! remotefs-webdav = "^0.2"
+//! remotefs = "0.3"
+//! remotefs-webdav = "0.2"
 //! ```
 //!
-//! these features are supported:
+//! Then connect to the server and use the client as any other remotefs client:
 //!
-//! - `no-log`: disable logging. By default, this library will log via the `log` crate.
+//! ```rust
+//! use std::path::Path;
+//!
+//! use remotefs::RemoteFs;
+//! use remotefs_webdav::WebDAVFs;
+//!
+//! let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+//!
+//! // connect
+//! client.connect().expect("connection failed");
+//! // print the working directory
+//! println!("wrkdir: {wrkdir}", wrkdir = client.pwd().expect("pwd failed").display());
+//! # if false {
+//! // change the working directory; this one talks to the server
+//! client.change_dir(Path::new("/tmp")).expect("cd failed");
+//! # }
+//! // disconnect
+//! client.disconnect().expect("disconnection failed");
+//! ```
+//!
+//! ## Feature flags
+//!
+//! | name              | description                                                        | default |
+//! | ----------------- | ------------------------------------------------------------------ | ------- |
+//! | `find`            | Enable the `find()` method on the client.                          | ✔       |
+//! | `no-log`          | Disable logging. By default this library logs via the `log` crate. |         |
+//! | `with-containers` | Enable the tests which need the WebDAV container. Internal only.   |         |
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 #![doc(
@@ -45,7 +77,23 @@ use rustydav::client::Client;
 
 use self::parser::ResponseParser;
 
-/// WebDAV remote fs client
+/// A [`RemoteFs`] client speaking WebDAV.
+///
+/// The client is stateful: it keeps the base URL of the server, the current
+/// working directory, and the HTTP Basic credentials used for every request.
+/// Because WebDAV has neither streamed transfers nor POSIX metadata, `append`,
+/// `create`, `open`, `setstat`, `symlink`, `copy`, and `exec` always fail with
+/// [`RemoteErrorType::UnsupportedFeature`].
+///
+/// # Examples
+///
+/// ```rust
+/// use remotefs::RemoteFs;
+/// use remotefs_webdav::WebDAVFs;
+///
+/// let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+/// client.connect().expect("connection failed");
+/// ```
 pub struct WebDAVFs {
     client: Client,
     url: String,
@@ -54,7 +102,19 @@ pub struct WebDAVFs {
 }
 
 impl WebDAVFs {
-    /// Create a new WebDAVFs instance
+    /// Create a client for `url`, authenticating with HTTP Basic auth.
+    ///
+    /// The `url` is the base URL of the WebDAV share, without a trailing path;
+    /// every path passed to the client is resolved against it. No request is
+    /// sent until [`WebDAVFs::connect`] is called.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use remotefs_webdav::WebDAVFs;
+    ///
+    /// let client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+    /// ```
     pub fn new(username: &str, password: &str, url: &str) -> WebDAVFs {
         WebDAVFs {
             client: Client::init(username, password),
@@ -64,7 +124,10 @@ impl WebDAVFs {
         }
     }
 
-    /// Resolve query url
+    /// Resolve `path` into the absolute URL to query.
+    ///
+    /// `force_dir` appends a trailing slash even when `path` does not look like
+    /// a directory, which WebDAV requires for collection operations.
     fn url(&self, path: &Path, force_dir: bool) -> String {
         let mut p = self.url.clone();
         p.push_str(&self.path(path).to_string_lossy());
@@ -74,7 +137,7 @@ impl WebDAVFs {
         p
     }
 
-    /// Resolve path
+    /// Resolve `path` against the current working directory.
     fn path(&self, path: &Path) -> PathBuf {
         if path.is_absolute() {
             path.to_path_buf()
