@@ -132,7 +132,7 @@ To use an existing client, you must add them to your `Cargo.toml`, along with re
 - [ftp](https://github.com/remotefs-rs/remotefs-rs-ftp)
 
   ```toml
-  remotefs-ftp = { version = "^0.3.0", features = [ "secure" ] }
+  remotefs-ftp = { version = "^0.3.0", features = ["secure"] }
   ```
 
 - [kube](https://github.com/remotefs-rs/remotefs-rs-kube)
@@ -199,7 +199,7 @@ The following table states the compatibility for each client associated with the
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | Aws-S3 | Ftp | Kube | Scp | Sftp | Smb | WebDAV |
-| -------------- | ------ | --- |------| --- | ---- |-----| ------ |
+| -------------- | ------ | --- | ---- | --- | ---- | --- | ------ |
 | append_file    | No     | Yes | No   | No  | Yes  | Yes | No     |
 | append         | No     | Yes | No   | No  | Yes  | No  | No     |
 | change_dir     | Yes    | Yes | Yes  | Yes | Yes  | Yes | Yes    |
