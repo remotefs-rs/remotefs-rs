@@ -26,7 +26,7 @@ with-containers = []
 bytes = "1.5"
 log = "0.4"
 remotefs = "0.3"
-rustydav = "0.1.3"
+reqwest = { version = "0.13", features = ["blocking"] }
 thiserror = "2"
 
 # vendored `webdav-xml` dependencies

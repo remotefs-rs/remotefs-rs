@@ -63,6 +63,7 @@
 #[macro_use]
 extern crate log;
 
+mod client;
 #[cfg(test)]
 mod mock;
 mod parser;
@@ -73,8 +74,8 @@ use std::path::{Path, PathBuf};
 
 use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-use rustydav::client::Client;
 
+use self::client::DavClient;
 use self::parser::ResponseParser;
 
 /// A [`RemoteFs`] client speaking WebDAV.
@@ -95,7 +96,7 @@ use self::parser::ResponseParser;
 /// client.connect().expect("connection failed");
 /// ```
 pub struct WebDAVFs {
-    client: Client,
+    client: DavClient,
     url: String,
     wrkdir: String,
     connected: bool,
@@ -117,7 +118,7 @@ impl WebDAVFs {
     /// ```
     pub fn new(username: &str, password: &str, url: &str) -> WebDAVFs {
         WebDAVFs {
-            client: Client::init(username, password),
+            client: DavClient::new(username, password),
             url: url.to_string(),
             wrkdir: String::from("/"),
             connected: false,
@@ -319,7 +320,7 @@ impl RemoteFs for WebDAVFs {
         let size = content.len() as u64;
         let response = self
             .client
-            .put(content, &url)
+            .put(&url, content)
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
 
         ResponseParser::from(response).status()?;
