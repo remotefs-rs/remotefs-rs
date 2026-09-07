@@ -172,11 +172,11 @@ mod test {
         );
         assert_eq!(*err.msg.as_ref().unwrap(), String::from("non va una mazza"));
         assert_eq!(
-            format!("{}", err),
+            err.to_string(),
             String::from("no such file or directory (non va una mazza)")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::AlreadyConnected)),
+            RemoteError::new(RemoteErrorType::AlreadyConnected).to_string(),
             String::from("already connected")
         );
         assert_eq!(
@@ -187,19 +187,19 @@ mod test {
             String::from("authentication failed")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::BadAddress)),
+            RemoteError::new(RemoteErrorType::BadAddress).to_string(),
             String::from("bad address syntax")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::ConnectionError)),
+            RemoteError::new(RemoteErrorType::ConnectionError).to_string(),
             String::from("connection error")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::StatFailed)),
+            RemoteError::new(RemoteErrorType::StatFailed).to_string(),
             String::from("could not stat file")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::FileCreateDenied)),
+            RemoteError::new(RemoteErrorType::FileCreateDenied).to_string(),
             String::from("failed to create file")
         );
         assert_eq!(
@@ -210,23 +210,23 @@ mod test {
             String::from("no such file or directory")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::PexError)),
+            RemoteError::new(RemoteErrorType::PexError).to_string(),
             String::from("not enough permissions")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::ProtocolError)),
+            RemoteError::new(RemoteErrorType::ProtocolError).to_string(),
             String::from("protocol error")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::SslError)),
+            RemoteError::new(RemoteErrorType::SslError).to_string(),
             String::from("SSL error")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::NotConnected)),
+            RemoteError::new(RemoteErrorType::NotConnected).to_string(),
             String::from("not connected yet")
         );
         assert_eq!(
-            format!("{}", RemoteError::new(RemoteErrorType::UnsupportedFeature)),
+            RemoteError::new(RemoteErrorType::UnsupportedFeature).to_string(),
             String::from("unsupported feature")
         );
         let err = RemoteError::new(RemoteErrorType::UnsupportedFeature);

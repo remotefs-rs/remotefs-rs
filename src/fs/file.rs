@@ -154,9 +154,9 @@ mod tests {
         assert_eq!(entry.name(), String::from("bar.txt"));
         assert_eq!(entry.extension().as_deref(), Some("txt"));
         assert_eq!(entry.metadata(), &Metadata::default());
-        assert_eq!(entry.is_dir(), false);
-        assert_eq!(entry.is_file(), true);
-        assert_eq!(entry.is_hidden(), false);
+        assert!(!entry.is_dir());
+        assert!(entry.is_file());
+        assert!(!entry.is_hidden());
     }
 
     #[test]
@@ -165,6 +165,6 @@ mod tests {
             path: PathBuf::from("/.bar.txt"),
             metadata: Metadata::default(),
         };
-        assert_eq!(entry.is_hidden(), true);
+        assert!(entry.is_hidden());
     }
 }

@@ -239,7 +239,7 @@ mod test {
         let file: Box<dyn Read + Send> =
             Box::new(File::open(temp.path()).expect("Could not open tempfile"));
         let s = ReadStream::from(file);
-        assert_eq!(s.seekable(), false);
+        assert!(!s.seekable());
     }
 
     #[test]
@@ -248,7 +248,7 @@ mod test {
         let file: Box<dyn ReadAndSeek> =
             Box::new(File::open(temp.path()).expect("Could not open tempfile"));
         let s = ReadStream::from(file);
-        assert_eq!(s.seekable(), true);
+        assert!(s.seekable());
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod test {
         let file: Box<dyn Write + Send> =
             Box::new(File::create(temp.path()).expect("Could not open tempfile"));
         let s = WriteStream::from(file);
-        assert_eq!(s.seekable(), false);
+        assert!(!s.seekable());
     }
 
     #[test]
@@ -266,6 +266,6 @@ mod test {
         let file: Box<dyn WriteAndSeek> =
             Box::new(File::create(temp.path()).expect("Could not open tempfile"));
         let s = WriteStream::from(file);
-        assert_eq!(s.seekable(), true);
+        assert!(s.seekable());
     }
 }
