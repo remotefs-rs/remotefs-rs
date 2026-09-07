@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-webdav"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-webdav"
@@ -24,20 +24,12 @@ with-containers = []
 
 [dependencies]
 bytes = "1.5"
+dav-xml = "0.1"
+dav-xml-client = { version = "0.1", default-features = false, features = ["native-tls", "ureq"] }
 log = "0.4"
 remotefs = "0.3"
-reqwest = { version = "0.13", features = ["blocking"] }
 thiserror = "2"
-
-# vendored `webdav-xml` dependencies
-bytestring = "1.3"
-http = "1"
-httpdate = "1"
-indexmap = "2.2"
-mime = "0.3"
-nonempty = "0.12"
-quick-xml = "0.42"
-time = { version = "0.3.34", features = ["formatting", "parsing"] }
+ureq = { version = "3", default-features = false, features = ["native-tls"] }
 
 [dev-dependencies]
 env_logger = "0.11"

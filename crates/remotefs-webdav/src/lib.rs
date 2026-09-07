@@ -63,20 +63,18 @@
 #[macro_use]
 extern crate log;
 
-mod client;
 #[cfg(test)]
 mod mock;
-mod parser;
-mod webdav_xml;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
+use dav_xml_client::headers::Overwrite;
+use dav_xml_client::{Auth, DavClient, Resource};
 use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-
-use self::client::DavClient;
-use self::parser::ResponseParser;
+use ureq::Agent;
 
 /// A [`RemoteFs`] client speaking WebDAV.
 ///
@@ -96,7 +94,7 @@ use self::parser::ResponseParser;
 /// client.connect().expect("connection failed");
 /// ```
 pub struct WebDAVFs {
-    client: DavClient,
+    client: DavClient<Agent>,
     url: String,
     wrkdir: String,
     connected: bool,
@@ -118,7 +116,7 @@ impl WebDAVFs {
     /// ```
     pub fn new(username: &str, password: &str, url: &str) -> WebDAVFs {
         WebDAVFs {
-            client: DavClient::new(username, password),
+            client: DavClient::ureq(Auth::basic(username, password)),
             url: url.to_string(),
             wrkdir: String::from("/"),
             connected: false,
@@ -186,36 +184,31 @@ impl RemoteFs for WebDAVFs {
         debug!("Listing directory: {}", url);
         let response = self
             .client
-            .list(&url, "1")
+            .list(&url)
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
 
         debug!("Parsing response");
-        match ResponseParser::from(response).files()? {
-            files if !files.is_empty() => {
-                // remove file at 0
-                let mut children = Vec::with_capacity(files.len());
-                for file in files.iter().skip(1) {
-                    children.push(file.clone());
-                }
-                Ok(children)
-            }
-            _ => Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)),
-        }
+
+        Ok(response
+            .into_iter()
+            .filter(|d| d.path() != path)
+            .map(resource_to_file)
+            .collect::<Vec<_>>())
     }
 
     fn stat(&mut self, path: &Path) -> RemoteResult<File> {
         let url = self.url(path, false);
         debug!("Listing directory: {}", url);
-        let response = self
+        let Some(response) = self
             .client
-            .list(&url, "1")
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
+            .stat(&url)
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?
+        else {
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        };
 
         debug!("Parsing response");
-        match ResponseParser::from(response).files()? {
-            files if !files.is_empty() => Ok(files[0].clone()),
-            _ => Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)),
-        }
+        Ok(resource_to_file(response))
     }
 
     fn setstat(&mut self, _path: &Path, _metadata: Metadata) -> RemoteResult<()> {
@@ -230,23 +223,17 @@ impl RemoteFs for WebDAVFs {
     fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
         let url = self.url(path, false);
         debug!("Removing file: {}", url);
-        let response = self
-            .client
+        self.client
             .delete(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        ResponseParser::from(response).status()
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
     }
 
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
         let url = self.url(path, true);
         debug!("Removing directory: {}", url);
-        let response = self
-            .client
+        self.client
             .delete(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        ResponseParser::from(response).status()
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
     }
 
     fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
@@ -260,12 +247,9 @@ impl RemoteFs for WebDAVFs {
         let url = self.url(path, true);
         // check if dir exists
         debug!("Creating directory: {}", url);
-        let response = self
-            .client
+        self.client
             .mkcol(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        ResponseParser::from(response).status()
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
     }
 
     fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
@@ -281,12 +265,9 @@ impl RemoteFs for WebDAVFs {
         let dest_url = self.url(dest, false);
         debug!("Moving file: {} to {}", src_url, dest_url);
 
-        let response = self
-            .client
-            .mv(&src_url, &dest_url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        ResponseParser::from(response).status()
+        self.client
+            .mv(&src_url, &dest_url, Overwrite::True)
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
     }
 
     fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
@@ -318,12 +299,9 @@ impl RemoteFs for WebDAVFs {
             .read_to_end(&mut content)
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
         let size = content.len() as u64;
-        let response = self
-            .client
-            .put(&url, content)
+        self.client
+            .put(&url, content, "application/octet-stream")
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        ResponseParser::from(response).status()?;
 
         Ok(size)
     }
@@ -334,26 +312,49 @@ impl RemoteFs for WebDAVFs {
         mut dest: Box<dyn std::io::Write + Send>,
     ) -> RemoteResult<u64> {
         let url = self.url(src, false);
-        debug!("Opening file: {}", url);
-        let mut response = self
+        debug!("Opening file: {url}");
+        let response = self
             .client
             .get(&url)
             .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
 
-        // write to dest
-        let mut buf = vec![0; 1024];
-        let mut total_size = 0;
-        loop {
-            let n = response
-                .read(&mut buf)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
-            total_size += n as u64;
-            if n == 0 {
-                return Ok(total_size);
-            }
-            dest.write_all(&buf[..n])
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
+        if !response.status().is_success() {
+            error!("Failed to open file: {status}", status = response.status());
+            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
         }
+
+        let body = response.body();
+        let size = body.len() as u64;
+
+        dest.write_all(body)
+            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
+
+        Ok(size)
+    }
+}
+
+fn resource_to_file(resource: Resource) -> File {
+    debug!("converting resource to file: {resource:?}");
+
+    File {
+        path: PathBuf::from(resource.path()),
+        metadata: Metadata {
+            accessed: None,
+            created: resource.creation_date.map(|d| {
+                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(d.unix_timestamp() as u64)
+            }),
+            gid: None,
+            mode: None,
+            modified: resource.last_modified.map(SystemTime::from),
+            size: resource.content_length.unwrap_or_default(),
+            symlink: None,
+            file_type: if resource.path().ends_with('/') {
+                remotefs::fs::FileType::Directory
+            } else {
+                remotefs::fs::FileType::File
+            },
+            uid: None,
+        },
     }
 }
 
