@@ -96,7 +96,7 @@ The following table states the compatibility for the client client and the remot
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
 | Client/Method  | Ftp |
-|----------------|-----|
+| -------------- | --- |
 | append_file    | Yes |
 | append         | Yes |
 | change_dir     | Yes |
@@ -104,7 +104,7 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | create_dir     | Yes |
 | create_file    | Yes |
 | create         | Yes |
-| exec           | No  |
+| exec           | Yes |
 | exists         | Yes |
 | list_dir       | Yes |
 | mov            | Yes |
@@ -117,6 +117,8 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | setstat        | No  |
 | stat           | Yes |
 | symlink        | No  |
+
+> `exec` is implemented via the FTP `SITE` command, so it only runs commands the server exposes as `SITE` subcommands (e.g. `CHMOD`, `HELP`), not arbitrary shell/console commands.
 
 ---
 

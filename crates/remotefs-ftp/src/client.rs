@@ -494,8 +494,20 @@ impl RemoteFs for FtpFs {
             })
     }
 
-    fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
+        debug!("Executing command: {cmd}");
+        self.check_connection()?;
+        let mut stream = self.lock_stream()?;
+        let response = stream.site(cmd).map_err(|e| {
+            error!("Failed to execute command: {}", e);
+            RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
+        })?;
+
+        let status = response.status.code();
+        let body = String::from_utf8_lossy(&response.body).to_string();
+        debug!("Command executed with status {status}");
+
+        Ok((status, body))
     }
 
     fn append(&mut self, path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
@@ -900,6 +912,31 @@ mod test {
                     .is_err()
             );
         });
+    }
+
+    #[test]
+    fn should_exec_command() {
+        with_client(|client| {
+            // Create file
+            let p = Path::new("a.txt");
+            let file_data = "test data\n";
+            let reader = Cursor::new(file_data.as_bytes());
+            assert!(
+                client
+                    .create_file(p, &Metadata::default(), Box::new(reader))
+                    .is_ok()
+            );
+            // `SITE CHMOD` is one of the few `SITE` subcommands that reply with
+            // `200 CommandOk`, which is the only status `suppaftp::site()` accepts.
+            let (status, _) = client.exec("CHMOD 777 a.txt").ok().unwrap();
+            assert_eq!(status, 200);
+        });
+    }
+
+    #[test]
+    fn should_not_exec_command_if_not_connected() {
+        let mut client = FtpFs::new("127.0.0.1", 21);
+        assert!(client.exec("HELP").is_err());
     }
 
     #[test]
