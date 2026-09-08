@@ -10,8 +10,8 @@
 //! First of all you need to add **remotefs** and the client to your project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.3"
-//! remotefs-ftp = "^0.3"
+//! remotefs = "0.3"
+//! remotefs-ftp = "0.5"
 //! ```
 //!
 //! these features are supported:
@@ -42,16 +42,16 @@
 //! assert!(client.disconnect().is_ok());
 //! ```
 //!
-//! ## Features
-//
-// these features are supported:
-//
-// - `find`: enable `find()` method on client (*enabled by default*)
-// - `native-tls`: enable FTPS support using native-tls as backend
-// - `native-tls-vendored`: enable static link for native-tls
-// - `no-log`: disable logging. By default, this library will log via the `log` crate.
-// - `rustls-aws-lc-rs`: enable FTPS support using rustls with aws-lc-rs as backend
-// - `rustls-ring`: enable FTPS support using rustls with ring as backend
+//! ## Feature flags
+//!
+//! | name                  | description                                              | default |
+//! |-----------------------|----------------------------------------------------------|---------|
+//! | `find`                | Enable the `find()` method on the client.                | ✔       |
+//! | `native-tls`          | Enable FTPS support using native-tls as backend.         |         |
+//! | `native-tls-vendored` | Statically link native-tls.                              |         |
+//! | `no-log`              | Disable logging; by default the `log` crate is used.     |         |
+//! | `rustls-aws-lc-rs`    | Enable FTPS support using rustls with aws-lc-rs backend. |         |
+//! | `rustls-ring`         | Enable FTPS support using rustls with ring backend.      |         |
 //!
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
@@ -67,6 +67,7 @@
 extern crate log;
 
 pub mod client;
+#[doc(inline)]
 pub use client::FtpFs;
 
 // -- utils

@@ -80,7 +80,7 @@ remotefs-ftp = "0.4"
 
 these features are supported:
 
-- `find`: enable `find()` method on client (*enabled by default*)
+- `find`: enable `find()` method on client (_enabled by default_)
 - `native-tls`: enable FTPS support using native-tls as backend
 - `native-tls-vendored`: enable static link for native-tls
 - `no-log`: disable logging. By default, this library will log via the `log` crate.

@@ -2,17 +2,15 @@
 //!
 //! ftp client for remotefs
 
-use crate::utils::path as path_utils;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 
 use remotefs::File;
 use remotefs::fs::{
     FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
     UnixPexClass, Welcome, WriteStream,
 };
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
-use suppaftp::FtpResult;
 #[cfg(not(any(
     feature = "native-tls",
     any(feature = "rustls-aws-lc-rs", feature = "rustls-ring")
@@ -26,15 +24,15 @@ pub use suppaftp::NativeTlsFtpStream as FtpStream;
 use suppaftp::RustlsConnector as TlsConnector;
 #[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
 pub use suppaftp::RustlsFtpStream as FtpStream;
+use suppaftp::list::{File as FtpFile, PosixPexQuery};
 #[cfg(feature = "native-tls")]
 use suppaftp::native_tls::TlsConnector as NativeTlsConnector;
 #[cfg(any(feature = "rustls-aws-lc-rs", feature = "rustls-ring"))]
 use suppaftp::rustls::ClientConfig;
-use suppaftp::{
-    FtpError, Status,
-    list::{File as FtpFile, PosixPexQuery},
-    types::{FileType as SuppaFtpFileType, Mode, Response},
-};
+use suppaftp::types::{FileType as SuppaFtpFileType, Mode, Response};
+use suppaftp::{FtpError, FtpResult, Status};
+
+use crate::utils::path as path_utils;
 
 /// A function that creates a new stream for the data connection in passive mode.
 ///
@@ -497,7 +495,7 @@ impl RemoteFs for FtpFs {
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
         debug!("Executing command: {cmd}");
         self.check_connection()?;
-        let mut stream = self.lock_stream()?;
+        let stream = self.stream.as_mut().unwrap();
         let response = stream.site(cmd).map_err(|e| {
             error!("Failed to execute command: {}", e);
             RemoteError::new_ex(RemoteErrorType::ProtocolError, e)
@@ -579,13 +577,13 @@ impl RemoteFs for FtpFs {
 #[cfg(test)]
 mod test {
 
-    use crate::test_container::SyncPureFtpRunner;
-
-    use super::*;
+    use std::io::Cursor;
+    use std::sync::Arc;
 
     use pretty_assertions::assert_eq;
 
-    use std::{io::Cursor, sync::Arc};
+    use super::*;
+    use crate::test_container::SyncPureFtpRunner;
 
     #[test]
     fn should_initialize_ftp_filesystem() {
@@ -857,7 +855,7 @@ mod test {
                 .list_dir(wrkdir.as_path())
                 .ok()
                 .unwrap()
-                .get(0)
+                .first()
                 .unwrap()
                 .clone();
             assert_eq!(file.name().as_str(), "a.txt");
@@ -1221,7 +1219,8 @@ mod test {
     // -- test utils
 
     fn generate_tempdir() -> String {
-        use rand::{RngExt as _, distr::Alphanumeric, rng};
+        use rand::distr::Alphanumeric;
+        use rand::{RngExt as _, rng};
         let mut rng = rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
@@ -1254,8 +1253,7 @@ mod test {
         let mut client = FtpFs::new(hostname, port)
             .username("test")
             .password("test")
-            .passive_stream_builder(move |addr| {
-                let mut addr = addr.clone();
+            .passive_stream_builder(move |mut addr| {
                 let port = addr.port();
                 let mapped = container_t.get_mapped_port(port);
 
