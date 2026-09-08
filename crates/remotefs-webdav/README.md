@@ -74,10 +74,10 @@ then connect to the server and use the client as any other remotefs client:
 ```rust
 use std::path::Path;
 
-use remotefs::RemoteFs;
+use remotefs::{Auth, RemoteFs};
 use remotefs_webdav::WebDAVFs;
 
-let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
 
 client.connect().expect("connection failed");
 client.change_dir(Path::new("/tmp")).expect("cd failed");

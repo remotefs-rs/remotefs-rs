@@ -28,9 +28,9 @@
 //! use std::path::Path;
 //!
 //! use remotefs::RemoteFs;
-//! use remotefs_webdav::WebDAVFs;
+//! use remotefs_webdav::{Auth, WebDAVFs};
 //!
-//! let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+//! let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
 //!
 //! // connect
 //! client.connect().expect("connection failed");
@@ -70,11 +70,12 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+pub use dav_xml_client::Auth;
 use dav_xml_client::headers::Overwrite;
-use dav_xml_client::{Auth, DavClient, Resource};
+use dav_xml_client::transport::ureq::Agent;
+use dav_xml_client::{DavClient, Resource};
 use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-use ureq::Agent;
 
 /// A [`RemoteFs`] client speaking WebDAV.
 ///
@@ -88,9 +89,9 @@ use ureq::Agent;
 ///
 /// ```rust
 /// use remotefs::RemoteFs;
-/// use remotefs_webdav::WebDAVFs;
+/// use remotefs_webdav::{WebDAVFs, Auth};
 ///
-/// let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+/// let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
 /// client.connect().expect("connection failed");
 /// ```
 pub struct WebDAVFs {
@@ -101,22 +102,24 @@ pub struct WebDAVFs {
 }
 
 impl WebDAVFs {
-    /// Create a client for `url`, authenticating with HTTP Basic auth.
+    /// Create a client for `url`, authenticating with the given `auth` credentials.
     ///
     /// The `url` is the base URL of the WebDAV share, without a trailing path;
     /// every path passed to the client is resolved against it. No request is
     /// sent until [`WebDAVFs::connect`] is called.
     ///
+    /// The `auth` parameter specifies the authentication method to use for every request.
+    ///
     /// # Examples
     ///
     /// ```rust
-    /// use remotefs_webdav::WebDAVFs;
+    /// use remotefs_webdav::{WebDAVFs, Auth};
     ///
-    /// let client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+    /// let client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
     /// ```
-    pub fn new(username: &str, password: &str, url: &str) -> WebDAVFs {
+    pub fn new(url: &str, auth: Auth) -> WebDAVFs {
         WebDAVFs {
-            client: DavClient::ureq(Auth::basic(username, password)),
+            client: DavClient::ureq(auth),
             url: url.to_string(),
             wrkdir: String::from("/"),
             connected: false,
@@ -373,14 +376,14 @@ mod test {
     #[test]
     fn test_should_init_client() {
         crate::mock::logger();
-        let client = WebDAVFs::new("user", "password", "http://localhost:3080");
+        let client = client();
         assert_eq!(client.url, "http://localhost:3080");
         assert_eq!(client.wrkdir, "/");
     }
 
     #[test]
     fn test_should_get_url() {
-        let mut client = WebDAVFs::new("user", "password", "http://localhost:3080");
+        let mut client = client();
         let path = Path::new("a.txt");
         assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
 
@@ -836,21 +839,21 @@ mod test {
 
     #[test]
     fn test_should_be_sync() {
-        let client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+        let client = client();
 
         is_sync(client);
     }
 
     #[test]
     fn test_should_be_send() {
-        let client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+        let client = client();
 
         is_send(client);
     }
 
     #[cfg(feature = "with-containers")]
     fn setup_client() -> WebDAVFs {
-        let mut client = WebDAVFs::new("alice", "secret1234", "http://localhost:3080");
+        let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
         assert!(client.connect().is_ok(), "connect");
         // generate random string
         let wrkdir = PathBuf::from(format!("/test-{}/", uuid::Uuid::new_v4()));
@@ -873,5 +876,9 @@ mod test {
         assert!(client.remove_dir_all(&wrkdir).is_ok(), "remove tempdir");
         assert!(client.disconnect().is_ok(), "disconnect");
         assert!(!client.is_connected(), "disconnected");
+    }
+
+    fn client() -> WebDAVFs {
+        WebDAVFs::new("http://localhost:3080", Auth::basic("user", "password"))
     }
 }
