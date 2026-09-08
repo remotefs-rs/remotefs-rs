@@ -1,5 +1,5 @@
 use clap::Args;
-use remotefs_webdav::WebDAVFs;
+use remotefs_webdav::{Auth, WebDAVFs};
 
 /// Mount a WebDAV server filesystem
 #[derive(Args)]
@@ -7,12 +7,15 @@ pub struct WebdavArgs {
     /// webDAV url
     #[arg(long)]
     url: String,
-    /// webDAV username
-    #[arg(long)]
-    username: String,
-    /// webDAV password
-    #[arg(long)]
-    password: String,
+    /// basic auth username
+    #[arg(long, requires = "password", conflicts_with = "bearer_token")]
+    username: Option<String>,
+    /// basic auth password
+    #[arg(long, requires = "username", conflicts_with = "bearer_token")]
+    password: Option<String>,
+    /// bearer token for authentication
+    #[arg(long, conflicts_with_all = ["username", "password"])]
+    bearer_token: Option<String>,
 }
 
 impl std::fmt::Debug for WebdavArgs {
@@ -21,13 +24,20 @@ impl std::fmt::Debug for WebdavArgs {
             .field("url", &self.url)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
+            .field("bearer_token", &"[REDACTED]")
             .finish()
     }
 }
 
 impl From<WebdavArgs> for WebDAVFs {
     fn from(args: WebdavArgs) -> Self {
-        WebDAVFs::new(&args.username, &args.password, &args.url)
+        let auth = match (&args.username, &args.password, &args.bearer_token) {
+            (Some(username), Some(password), None) => Auth::basic(username, password),
+            (None, None, Some(token)) => Auth::bearer(token),
+            _ => Auth::None,
+        };
+
+        WebDAVFs::new(&args.url, auth)
     }
 }
 
@@ -41,8 +51,9 @@ mod tests {
 
         let args = WebdavArgs {
             url: "https://example.com".to_string(),
-            username: "user".to_string(),
-            password: secret.to_string(),
+            username: Some("user".to_string()),
+            password: Some(secret.to_string()),
+            bearer_token: None,
         };
         let rendered = format!("{args:?}");
         assert!(!rendered.contains(secret));

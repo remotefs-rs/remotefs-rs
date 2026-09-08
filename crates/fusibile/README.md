@@ -155,8 +155,9 @@ where protocol options are
   - `--ssh-config <path>` (optional; default: `~/.ssh/config`)
 - webdav
   - `--url <url>`
-  - `--username <username>`
-  - `--password <password>`
+  - `--username <username>` (optional; required `--password` if specified; conflicts with `--bearer-token`)
+  - `--password <password>` (optional; required `--username` if specified; conflicts with `--bearer-token`)
+  - `--bearer-token <token>` (optional; conflicts with `--username` and `--password`)
 
 Other options are:
 
