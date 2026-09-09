@@ -5,16 +5,14 @@ use std::path::Path;
 use futures_io::{AsyncRead, AsyncWrite};
 
 use super::stream::r#async::{AsyncReadStream, AsyncWriteStream};
-use super::{
-    Capabilities, ExecOutput, File, ReadOptions, SetMetadata, UnixPex, Welcome, WriteOptions,
-};
+use super::{Capabilities, ExecOutput, File, ReadOptions, SetMetadata, UnixPex, WriteOptions};
 use crate::RemoteResult;
 
 /// The asynchronous contract for a protocol-backed remote file system.
 #[async_trait::async_trait]
 pub trait AsyncRemoteFs: Send + Sync {
     /// Connects to the remote server and authenticates the client.
-    async fn connect(&mut self) -> RemoteResult<Welcome>;
+    async fn connect(&mut self) -> RemoteResult<()>;
 
     /// Disconnects from the remote server.
     async fn disconnect(&mut self) -> RemoteResult<()>;

@@ -12,8 +12,7 @@ use tokio::sync::oneshot;
 use crate::r#async::Unblock;
 use crate::fs::{
     AsyncRemoteFs, Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteError,
-    RemoteErrorType, RemoteFs, RemoteResult, SetMetadata, UnixPex, Welcome, WriteOptions,
-    WriteStream,
+    RemoteErrorType, RemoteFs, RemoteResult, SetMetadata, UnixPex, WriteOptions, WriteStream,
 };
 use crate::mock::MockRemoteFs;
 use crate::mock::async_io::AsyncCursor;
@@ -60,7 +59,7 @@ fn unsupported<T>() -> RemoteResult<T> {
 }
 
 impl RemoteFs for OneShot {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
+    fn connect(&mut self) -> RemoteResult<()> {
         unsupported()
     }
     fn disconnect(&mut self) -> RemoteResult<()> {

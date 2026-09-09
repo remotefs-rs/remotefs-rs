@@ -8,7 +8,7 @@ use std::path::Path;
 use self::stream::{BlockingRead, BlockingWrite, BorrowedRead, BorrowedWrite};
 use crate::fs::{
     AsyncRemoteFs, Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteFs, RemoteResult,
-    SetMetadata, UnixPex, Welcome, WriteOptions, WriteStream,
+    SetMetadata, UnixPex, WriteOptions, WriteStream,
 };
 
 /// A blocking view of an asynchronous filesystem client.
@@ -45,7 +45,7 @@ impl<T> fmt::Debug for BlockOn<T> {
 }
 
 impl<T: AsyncRemoteFs> RemoteFs for BlockOn<T> {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
+    fn connect(&mut self) -> RemoteResult<()> {
         self.handle.block_on(self.inner.connect())
     }
 

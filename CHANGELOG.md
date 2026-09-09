@@ -8,6 +8,11 @@ Released on 2026-09-09
 
 ### Breaking changes
 
+- remove `Welcome` from the connection contract
+
+> both filesystem traits now return `RemoteResult<()>` from `connect`.
+> Server banners belong to backend-specific APIs.
+
 - move to edition 2024 and refresh the dependency set
 
 > the crate now requires Rust 1.89.0. The `github-actions` and

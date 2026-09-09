@@ -5,8 +5,7 @@ use std::pin::Pin;
 use super::BlockOn;
 use crate::fs::{
     AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, File, ReadOptions,
-    RemoteError, RemoteErrorType, RemoteFs, RemoteResult, SetMetadata, UnixPex, Welcome,
-    WriteOptions,
+    RemoteError, RemoteErrorType, RemoteFs, RemoteResult, SetMetadata, UnixPex, WriteOptions,
 };
 use crate::mock::MockRemoteFs;
 
@@ -22,7 +21,7 @@ fn unsupported<T>() -> RemoteResult<T> {
 
 #[async_trait::async_trait]
 impl AsyncRemoteFs for BufferedDownload {
-    async fn connect(&mut self) -> RemoteResult<Welcome> {
+    async fn connect(&mut self) -> RemoteResult<()> {
         unsupported()
     }
     async fn disconnect(&mut self) -> RemoteResult<()> {

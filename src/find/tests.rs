@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::fs::{
     Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteResult, SetMetadata, UnixPex,
-    Welcome, WriteOptions, WriteStream,
+    WriteOptions, WriteStream,
 };
 use crate::mock::MockRemoteFs;
 
@@ -79,7 +79,7 @@ struct RemoteListing {
 }
 
 impl crate::RemoteFs for RemoteListing {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
+    fn connect(&mut self) -> RemoteResult<()> {
         unimplemented!("search only lists directories")
     }
 

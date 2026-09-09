@@ -11,7 +11,7 @@
 //! - The transfer types [`ReadStream`] and [`WriteStream`], which hide whether
 //!   the underlying protocol stream can seek.
 //! - The failure types [`RemoteError`], [`RemoteErrorType`] and
-//!   [`RemoteResult`], plus [`Welcome`], the banner a server may greet with.
+//!   [`RemoteResult`].
 //!
 //! Because every client crate re-exports these types, additions to the public
 //! contract are coordinated across the remotefs family. Paths passed to these
@@ -51,7 +51,6 @@ mod forward;
 mod options;
 pub mod stream;
 mod sync;
-mod welcome;
 
 #[cfg(feature = "async")]
 #[doc(inline)]
@@ -73,5 +72,3 @@ pub use self::stream::r#async::{
 pub use self::stream::{ReadStream, RemoteRead, RemoteWrite, WriteStream};
 #[doc(inline)]
 pub use self::sync::RemoteFs;
-#[doc(inline)]
-pub use self::welcome::Welcome;

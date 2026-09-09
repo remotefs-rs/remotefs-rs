@@ -10,11 +10,11 @@ use futures_io::{AsyncRead, AsyncWrite};
 use super::{AsyncReadStream, AsyncRemoteFs, AsyncWriteStream};
 use super::{
     Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteFs, RemoteResult, SetMetadata,
-    UnixPex, Welcome, WriteOptions, WriteStream,
+    UnixPex, WriteOptions, WriteStream,
 };
 
 impl<T: RemoteFs + ?Sized> RemoteFs for Box<T> {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
+    fn connect(&mut self) -> RemoteResult<()> {
         (**self).connect()
     }
 
@@ -121,7 +121,7 @@ impl<T: RemoteFs + ?Sized> RemoteFs for Box<T> {
 #[cfg(feature = "async")]
 #[async_trait::async_trait]
 impl<T: AsyncRemoteFs + ?Sized> AsyncRemoteFs for Box<T> {
-    async fn connect(&mut self) -> RemoteResult<Welcome> {
+    async fn connect(&mut self) -> RemoteResult<()> {
         (**self).connect().await
     }
 

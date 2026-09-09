@@ -64,8 +64,8 @@ and no examples.
   remain object-safe, so never add generic methods to them.
 - **Types are shared, not per-backend.** `src/fs/file/` holds `File`,
   `Metadata`, `FileType`, `UnixPex`, and `UnixPexClass`; `src/fs/errors.rs`
-  holds `RemoteError`/`RemoteErrorType`/`RemoteResult`; `src/fs/welcome.rs`
-  holds `Welcome`, and `src/fs/options.rs` holds transfer options and command
+  holds `RemoteError`/`RemoteErrorType`/`RemoteResult`, and `src/fs/options.rs`
+  holds transfer options and command
   output. Downstream crates re-export these types; coordinate public contract
   changes across the family.
 - **Streams own transfer state.** `src/fs/stream.rs` defines `RemoteRead` and

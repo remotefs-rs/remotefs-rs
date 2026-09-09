@@ -11,7 +11,7 @@ use std::sync::{Arc, RwLock};
 use self::stream::{UnblockRead, UnblockWrite};
 use crate::fs::{
     AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, File, ReadOptions,
-    RemoteError, RemoteErrorType, RemoteResult, SetMetadata, UnixPex, Welcome, WriteOptions,
+    RemoteError, RemoteErrorType, RemoteResult, SetMetadata, UnixPex, WriteOptions,
 };
 
 /// An asynchronous view of a blocking filesystem client.
@@ -145,7 +145,7 @@ where
 
 #[async_trait::async_trait]
 impl<T: crate::fs::RemoteFs + 'static> AsyncRemoteFs for Unblock<T> {
-    async fn connect(&mut self) -> RemoteResult<Welcome> {
+    async fn connect(&mut self) -> RemoteResult<()> {
         await_job(self.spawn_mut(crate::fs::RemoteFs::connect)).await
     }
 
