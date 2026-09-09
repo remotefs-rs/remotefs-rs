@@ -1,271 +1,223 @@
-//! The byte streams returned when a remote file is opened for read or write.
+//! Owned streams for remote transfers and their completion contract.
 //!
-//! [`crate::RemoteFs::open`] hands back a [`ReadStream`] and
-//! [`crate::RemoteFs::create`]/[`crate::RemoteFs::append`] hand back a
-//! [`WriteStream`]. Both wrap whatever the client actually opened, so a caller
-//! sees one concrete type per direction instead of a different boxed trait object
-//! per protocol.
+//! A backend implements [`RemoteRead`] or [`RemoteWrite`] for its stream type,
+//! then wraps it with [`ReadStream::new`] or [`WriteStream::new`]. The wrapper
+//! delegates standard I/O and consumes the backend stream exactly once when
+//! [`ReadStream::finish`] or [`WriteStream::finish`] is called.
 //!
-//! # Seeking
-//!
-//! Protocols disagree on random access: SFTP can seek, SCP streams a file once
-//! from start to end. Rather than expose two types, each stream carries either a
-//! plain reader/writer or one that also implements [`Seek`], and reports which
-//! through [`ReadStream::seekable`] and [`WriteStream::seekable`]. Both implement
-//! [`Seek`] unconditionally so they can be used where the bound is required;
-//! seeking a stream that cannot seek fails with [`IoErrorKind::Unsupported`]
-//! instead of panicking. Check `seekable()` first when the answer changes what
-//! you do.
-//!
-//! # Finalization
-//!
-//! A stream is not finished when it is dropped. Hand it back to
-//! [`crate::RemoteFs::on_written`] or [`crate::RemoteFs::on_read`] so the client
-//! can complete the exchange the protocol expects — FTP, for one, needs the data
-//! connection closed and a final reply read before the transfer counts.
-//!
-//! Every boxed trait object is [`Send`], so a transfer can be moved to another
-//! thread once it has been opened.
-//!
-//! # Examples
-//!
-//! ```
-//! use std::io::{Read, Seek};
-//!
-//! use remotefs::fs::ReadStream;
-//!
-//! # fn f(mut stream: ReadStream) -> std::io::Result<()> {
-//! if stream.seekable() {
-//!     stream.rewind()?;
-//! }
-//!
-//! let mut buffer = Vec::new();
-//! stream.read_to_end(&mut buffer)?;
-//! # Ok(())
-//! # }
-//! ```
+//! Seeking is always available as a trait method, but returns
+//! [`std::io::ErrorKind::Unsupported`] for a stream whose backend does not
+//! support it. The `seekable` query lets callers choose a compatible strategy.
+//! Dropping a stream does not call its finalizer, because a dropped transfer
+//! may intentionally be abandoned.
 
-use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read, Seek, Write};
+use std::fmt;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
-// -- read stream
+use super::{RemoteError, RemoteResult};
 
-/// A [`Read`] that can also [`Seek`] and be sent across threads.
-///
-/// Implement this on a protocol's reader to let a client build a seekable
-/// [`ReadStream`] from it. The trait has no methods of its own; it exists so the
-/// three bounds can be named as one boxed trait object.
-pub trait ReadAndSeek: Read + Seek + Send {}
+/// A remote reader that can optionally seek and finalize its transfer.
+pub trait RemoteRead: Read + Send {
+    /// Returns whether this reader supports seeking.
+    fn seekable(&self) -> bool {
+        false
+    }
 
-/// A remote file opened for reading.
-///
-/// Built with [`From`] from either a `Box<dyn Read + Send>` or a
-/// `Box<dyn ReadAndSeek>`, depending on whether the protocol supports random
-/// access. See the [module documentation](self) for seeking and finalization.
-pub struct ReadStream {
-    stream: StreamReader,
+    /// Seeks to a position in the remote stream.
+    ///
+    /// The default implementation returns [`io::ErrorKind::Unsupported`].
+    fn seek(&mut self, _position: SeekFrom) -> io::Result<u64> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// Finalizes the remote read operation.
+    ///
+    /// The default implementation has no protocol-specific work to perform.
+    fn finish(self: Box<Self>) -> RemoteResult<()> {
+        Ok(())
+    }
 }
 
-/// Whether the wrapped reader can seek.
-enum StreamReader {
-    Read(Box<dyn Read + Send>),
-    ReadAndSeek(Box<dyn ReadAndSeek>),
+/// A remote writer that can optionally seek and finalize its transfer.
+pub trait RemoteWrite: Write + Send {
+    /// Returns whether this writer supports seeking.
+    fn seekable(&self) -> bool {
+        false
+    }
+
+    /// Seeks to a position in the remote stream.
+    ///
+    /// The default implementation returns [`io::ErrorKind::Unsupported`].
+    fn seek(&mut self, _position: SeekFrom) -> io::Result<u64> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    /// Finalizes the remote write operation.
+    ///
+    /// The default implementation has no protocol-specific work to perform.
+    fn finish(self: Box<Self>) -> RemoteResult<()> {
+        Ok(())
+    }
 }
+
+/// An owned remote reader with an explicit transfer finalizer.
+#[non_exhaustive]
+#[must_use = "call finish() so the backend can complete the transfer"]
+pub struct ReadStream(Box<dyn RemoteRead>);
 
 impl ReadStream {
-    /// Return whether [`Seek`] on this stream will succeed.
+    /// Wraps a backend reader in an owned remote stream.
+    pub fn new(inner: impl RemoteRead + 'static) -> Self {
+        Self(Box::new(inner))
+    }
+
+    /// Returns whether the wrapped reader supports seeking.
     pub fn seekable(&self) -> bool {
-        matches!(self.stream, StreamReader::ReadAndSeek(_))
+        self.0.seekable()
+    }
+
+    /// Completes the remote read and consumes the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend finalization error when the remote transfer did not
+    /// complete successfully.
+    pub fn finish(self) -> RemoteResult<()> {
+        self.0.finish()
     }
 }
 
-impl From<Box<dyn Read + Send>> for ReadStream {
-    fn from(reader: Box<dyn Read + Send>) -> Self {
-        Self {
-            stream: StreamReader::Read(reader),
-        }
-    }
-}
-
-impl From<Box<dyn ReadAndSeek>> for ReadStream {
-    fn from(reader: Box<dyn ReadAndSeek>) -> Self {
-        Self {
-            stream: StreamReader::ReadAndSeek(reader),
-        }
+impl fmt::Debug for ReadStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadStream")
+            .field("seekable", &self.seekable())
+            .finish()
     }
 }
 
 impl Read for ReadStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.stream.read(buf)
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.0.read(buffer)
     }
 }
 
-/// Fails with [`IoErrorKind::Unsupported`] when the stream is not seekable.
 impl Seek for ReadStream {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.stream.seek(pos)
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.0.seek(position)
     }
 }
 
-impl Read for StreamReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Read(r) => r.read(buf),
-            Self::ReadAndSeek(r) => r.read(buf),
+/// An owned remote writer with an explicit transfer finalizer.
+#[non_exhaustive]
+#[must_use = "call finish() so the backend can complete the transfer"]
+pub struct WriteStream(Box<dyn RemoteWrite>);
+
+/// Combines transfer and finalization failures without discarding either.
+pub(crate) fn complete_transfer(
+    copied: RemoteResult<u64>,
+    finished: RemoteResult<()>,
+) -> RemoteResult<u64> {
+    match (copied, finished) {
+        (Ok(count), Ok(())) => Ok(count),
+        (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
+        (Err(copy), Err(finish)) => {
+            let kind = copy.kind();
+            Err(RemoteError::with_source(
+                kind,
+                TransferFailure { copy, finish },
+            ))
         }
     }
 }
 
-impl Seek for StreamReader {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        match self {
-            Self::Read(_) => Err(IoError::new(
-                IoErrorKind::Unsupported, // TODO: change to `NotSeekable` when stable <https://doc.rust-lang.org/stable/std/io/enum.ErrorKind.html#variant.NotSeekable>
-                "the read stream for this protocol, doesn't support Seek operation",
-            )),
-            Self::ReadAndSeek(s) => s.seek(pos),
-        }
-    }
-}
-
-// -- write stream
-
-/// A [`Write`] that can also [`Seek`] and be sent across threads.
-///
-/// The write-side counterpart of [`ReadAndSeek`].
-pub trait WriteAndSeek: Write + Seek + Send {}
-
-/// A remote file opened for writing or appending.
-///
-/// Built with [`From`] from either a `Box<dyn Write + Send>` or a
-/// `Box<dyn WriteAndSeek>`, depending on whether the protocol supports random
-/// access. See the [module documentation](self) for seeking and finalization.
-pub struct WriteStream {
-    /// The wrapped writer, exposed so a client can take it back on finalization.
-    pub stream: StreamWriter,
-}
-
-/// Whether the wrapped writer can seek.
-pub enum StreamWriter {
-    /// A writer that cannot seek.
-    Write(Box<dyn Write + Send>),
-    /// A writer that can seek.
-    WriteAndSeek(Box<dyn WriteAndSeek>),
+#[derive(Debug, thiserror::Error)]
+#[error("{copy}; transfer finalization also failed: {finish}")]
+struct TransferFailure {
+    #[source]
+    copy: RemoteError,
+    finish: RemoteError,
 }
 
 impl WriteStream {
-    /// Return whether [`Seek`] on this stream will succeed.
+    /// Wraps a backend writer in an owned remote stream.
+    pub fn new(inner: impl RemoteWrite + 'static) -> Self {
+        Self(Box::new(inner))
+    }
+
+    /// Returns whether the wrapped writer supports seeking.
     pub fn seekable(&self) -> bool {
-        matches!(self.stream, StreamWriter::WriteAndSeek(_))
+        self.0.seekable()
+    }
+
+    /// Completes the remote write and consumes the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns a backend finalization error when the remote transfer did not
+    /// complete successfully.
+    pub fn finish(self) -> RemoteResult<()> {
+        self.0.finish()
     }
 }
 
-impl From<Box<dyn Write + Send>> for WriteStream {
-    fn from(writer: Box<dyn Write + Send>) -> Self {
-        Self {
-            stream: StreamWriter::Write(writer),
-        }
-    }
-}
-
-impl From<Box<dyn WriteAndSeek>> for WriteStream {
-    fn from(writer: Box<dyn WriteAndSeek>) -> Self {
-        Self {
-            stream: StreamWriter::WriteAndSeek(writer),
-        }
+impl fmt::Debug for WriteStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WriteStream")
+            .field("seekable", &self.seekable())
+            .finish()
     }
 }
 
 impl Write for WriteStream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.stream.write(buf)
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0.write(buffer)
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.stream.flush()
+    fn write_vectored(&mut self, buffers: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        self.0.write_vectored(buffers)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
     }
 }
 
-/// Fails with [`IoErrorKind::Unsupported`] when the stream is not seekable.
 impl Seek for WriteStream {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.stream.seek(pos)
-    }
-}
-
-impl Write for StreamWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Write(w) => w.write(buf),
-            Self::WriteAndSeek(w) => w.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Self::Write(w) => w.flush(),
-            Self::WriteAndSeek(w) => w.flush(),
-        }
-    }
-}
-
-impl Seek for StreamWriter {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        match self {
-            Self::Write(_) => Err(IoError::new(
-                IoErrorKind::Unsupported, // TODO: change to `NotSeekable` when stable <https://doc.rust-lang.org/stable/std/io/enum.ErrorKind.html#variant.NotSeekable>
-                "the read stream for this protocol, doesn't support Seek operation",
-            )),
-            Self::WriteAndSeek(s) => s.seek(pos),
-        }
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.0.seek(position)
     }
 }
 
 #[cfg(test)]
-mod test {
-
-    use std::fs::File;
-
-    use tempfile::NamedTempFile;
+mod tests {
+    use std::io::Cursor;
 
     use super::*;
 
-    impl ReadAndSeek for File {}
-    impl WriteAndSeek for File {}
+    impl RemoteRead for Cursor<Vec<u8>> {}
+    impl RemoteWrite for Cursor<Vec<u8>> {}
 
     #[test]
-    fn should_create_new_read_stream_from_read() {
-        let temp = NamedTempFile::new().expect("Could not make tempfile");
-        let file: Box<dyn Read + Send> =
-            Box::new(File::open(temp.path()).expect("Could not open tempfile"));
-        let s = ReadStream::from(file);
-        assert!(!s.seekable());
-    }
+    fn streams_delegate_io_and_default_to_nonseekable() {
+        let mut reader = ReadStream::new(Cursor::new(b"hello".to_vec()));
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).unwrap();
+        assert_eq!(buffer, b"hello");
+        assert!(!reader.seekable());
+        assert_eq!(
+            reader.seek(SeekFrom::Start(0)).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
 
-    #[test]
-    fn should_create_new_read_stream_from_read_and_seek() {
-        let temp = NamedTempFile::new().expect("Could not make tempfile");
-        let file: Box<dyn ReadAndSeek> =
-            Box::new(File::open(temp.path()).expect("Could not open tempfile"));
-        let s = ReadStream::from(file);
-        assert!(s.seekable());
-    }
-
-    #[test]
-    fn should_create_new_write_stream_from_write() {
-        let temp = NamedTempFile::new().expect("Could not make tempfile");
-        let file: Box<dyn Write + Send> =
-            Box::new(File::create(temp.path()).expect("Could not open tempfile"));
-        let s = WriteStream::from(file);
-        assert!(!s.seekable());
-    }
-
-    #[test]
-    fn should_create_new_write_stream_from_write_and_seek() {
-        let temp = NamedTempFile::new().expect("Could not make tempfile");
-        let file: Box<dyn WriteAndSeek> =
-            Box::new(File::create(temp.path()).expect("Could not open tempfile"));
-        let s = WriteStream::from(file);
-        assert!(s.seekable());
+        let mut writer = WriteStream::new(Cursor::new(Vec::new()));
+        writer.write_all(b"hello").unwrap();
+        writer.flush().unwrap();
+        assert!(!writer.seekable());
+        assert_eq!(
+            writer.seek(SeekFrom::Start(0)).unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
     }
 }

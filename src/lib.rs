@@ -55,20 +55,20 @@
 //! Code written against the trait works with any client:
 //!
 //! ```
+//! use remotefs::fs::WriteOptions;
 //! use remotefs::{RemoteFs, RemoteResult};
 //!
-//! /// Collect the names of every entry in the remote working directory.
-//! fn list_working_dir<T>(client: &mut T) -> RemoteResult<Vec<String>>
+//! /// Upload content to an absolute path through any compatible client.
+//! fn upload<T>(client: &T, path: &std::path::Path, content: &[u8]) -> RemoteResult<u64>
 //! where
 //!     T: RemoteFs,
 //! {
-//!     let wrkdir = client.pwd()?;
-//!
-//!     Ok(client
-//!         .list_dir(&wrkdir)?
-//!         .into_iter()
-//!         .map(|file| file.name())
-//!         .collect())
+//!     let mut input = std::io::Cursor::new(content);
+//!     client.write_file(
+//!         path,
+//!         &WriteOptions::default().size_hint(content.len() as u64),
+//!         &mut input,
+//!     )
 //! }
 //! ```
 
@@ -76,11 +76,14 @@
 #[doc(inline)]
 pub use fs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
+#[cfg(feature = "find")]
+mod find;
 pub mod fs;
 pub mod path;
+#[cfg(feature = "find")]
+#[doc(inline)]
+pub use find::find;
 
-// -- utils
-pub(crate) mod utils;
 // -- mock
 #[cfg(test)]
 pub(crate) mod mock;
