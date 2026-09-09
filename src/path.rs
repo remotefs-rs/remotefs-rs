@@ -1,20 +1,29 @@
-//! Validation helpers for paths accepted by remote filesystem operations.
+//! Remote path syntax and validation independent of the client platform.
 
-#[cfg(windows)]
-use std::path::Component;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::fs::{RemoteError, RemoteErrorType, RemoteResult};
 
-/// Verifies that a path is absolute for the current platform.
+/// Verifies that a remote path has an absolute root, independently of client platform.
 ///
 /// Remote filesystem operations use absolute paths so that a backend does not
-/// need to maintain hidden working-directory state. The original path is
-/// returned unchanged on success.
+/// need to maintain hidden working-directory state. Accepted roots are:
+///
+/// - POSIX paths beginning with `/`, including `/` itself.
+/// - Windows drive paths beginning with an ASCII letter, `:`, and `/` or `\`.
+/// - UNC paths beginning with `\\` and nonempty server and share components,
+///   separated by `/` or `\`.
+///
+/// Windows device namespaces (`\\?\` and `\\.\`) are not supported. Only the
+/// root syntax is checked; backends validate protocol-specific path rules. The
+/// original path is returned unchanged, including non-UTF-8 content, repeated
+/// separators, and `.` or `..` components. No normalization or resolution occurs.
 ///
 /// # Errors
 ///
-/// Returns [`RemoteErrorType::InvalidPath`] for relative and empty paths.
+/// Returns [`RemoteErrorType::InvalidPath`] for empty paths, relative paths,
+/// drive-relative paths (`C:file`), single-backslash roots (`\file`), incomplete
+/// UNC roots, and Windows device namespaces.
 ///
 /// # Examples
 ///
@@ -22,10 +31,21 @@ use crate::fs::{RemoteError, RemoteErrorType, RemoteResult};
 /// use std::path::Path;
 ///
 /// assert!(remotefs::path::ensure_absolute(Path::new("/tmp/file")).is_ok());
+/// assert!(remotefs::path::ensure_absolute(Path::new(r"C:\tmp\file")).is_ok());
+/// assert!(remotefs::path::ensure_absolute(Path::new(r"\\server\share\file")).is_ok());
 /// assert!(remotefs::path::ensure_absolute(Path::new("file")).is_err());
 /// ```
 pub fn ensure_absolute(path: &Path) -> RemoteResult<&Path> {
-    if path.is_absolute() {
+    let bytes = path.as_os_str().as_encoded_bytes();
+    let drive_root =
+        matches!(bytes, [letter, b':', b'/' | b'\\', ..] if letter.is_ascii_alphabetic());
+    let unc_root = bytes.strip_prefix(br"\\").is_some_and(|rest| {
+        let mut components = rest.split(|byte| matches!(byte, b'/' | b'\\'));
+        let server = components.next().unwrap_or_default();
+        let share = components.next().unwrap_or_default();
+        !server.is_empty() && server != b"?" && server != b"." && !share.is_empty()
+    });
+    if bytes.starts_with(b"/") || drive_root || unc_root {
         Ok(path)
     } else {
         Err(RemoteError::with_message(
@@ -35,26 +55,25 @@ pub fn ensure_absolute(path: &Path) -> RemoteResult<&Path> {
     }
 }
 
-pub(crate) fn absolutize(cwd: &Path, path: &Path) -> RemoteResult<PathBuf> {
-    ensure_absolute(cwd)?;
-    if path.as_os_str().is_empty() {
-        return Err(RemoteError::new(RemoteErrorType::InvalidPath));
-    }
-    #[cfg(windows)]
-    if !path.is_absolute()
-        && path
-            .components()
-            .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
-    {
-        return Err(RemoteError::new(RemoteErrorType::InvalidPath));
-    }
-    let resolved = if path.is_absolute() {
-        path.to_path_buf()
+pub(crate) fn file_name(path: &Path) -> Option<String> {
+    let path = path.as_os_str().to_string_lossy();
+    let bytes = path.as_bytes();
+    let drive_root =
+        matches!(bytes, [letter, b':', b'/' | b'\\', ..] if letter.is_ascii_alphabetic());
+    let windows = !bytes.starts_with(b"/") && (drive_root || bytes.starts_with(br"\\"));
+    let separator = |byte: &u8| *byte == b'/' || (windows && *byte == b'\\');
+    let body = if drive_root {
+        &bytes[2..]
+    } else if windows {
+        // The server and share together form a UNC root, not an entry name.
+        bytes[2..].splitn(3, separator).nth(2).unwrap_or_default()
     } else {
-        cwd.join(path)
+        bytes
     };
-    ensure_absolute(&resolved)?;
-    Ok(resolved)
+    body.rsplit(separator)
+        .find(|component| !component.is_empty() && *component != b".")
+        .filter(|component| *component != b"..")
+        .map(|name| String::from_utf8_lossy(name).into_owned())
 }
 
 #[cfg(test)]
@@ -69,29 +88,6 @@ mod tests {
             let error = super::ensure_absolute(Path::new(input)).unwrap_err();
             assert_eq!(error.kind(), RemoteErrorType::InvalidPath);
         }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn absolutizes_relative_paths_without_collapsing_components() -> RemoteResult<()> {
-        let cwd = Path::new("/tmp/work");
-        assert_eq!(
-            super::absolutize(cwd, Path::new("file"))?,
-            Path::new("/tmp/work/file")
-        );
-        assert_eq!(
-            super::absolutize(cwd, Path::new("../file"))?,
-            Path::new("/tmp/work/../file")
-        );
-        assert_eq!(
-            super::absolutize(cwd, Path::new("/other/file"))?,
-            Path::new("/other/file")
-        );
-        assert_eq!(
-            super::absolutize(cwd, Path::new("")).unwrap_err().kind(),
-            RemoteErrorType::InvalidPath
-        );
-        Ok(())
     }
 
     #[cfg(unix)]
@@ -112,7 +108,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(windows)]
     #[test]
     fn accepts_windows_absolute_paths() -> RemoteResult<()> {
         assert!(super::ensure_absolute(Path::new(r"C:\tmp\file")).is_ok());
@@ -130,5 +125,52 @@ mod tests {
             RemoteErrorType::InvalidPath
         );
         Ok(())
+    }
+
+    #[test]
+    fn preserves_absolute_remote_path_syntax_on_every_platform() -> RemoteResult<()> {
+        for input in [
+            "/",
+            "/srv/data/file",
+            "/srv/../data//file/",
+            "//server/share/file",
+            r"C:\",
+            "z:/data/file",
+            r"C:\data\..\file",
+            r"\\server\share",
+            r"\\server\share\file",
+            r"\\server/share/file",
+        ] {
+            let path = Path::new(input);
+            let actual = super::ensure_absolute(path)?;
+            assert_eq!(actual.as_os_str(), path.as_os_str(), "input: {input:?}");
+            assert!(std::ptr::eq(actual, path));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_incomplete_remote_roots_on_every_platform() {
+        for input in [
+            "C:",
+            "C:file",
+            r"\",
+            r"\file",
+            r"\\",
+            r"\\server",
+            r"\\server\",
+            r"\\\share",
+            r"\\server\\share",
+            r"\\?\C:\file",
+            r"\\.\pipe\name",
+            "1:/file",
+        ] {
+            let error = super::ensure_absolute(Path::new(input)).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                RemoteErrorType::InvalidPath,
+                "input: {input:?}"
+            );
+        }
     }
 }

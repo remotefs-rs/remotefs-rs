@@ -11,11 +11,23 @@ use std::sync::{Arc, RwLock};
 use self::stream::{UnblockRead, UnblockWrite};
 use crate::fs::{
     AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, File, ReadOptions,
-    ReadStream, RemoteError, RemoteErrorType, RemoteResult, SetMetadata, UnixPex, Welcome,
-    WriteOptions, WriteStream,
+    RemoteError, RemoteErrorType, RemoteResult, SetMetadata, UnixPex, Welcome, WriteOptions,
 };
 
 /// An asynchronous view of a blocking filesystem client.
+///
+/// Blocking operations run on Tokio's blocking pool. Streamed writes acknowledge
+/// bytes accepted into a bounded local buffer; `flush` and `finish` wait for the
+/// worker and report write failures. Dropping a stream may leave accepted bytes
+/// written remotely, and does not finalize its protocol transfer.
+///
+/// One-shot uploads stop polling the borrowed source when the backend completes,
+/// including overrides that consume a declared length without waiting for EOF.
+/// Downloads drain buffered bytes into the destination and flush it before
+/// returning success. Dropping a transfer future closes the caller's pipe endpoint
+/// and cancels the local pump. A running blocking worker can continue until its
+/// current backend operation and cleanup return; cancellation cannot interrupt
+/// arbitrary blocking I/O.
 #[non_exhaustive]
 pub struct Unblock<T> {
     shared: Arc<Shared<T>>,
@@ -211,25 +223,31 @@ impl<T: crate::fs::RemoteFs + 'static> AsyncRemoteFs for Unblock<T> {
     async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
         let path = path.to_path_buf();
         let opts = opts.clone();
-        let stream: ReadStream =
-            await_job(self.spawn_read(move |inner| inner.open(&path, &opts))).await?;
-        Ok(AsyncReadStream::new(UnblockRead::new(stream)))
+        await_job(self.spawn_read(move |inner| {
+            let stream = inner.open(&path, &opts)?;
+            Ok(AsyncReadStream::new(UnblockRead::new(stream)))
+        }))
+        .await
     }
 
     async fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
         let path = path.to_path_buf();
         let opts = opts.clone();
-        let stream: WriteStream =
-            await_job(self.spawn_read(move |inner| inner.create(&path, &opts))).await?;
-        Ok(AsyncWriteStream::new(UnblockWrite::new(stream)))
+        await_job(self.spawn_read(move |inner| {
+            let stream = inner.create(&path, &opts)?;
+            Ok(AsyncWriteStream::new(UnblockWrite::new(stream)))
+        }))
+        .await
     }
 
     async fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
         let path = path.to_path_buf();
         let opts = opts.clone();
-        let stream: WriteStream =
-            await_job(self.spawn_read(move |inner| inner.append(&path, &opts))).await?;
-        Ok(AsyncWriteStream::new(UnblockWrite::new(stream)))
+        await_job(self.spawn_read(move |inner| {
+            let stream = inner.append(&path, &opts)?;
+            Ok(AsyncWriteStream::new(UnblockWrite::new(stream)))
+        }))
+        .await
     }
 
     async fn read_file(

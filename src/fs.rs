@@ -15,8 +15,8 @@
 //!
 //! Because every client crate re-exports these types, additions to the public
 //! contract are coordinated across the remotefs family. Paths passed to these
-//! contracts are absolute; use [`crate::WorkingDir`] or `AsyncWorkingDir` when
-//! a consumer needs relative paths.
+//! contracts are absolute. [`crate::path::ensure_absolute`] validates remote
+//! roots independently of the client platform.
 //!
 //! # Examples
 //!

@@ -16,6 +16,11 @@ use crate::fs::{
 /// Each operation uses the supplied Tokio handle. Calling an operation from an
 /// asynchronous execution context panics, matching [`tokio::runtime::Handle::block_on`].
 /// Use `spawn_blocking` when a blocking operation must be initiated by async code.
+///
+/// One-shot transfers run borrowed source or destination I/O on one scoped worker
+/// thread per transfer, using bounded buffers. The worker exits before the call
+/// returns. A blocking I/O call already in progress must finish before the worker
+/// can exit; asynchronous backend polling remains free to make progress meanwhile.
 pub struct BlockOn<T> {
     inner: T,
     handle: tokio::runtime::Handle,
@@ -122,9 +127,9 @@ impl<T: AsyncRemoteFs> RemoteFs for BlockOn<T> {
         opts: &ReadOptions,
         dest: &mut (dyn std::io::Write + Send),
     ) -> RemoteResult<u64> {
-        let mut dest = BorrowedWrite::new(dest);
-        self.handle
-            .block_on(self.inner.read_file(path, opts, &mut dest))
+        BorrowedWrite::with(dest, |dest| {
+            self.handle.block_on(self.inner.read_file(path, opts, dest))
+        })
     }
 
     fn write_file(
@@ -133,9 +138,9 @@ impl<T: AsyncRemoteFs> RemoteFs for BlockOn<T> {
         opts: &WriteOptions,
         src: &mut (dyn std::io::Read + Send),
     ) -> RemoteResult<u64> {
-        let mut src = BorrowedRead::new(src);
-        self.handle
-            .block_on(self.inner.write_file(path, opts, &mut src))
+        BorrowedRead::with(src, |src| {
+            self.handle.block_on(self.inner.write_file(path, opts, src))
+        })
     }
 
     fn append_file(
@@ -144,12 +149,16 @@ impl<T: AsyncRemoteFs> RemoteFs for BlockOn<T> {
         opts: &WriteOptions,
         src: &mut (dyn std::io::Read + Send),
     ) -> RemoteResult<u64> {
-        let mut src = BorrowedRead::new(src);
-        self.handle
-            .block_on(self.inner.append_file(path, opts, &mut src))
+        BorrowedRead::with(src, |src| {
+            self.handle
+                .block_on(self.inner.append_file(path, opts, src))
+        })
     }
 
     fn exec(&self, cmd: &str) -> RemoteResult<ExecOutput> {
         self.handle.block_on(self.inner.exec(cmd))
     }
 }
+
+#[cfg(test)]
+mod tests;

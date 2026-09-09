@@ -70,10 +70,11 @@
 //! }
 //! ```
 //!
-//! Backends receive absolute paths. Use [`WorkingDir`] or `AsyncWorkingDir`
-//! when a consumer needs relative paths; use `find` or `find_async` with an
-//! explicit root for recursive search. Streams are owned and must be consumed
-//! by calling `finish`; dropping one abandons the transfer.
+//! Backends receive absolute paths. [`path::ensure_absolute`] validates remote
+//! POSIX, drive, and UNC roots independently of the client platform. Use `find`
+//! or `find_async` with an explicit absolute root for recursive search.
+//! Streams are owned and must be consumed by calling `finish`; dropping one
+//! abandons the transfer.
 //!
 //! With `tokio`, `adapters::blocking::BlockOn` exposes an async client to a
 //! blocking consumer and `adapters::r#async::Unblock` offloads a blocking
@@ -104,18 +105,12 @@ pub mod fs;
 #[cfg(feature = "async")]
 mod io;
 pub mod path;
-pub mod working_dir;
 #[cfg(feature = "find")]
 #[doc(inline)]
 pub use find::find;
 #[cfg(all(feature = "async", feature = "find"))]
 #[doc(inline)]
 pub use find::find_async;
-#[cfg(feature = "async")]
-#[doc(inline)]
-pub use working_dir::AsyncWorkingDir;
-#[doc(inline)]
-pub use working_dir::WorkingDir;
 
 // -- mock
 #[cfg(test)]

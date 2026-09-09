@@ -1,3 +1,9 @@
+use std::path::Path;
+
+use crate::fs::{
+    Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteResult, SetMetadata, UnixPex,
+    Welcome, WriteOptions, WriteStream,
+};
 use crate::mock::MockRemoteFs;
 
 #[test]
@@ -63,4 +69,103 @@ fn async_search_rejects_relative_roots() {
         assert_eq!(error.kind(), RemoteErrorType::InvalidPath);
         assert!(AsyncRemoteFs::is_connected(&fs));
     });
+}
+
+// This listing preserves remote paths verbatim instead of deriving parents with
+// the client platform's path parser.
+struct RemoteListing {
+    root: std::path::PathBuf,
+    entries: Vec<crate::File>,
+}
+
+impl crate::RemoteFs for RemoteListing {
+    fn connect(&mut self) -> RemoteResult<Welcome> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn disconnect(&mut self) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn is_connected(&self) -> bool {
+        unimplemented!("search only lists directories")
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        unimplemented!("search only lists directories")
+    }
+
+    fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
+        assert_eq!(path.as_os_str(), self.root.as_os_str());
+        Ok(self.entries.clone())
+    }
+
+    fn stat(&self, _: &Path) -> RemoteResult<File> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn exists(&self, _: &Path) -> RemoteResult<bool> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn set_metadata(&self, _: &Path, _: &SetMetadata) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn create_dir(&self, _: &Path, _: Option<UnixPex>) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn remove_file(&self, _: &Path) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn remove_dir(&self, _: &Path) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn rename(&self, _: &Path, _: &Path) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn copy(&self, _: &Path, _: &Path) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn symlink(&self, _: &Path, _: &Path) -> RemoteResult<()> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn open(&self, _: &Path, _: &ReadOptions) -> RemoteResult<ReadStream> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn create(&self, _: &Path, _: &WriteOptions) -> RemoteResult<WriteStream> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn append(&self, _: &Path, _: &WriteOptions) -> RemoteResult<WriteStream> {
+        unimplemented!("search only lists directories")
+    }
+
+    fn exec(&self, _: &str) -> RemoteResult<ExecOutput> {
+        unimplemented!("search only lists directories")
+    }
+}
+
+#[test]
+fn search_matches_foreign_remote_names_exactly() {
+    for (root, path, name) in [
+        (r"C:\logs", r"C:\logs\report.txt", "report.txt"),
+        (r"\\server\share", r"\\server\share\.hidden", ".hidden"),
+        ("/logs", r"/logs/report\part.txt", r"report\part.txt"),
+    ] {
+        let fs = RemoteListing {
+            root: root.into(),
+            entries: vec![File::new(path, crate::fs::Metadata::default())],
+        };
+        let result = crate::find(&fs, Path::new(root), name).unwrap();
+        assert_eq!(result.len(), 1, "path: {path:?}");
+        assert_eq!(result[0].path.as_os_str(), Path::new(path).as_os_str());
+    }
 }

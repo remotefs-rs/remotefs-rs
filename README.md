@@ -102,9 +102,10 @@ backend that cannot provide an operation returns
 `RemoteErrorType::UnsupportedFeature`; treat that as a capability answer and
 fall back accordingly.
 
-Use `WorkingDir` when a consumer needs a current directory. Use `find` with an
-explicit root for recursive search. The async equivalents are `AsyncWorkingDir`
-and `find_async`.
+All filesystem paths must be absolute. `path::ensure_absolute` accepts POSIX
+roots, fully qualified Windows drive paths, and UNC server/share paths on every
+client platform. Use `find` or `find_async` with an explicit absolute root for
+recursive search.
 
 Streams returned by `open`, `create`, and `append` own their protocol state.
 They implement standard I/O (or futures I/O for async clients), may support
