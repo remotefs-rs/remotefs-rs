@@ -10,6 +10,8 @@ use crate::fs::{
     RemoteErrorType, RemoteFs, SetMetadata, UnixPex, Welcome, WriteOptions, WriteStream,
 };
 
+#[cfg(feature = "async")]
+pub(crate) mod async_io;
 mod stream;
 mod tests;
 
