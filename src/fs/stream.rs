@@ -18,6 +18,8 @@ use super::{RemoteError, RemoteResult};
 
 #[cfg(feature = "async")]
 pub mod r#async;
+#[cfg(feature = "tokio")]
+mod tokio;
 
 /// A remote reader that can optionally seek and finalize its transfer.
 pub trait RemoteRead: Read + Send {

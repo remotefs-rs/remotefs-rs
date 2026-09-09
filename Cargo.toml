@@ -25,12 +25,15 @@ default = ["find"]
 # misc
 find = ["dep:wildmatch"]
 no-log = ["log/max_level_off"]
+tokio = ["async", "dep:tokio", "dep:tokio-util"]
 
 [dependencies]
 async-trait = { version = "0.1", optional = true }
 futures-io = { version = "0.3", optional = true }
 log = "0.4"
 thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["io-util", "rt", "sync"], optional = true }
+tokio-util = { version = "0.7", default-features = false, features = ["compat", "io-util"], optional = true }
 wildmatch = { version = "2", optional = true }
 
 [dev-dependencies]
