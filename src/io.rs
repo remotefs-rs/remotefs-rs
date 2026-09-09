@@ -6,10 +6,6 @@ use std::pin::Pin;
 
 use futures_io::{AsyncRead, AsyncWrite};
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the async filesystem contract")
-)]
 pub(crate) async fn copy(
     reader: &mut (dyn AsyncRead + Send + Unpin),
     writer: &mut (dyn AsyncWrite + Send + Unpin),
@@ -44,10 +40,6 @@ pub(crate) async fn copy(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the async filesystem contract")
-)]
 pub(crate) async fn flush(writer: &mut (dyn AsyncWrite + Send + Unpin)) -> std::io::Result<()> {
     poll_fn(|context| Pin::new(&mut *writer).poll_flush(context)).await
 }

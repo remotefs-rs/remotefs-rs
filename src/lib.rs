@@ -74,6 +74,12 @@
 //! ```
 
 // -- export
+#[cfg(feature = "async")]
+#[doc(no_inline)]
+pub use async_trait::async_trait;
+#[cfg(feature = "async")]
+#[doc(inline)]
+pub use fs::AsyncRemoteFs;
 #[doc(inline)]
 pub use fs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
