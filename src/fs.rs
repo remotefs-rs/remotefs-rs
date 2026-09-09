@@ -24,9 +24,9 @@
 //!
 //! use remotefs::fs::{File, FileType, Metadata, UnixPex, UnixPexClass};
 //!
-//! let file = File {
-//!     path: "/home/omar/README.md".into(),
-//!     metadata: Metadata::default()
+//! let file = File::new(
+//!     "/home/omar/README.md",
+//!     Metadata::default()
 //!         .file_type(FileType::File)
 //!         .size(1024)
 //!         .modified(SystemTime::UNIX_EPOCH)
@@ -35,22 +35,28 @@
 //!             UnixPexClass::new(true, false, false),
 //!             UnixPexClass::new(true, false, false),
 //!         )),
-//! };
+//! );
 //!
 //! assert_eq!(file.name(), "README.md");
 //! assert!(file.is_file());
 //! ```
 
+mod capabilities;
 mod errors;
 mod file;
+mod options;
 pub mod stream;
 mod sync;
 mod welcome;
 
 #[doc(inline)]
+pub use self::capabilities::Capabilities;
+#[doc(inline)]
 pub use self::errors::{RemoteError, RemoteErrorType, RemoteResult};
 #[doc(inline)]
-pub use self::file::{File, FileType, Metadata, UnixPex, UnixPexClass};
+pub use self::file::{File, FileType, Metadata, SetMetadata, UnixPex, UnixPexClass};
+#[doc(inline)]
+pub use self::options::{ExecOutput, ReadOptions, WriteOptions};
 #[doc(inline)]
 pub use self::stream::{ReadStream, WriteStream};
 #[doc(inline)]

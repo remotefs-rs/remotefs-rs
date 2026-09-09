@@ -23,6 +23,7 @@
 /// assert!(!mode.others().write());
 /// assert_eq!(u32::from(mode), 0o644);
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UnixPex(UnixPexClass, UnixPexClass, UnixPexClass);
 
@@ -92,6 +93,7 @@ impl From<u32> for UnixPex {
 /// assert!(!class.write());
 /// assert_eq!(class.as_byte(), 5);
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct UnixPexClass {
     read: bool,

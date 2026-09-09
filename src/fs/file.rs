@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 mod file_type;
 mod metadata;
 mod permissions;
+mod set_metadata;
 
 #[doc(inline)]
 pub use file_type::FileType;
@@ -23,6 +24,8 @@ pub use file_type::FileType;
 pub use metadata::Metadata;
 #[doc(inline)]
 pub use permissions::{UnixPex, UnixPexClass};
+#[doc(inline)]
+pub use set_metadata::SetMetadata;
 
 /// An entry on the remote file system: its path and its metadata.
 ///
@@ -34,16 +37,17 @@ pub use permissions::{UnixPex, UnixPexClass};
 /// ```
 /// use remotefs::fs::{File, FileType, Metadata};
 ///
-/// let file = File {
-///     path: "/var/log/syslog".into(),
-///     metadata: Metadata::default().file_type(FileType::File).size(512),
-/// };
+/// let file = File::new(
+///     "/var/log/syslog",
+///     Metadata::default().file_type(FileType::File).size(512),
+/// );
 ///
 /// assert_eq!(file.name(), "syslog");
 /// assert_eq!(file.extension(), None);
 /// assert!(file.is_file());
 /// assert!(!file.is_hidden());
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct File {
     /// The absolute path of the entry on the remote host.
@@ -53,6 +57,14 @@ pub struct File {
 }
 
 impl File {
+    /// Creates an entry from its path and metadata.
+    pub fn new(path: impl Into<PathBuf>, metadata: Metadata) -> Self {
+        Self {
+            path: path.into(),
+            metadata,
+        }
+    }
+
     /// Return the absolute path of the entry.
     pub fn path(&self) -> &Path {
         self.path.as_path()
@@ -68,10 +80,7 @@ impl File {
     /// ```
     /// use remotefs::fs::{File, Metadata};
     ///
-    /// let root = File {
-    ///     path: "/".into(),
-    ///     metadata: Metadata::default(),
-    /// };
+    /// let root = File::new("/", Metadata::default());
     ///
     /// assert_eq!(root.name(), "/");
     /// ```
@@ -96,10 +105,7 @@ impl File {
     /// ```
     /// use remotefs::fs::{File, Metadata};
     ///
-    /// let file = File {
-    ///     path: "/tmp/archive.tar.gz".into(),
-    ///     metadata: Metadata::default(),
-    /// };
+    /// let file = File::new("/tmp/archive.tar.gz", Metadata::default());
     ///
     /// assert_eq!(file.extension().as_deref(), Some("gz"));
     /// ```
@@ -146,10 +152,7 @@ mod tests {
 
     #[test]
     fn should_create_file() {
-        let entry = File {
-            path: PathBuf::from("/bar.txt"),
-            metadata: Metadata::default(),
-        };
+        let entry = File::new(PathBuf::from("/bar.txt"), Metadata::default());
         assert_eq!(entry.path(), Path::new("/bar.txt"));
         assert_eq!(entry.name(), String::from("bar.txt"));
         assert_eq!(entry.extension().as_deref(), Some("txt"));
@@ -161,10 +164,7 @@ mod tests {
 
     #[test]
     fn should_return_is_hidden_for_hidden_files() {
-        let entry = File {
-            path: PathBuf::from("/.bar.txt"),
-            metadata: Metadata::default(),
-        };
+        let entry = File::new(PathBuf::from("/.bar.txt"), Metadata::default());
         assert!(entry.is_hidden());
     }
 }

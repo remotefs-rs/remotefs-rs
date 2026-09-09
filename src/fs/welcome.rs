@@ -18,6 +18,7 @@
 ///
 /// assert_eq!(welcome.banner.as_deref(), Some("Hello, world!"));
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Default, Clone)]
 pub struct Welcome {
     /// The welcome message or banner sent by the server, when there is one.
