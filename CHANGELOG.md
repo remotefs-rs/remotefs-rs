@@ -27,6 +27,11 @@ Released on 2026-09-09
 
 > replace the mutable blocking trait, legacy transfer methods, and marker stream types with shared-receiver operations and consuming stream finalizers.
 
+- require absolute paths for every filesystem operation
+
+> remove working-directory methods and relative-path resolution. Validate remote
+> POSIX, Windows drive, and UNC roots independently of the client platform.
+
 ### Added
 
 - Breaking: preserve remote error sources and revise kinds
@@ -34,7 +39,6 @@ Released on 2026-09-09
 - Breaking: replace blocking transfers with owned streams
 - add runtime-neutral async transfer streams
 - add the object-safe async filesystem contract
-- add working-directory wrappers for both filesystem traits
 - support explicit-root sync and async search
 - bridge async backends into blocking clients with tokio
 - offload blocking filesystem clients and transfers with tokio

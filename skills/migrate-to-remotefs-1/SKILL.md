@@ -24,6 +24,12 @@ already migrated.
    error sources, enforce required size hints before opening, honor offsets and
    lengths, advertise capabilities, and move finalization into owned streams
    with explicit `finish` plus best-effort logging cleanup.
+   Remove working-directory state and relative-path resolution. Pass explicit
+   absolute paths to every filesystem operation and validate them with
+   `remotefs::path::ensure_absolute`. Its remote POSIX, Windows drive, and UNC
+   root checks are independent of the client platform; `Path::is_absolute`
+   checks the client platform's syntax and is not a substitute. The crate
+   provides no working-directory wrapper or relative-path resolver.
 4. Apply the protocol-specific notes: SCP requires a size, SFTP and kube use
    the bound, GCS uses a hint; memory removes unsafe downcasts and retains
    observable callback behavior; SSH moves Drop finalization into explicit

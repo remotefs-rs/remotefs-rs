@@ -29,8 +29,8 @@ pub use set_metadata::SetMetadata;
 
 /// An entry on the remote file system: its path and its metadata.
 ///
-/// The path is absolute as far as the protocol is concerned; a client resolves a
-/// relative path against the working directory before it builds a `File`.
+/// The path is absolute on the remote host. Backends must supply an absolute
+/// path when constructing an entry; the constructor stores it unchanged.
 ///
 /// # Examples
 ///
@@ -73,7 +73,10 @@ impl File {
     /// Return the last component of the path, or `/` for the root.
     ///
     /// The name is lossily converted to UTF-8, because a remote host may name an
-    /// entry with bytes that are not valid UTF-8.
+    /// entry with bytes that are not valid UTF-8. Slash-rooted POSIX paths treat
+    /// backslashes as literal name characters; fully qualified drive and UNC
+    /// paths treat both slashes and backslashes as separators, on every client
+    /// platform. Trailing separators and `.` components are ignored.
     ///
     /// # Examples
     ///
@@ -85,10 +88,7 @@ impl File {
     /// assert_eq!(root.name(), "/");
     /// ```
     pub fn name(&self) -> String {
-        self.path()
-            .file_name()
-            .map(|x| x.to_string_lossy().to_string())
-            .unwrap_or_else(|| "/".to_string())
+        crate::path::file_name(self.path()).unwrap_or_else(|| "/".to_string())
     }
 
     /// Return what the remote host reported about the entry.
@@ -110,9 +110,9 @@ impl File {
     /// assert_eq!(file.extension().as_deref(), Some("gz"));
     /// ```
     pub fn extension(&self) -> Option<String> {
-        self.path()
-            .extension()
-            .map(|x| x.to_string_lossy().to_string())
+        let name = crate::path::file_name(self.path())?;
+        let (stem, extension) = name.rsplit_once('.')?;
+        (!stem.is_empty()).then(|| extension.to_owned())
     }
 
     /// Return whether the entry is a directory.
@@ -166,5 +166,75 @@ mod tests {
     fn should_return_is_hidden_for_hidden_files() {
         let entry = File::new(PathBuf::from("/.bar.txt"), Metadata::default());
         assert!(entry.is_hidden());
+    }
+
+    #[test]
+    fn names_use_remote_root_syntax_on_every_platform() {
+        for (path, name, extension, hidden) in [
+            (r"C:\logs\report.txt", "report.txt", Some("txt"), false),
+            (r"z:/logs\.hidden.log", ".hidden.log", Some("log"), true),
+            (
+                r"\\server\share\report.txt",
+                "report.txt",
+                Some("txt"),
+                false,
+            ),
+            (r"\\server/share\logs/.secret", ".secret", None, true),
+            (
+                r"/logs/report\part.txt",
+                r"report\part.txt",
+                Some("txt"),
+                false,
+            ),
+            (r"/logs/.secret\part", r".secret\part", None, true),
+            ("/logs/archive.tar.gz", "archive.tar.gz", Some("gz"), false),
+            ("/logs/file.", "file.", Some(""), false),
+            ("/logs/.config", ".config", None, true),
+            (r"C:\logs\report.txt\", "report.txt", Some("txt"), false),
+            ("/logs/report.txt/./", "report.txt", Some("txt"), false),
+            ("/", "/", None, false),
+            ("//", "/", None, false),
+            (r"C:\", "/", None, false),
+            ("z:/", "/", None, false),
+            (r"\\server\share", "/", None, false),
+            (r"\\server\share\", "/", None, false),
+            ("/logs/..", "/", None, false),
+        ] {
+            let file = File::new(path, Metadata::default());
+            assert_eq!(file.name(), name, "path: {path:?}");
+            assert_eq!(file.extension().as_deref(), extension, "path: {path:?}");
+            assert_eq!(file.is_hidden(), hidden, "path: {path:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_names_convert_non_utf8_lossily() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        for prefix in [b"/logs/".as_slice(), br"C:\logs\", br"\\server\share\"] {
+            let mut bytes = prefix.to_vec();
+            bytes.extend_from_slice(b".file\xff.ext\xff");
+            let file = File::new(OsString::from_vec(bytes), Metadata::default());
+            assert_eq!(file.name(), ".file\u{fffd}.ext\u{fffd}");
+            assert_eq!(file.extension().as_deref(), Some("ext\u{fffd}"));
+            assert!(file.is_hidden());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn remote_names_preserve_windows_lossy_surrogate_conversion() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        let mut units: Vec<_> = r"C:\logs\.file".encode_utf16().collect();
+        units.push(0xd800);
+        units.extend(".txt".encode_utf16());
+        let file = File::new(OsString::from_wide(&units), Metadata::default());
+        assert_eq!(file.name(), ".file\u{fffd}.txt");
+        assert_eq!(file.extension().as_deref(), Some("txt"));
+        assert!(file.is_hidden());
     }
 }

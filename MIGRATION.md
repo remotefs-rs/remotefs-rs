@@ -9,9 +9,10 @@ and optional
 traits now use shared receivers for operations, owned streams for transfers,
 and explicit transfer completion.
 
-The backend remains responsible for protocol behavior. Working-directory
-state, relative-path resolution, recursive search, and runtime adaptation are
-consumer-side features. Start by updating the root dependency:
+The backend remains responsible for protocol behavior. Every filesystem path
+must be absolute; working-directory state and relative-path resolution are
+removed. Recursive search takes an explicit absolute root, and runtime
+adaptation is available through adapters. Start by updating the root dependency:
 
 ```toml
 remotefs = "1"
@@ -27,7 +28,7 @@ same backend-oriented checklist.
 | remotefs 0.3                     | remotefs 1                                                 |
 | -------------------------------- | ---------------------------------------------------------- |
 | `&mut self` operations           | `&self` operations; lifecycle keeps mutable receivers      |
-| `pwd` / `change_dir`             | `WorkingDir` / `AsyncWorkingDir` wrappers                  |
+| `pwd` / `change_dir`             | removed; pass absolute paths to every operation            |
 | `find` / `iter_search`           | `find` / `find_async` free functions with an explicit root |
 | `setstat`                        | `set_metadata(&SetMetadata)`                               |
 | `mov`                            | `rename`                                                   |
@@ -52,21 +53,29 @@ same backend-oriented checklist.
 | Old stream `From` constructors   | backend implementations passed to `ReadStream::new`        |
 | Runtime constructor parameters   | native async clients or `BlockOn` / `Unblock` adapters     |
 
-The backend receives absolute paths. Use a wrapper when a consumer wants a
-working directory:
+The backend receives absolute paths:
 
 ```rust
 use std::path::Path;
 
-use remotefs::working_dir::WorkingDir;
+use remotefs::{RemoteFs, RemoteResult};
 
-let client = WorkingDir::new(client, Path::new("/srv/data"));
-client.stat(Path::new("report.txt"))?;
+fn report(client: &dyn RemoteFs) -> RemoteResult<remotefs::File> {
+    client.stat(Path::new("/srv/data/report.txt"))
+}
 ```
 
-`WorkingDir` snapshots and validates its root, then resolves relative paths
-before calling the backend. `absolutize` remains useful for consumer-side
-resolution; it is no longer backend state or a protocol requirement.
+`path::ensure_absolute` validates remote roots independently of the client
+operating system. It accepts POSIX paths beginning with `/`, Windows drive paths
+beginning with an ASCII letter, `:`, and `/` or `\`, and UNC paths beginning
+with `\\` followed by nonempty server and share components separated by `/` or
+`\`. Empty, relative, drive-relative (`C:file`), single-backslash-rooted
+(`\file`), incomplete UNC, and Windows device-namespace paths (`\\?\` or
+`\\.\`) return `InvalidPath`.
+
+Validation returns the original path unchanged, including non-UTF-8 content and
+`.` or `..` components. Backends enforce their own protocol-specific path rules.
+The crate provides no working-directory wrapper or relative-path resolver.
 
 ### Consumer example
 
@@ -138,7 +147,7 @@ seeking, ranges, or concurrent transfers.
 Consumers should:
 
 - connect before placing a client in an `Arc`;
-- use `WorkingDir` or `AsyncWorkingDir` for relative paths;
+- pass explicit absolute paths to every filesystem operation;
 - call `find` or `find_async` with an explicit absolute root;
 - use range offsets for partial reads and check `capabilities()` before
   requiring native behavior;
@@ -174,14 +183,25 @@ client for a blocking consumer with
 
 `BlockOn` must not be called from an async execution context because
 `Handle::block_on` would block the executor thread. Use `spawn_blocking` for
-that direction. `Unblock` moves blocking control calls and stream operations to
-Tokio's blocking pool and keeps the caller's async I/O borrowed only for the
-duration of each one-shot operation.
+that direction. Each `BlockOn` one-shot transfer uses one scoped worker thread
+for borrowed source or destination I/O. That worker exits before the call returns;
+an in-progress blocking I/O call must finish first. `Unblock` moves blocking
+control calls and stream operations to Tokio's blocking pool and keeps the
+caller's async I/O borrowed only for the duration of each one-shot operation.
 
-Dropping an async transfer future cancels the local pump and releases the
-worker-owned endpoint. A backend must still release its protocol data socket
-before acquiring a control lock. A finish error is returned even when the
-copy itself succeeds; when both fail, the returned error retains both causes.
+`Unblock` streamed writes acknowledge bytes accepted into a bounded local buffer.
+Flush or finish waits for the worker and reports failures. Dropping a stream may
+leave accepted bytes written remotely without finalizing the transfer.
+
+Dropping an async transfer future cancels the local pump and closes the caller's
+pipe endpoint. A running blocking worker may continue until its backend operation
+and cleanup return; cancellation cannot interrupt arbitrary blocking I/O.
+Successful one-shot uploads stop polling the source when the backend completes,
+including overrides that consume a declared length without waiting for EOF.
+Downloads drain buffered bytes and flush the destination before returning success.
+A backend must still release its protocol data socket before acquiring a control
+lock. A finish error is returned even when the copy itself succeeds; when both
+fail, the returned error retains both causes.
 
 ## Transfer lifecycle
 
@@ -207,7 +227,7 @@ copied or symlinked into an agent's skill directory without changing the
 current user's setup:
 
 ```sh
-mkdir -p "$CODEX_HOME/skills"
+mkdir -p "$CODEX_HOME/skills/migrate-to-remotefs-1"
 cp skills/migrate-to-remotefs-1/SKILL.md "$CODEX_HOME/skills/migrate-to-remotefs-1/"
 ```
 

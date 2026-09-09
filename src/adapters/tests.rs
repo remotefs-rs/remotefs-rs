@@ -329,3 +329,96 @@ fn block_on_unblock_can_run_while_the_owner_drives_tokio() {
     });
     worker.join().unwrap();
 }
+
+struct ThreadTrackingIo {
+    bytes: std::io::Cursor<Vec<u8>>,
+    threads: std::collections::HashSet<std::thread::ThreadId>,
+}
+
+impl ThreadTrackingIo {
+    fn new(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes: std::io::Cursor::new(bytes),
+            threads: std::collections::HashSet::new(),
+        }
+    }
+}
+
+impl std::io::Read for ThreadTrackingIo {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        self.threads.insert(std::thread::current().id());
+        self.bytes.read(buffer)
+    }
+}
+
+impl std::io::Write for ThreadTrackingIo {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.threads.insert(std::thread::current().id());
+        self.bytes.write(buffer)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.threads.insert(std::thread::current().id());
+        Ok(())
+    }
+}
+
+#[test]
+fn block_on_borrowed_io_reuses_one_worker_per_transfer() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let adapter = BlockOn::new(MockRemoteFs::connected(), runtime.handle().clone());
+    let path = MockRemoteFs::path("borrowed-worker");
+    let payload = vec![42; 3 * 8192 + 1];
+    let mut input = ThreadTrackingIo::new(payload.clone());
+    adapter
+        .write_file(&path, &WriteOptions::default(), &mut input)
+        .unwrap();
+    assert_eq!(
+        input.threads.len(),
+        1,
+        "one reader worker must serve all chunks"
+    );
+    let mut output = ThreadTrackingIo::new(Vec::new());
+    adapter
+        .read_file(&path, &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(
+        output.threads.len(),
+        1,
+        "one writer worker must serve all chunks"
+    );
+    assert_eq!(output.bytes.into_inner(), payload);
+}
+
+#[test]
+fn block_on_one_shot_can_borrow_remote_streams_on_the_same_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let client = MockRemoteFs::connected();
+    let source_path = MockRemoteFs::path("borrowed-source");
+    let destination_path = MockRemoteFs::path("borrowed-destination");
+    let downloaded_path = MockRemoteFs::path("borrowed-download");
+    let payload = vec![91; 3 * 8192 + 1];
+    client.seed_file(&source_path, &payload);
+    let adapter = BlockOn::new(client, runtime.handle().clone());
+    let mut source = adapter.open(&source_path, &ReadOptions::default()).unwrap();
+    adapter
+        .write_file(&destination_path, &WriteOptions::default(), &mut source)
+        .unwrap();
+    source.finish().unwrap();
+    let mut destination = adapter
+        .create(&downloaded_path, &WriteOptions::default())
+        .unwrap();
+    adapter
+        .read_file(&destination_path, &ReadOptions::default(), &mut destination)
+        .unwrap();
+    destination.finish().unwrap();
+    let client = adapter.into_inner();
+    assert_eq!(client.contents(&destination_path), payload);
+    assert_eq!(client.contents(&downloaded_path), payload);
+    assert_eq!(client.finish_count(), 4);
+    assert_eq!(client.unfinished_count(), 0);
+}

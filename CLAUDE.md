@@ -78,9 +78,10 @@ and no examples.
   adapters live in `src/adapters/blocking/` and `src/adapters/async/`:
   `BlockOn` presents async clients to blocking consumers, while `Unblock`
   offloads blocking clients for async consumers.
-- **Paths and search are consumer-side.** `src/working_dir.rs` provides
-  `WorkingDir` and `AsyncWorkingDir`; `src/path.rs` provides validation and
-  `absolutize`. `src/find.rs` provides explicit-root `find` and `find_async`.
+- **Paths are absolute on the remote host.** `src/path.rs` validates POSIX,
+  Windows drive, and UNC roots independently of the client platform. There is
+  no working-directory wrapper or relative-path resolver. `src/find.rs`
+  provides explicit-root `find` and `find_async`.
 - **Command layer.** `Justfile` is a thin importer. Each recipe group lives in
   its own file under `just/` (`build`, `test`, `code_check`, `changelog`,
   `publish`) and carries a `[group(...)]` attribute so `just --list` stays

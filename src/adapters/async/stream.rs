@@ -1,8 +1,12 @@
 //! Blocking-to-Tokio stream fixtures.
 
-use std::future::Future;
+#[cfg(test)]
+mod tests;
+
+use std::future::{Future, poll_fn};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::runtime::Handle;
@@ -38,15 +42,13 @@ impl Drop for ReadOutput {
 
 struct WriteOutput {
     stream: Option<WriteStream>,
-    count: usize,
     result: Option<io::Result<()>>,
 }
 
 impl WriteOutput {
-    fn into_parts(mut self) -> (WriteStream, usize, io::Result<()>) {
+    fn into_parts(mut self) -> (WriteStream, io::Result<()>) {
         (
             self.stream.take().expect("write output owns its stream"),
-            self.count,
             self.result.take().expect("write output owns its result"),
         )
     }
@@ -75,6 +77,37 @@ impl FlushOutput {
 }
 
 impl Drop for FlushOutput {
+    fn drop(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            cleanup_stream(stream);
+        }
+    }
+}
+
+struct SeekOutput<S>
+where
+    S: Send + 'static,
+{
+    stream: Option<S>,
+    result: Option<io::Result<u64>>,
+}
+
+impl<S> SeekOutput<S>
+where
+    S: Send + 'static,
+{
+    fn into_parts(mut self) -> (S, io::Result<u64>) {
+        (
+            self.stream.take().expect("seek output owns its stream"),
+            self.result.take().expect("seek output owns its result"),
+        )
+    }
+}
+
+impl<S> Drop for SeekOutput<S>
+where
+    S: Send + 'static,
+{
     fn drop(&mut self) {
         if let Some(stream) = self.stream.take() {
             cleanup_stream(stream);
@@ -118,7 +151,12 @@ impl UnblockRead {
         };
         self.job = ReadJob::Reading(spawn_io_worker(move || {
             let mut bytes = vec![0_u8; buffer_size.min(8192)];
-            let result = stream.read(&mut bytes);
+            let result = loop {
+                match stream.read(&mut bytes) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    result => break result,
+                }
+            };
             ReadOutput {
                 stream: Some(stream),
                 bytes,
@@ -161,13 +199,19 @@ impl UnblockRead {
         }
     }
 
-    async fn recover_for_seek(&mut self) -> io::Result<(ReadStream, usize)> {
-        let job = std::mem::replace(&mut self.job, ReadJob::Failed);
-        match job {
-            ReadJob::Idle(Some(stream)) => Ok((stream, 0)),
-            ReadJob::Idle(None) | ReadJob::Failed => {
-                Err(io::Error::other("remote read stream is unavailable"))
-            }
+    async fn recover_for_seek(
+        &mut self,
+        position: SeekFrom,
+    ) -> io::Result<(ReadStream, Vec<u8>, usize, SeekFrom)> {
+        poll_fn(|context| self.poll_reading(context)).await?;
+        let unread = match &self.job {
+            ReadJob::Buffered { bytes, offset, .. } => bytes.len() - offset,
+            _ => 0,
+        };
+        // Validate before taking ownership so rejected relative seeks preserve read-ahead.
+        let position = adjust_current(position, unread)?;
+        match std::mem::replace(&mut self.job, ReadJob::Failed) {
+            ReadJob::Idle(Some(stream)) => Ok((stream, Vec::new(), 0, position)),
             ReadJob::Buffered {
                 stream,
                 bytes,
@@ -175,42 +219,13 @@ impl UnblockRead {
                 error,
             } => {
                 let stream = stream.expect("buffered read always owns its stream");
-                self.job = ReadJob::Idle(Some(stream));
                 if let Some(error) = error {
+                    self.job = ReadJob::Idle(Some(stream));
                     return Err(error);
                 }
-                Ok((
-                    match std::mem::replace(&mut self.job, ReadJob::Failed) {
-                        ReadJob::Idle(Some(stream)) => stream,
-                        _ => unreachable!("read stream was restored above"),
-                    },
-                    bytes.len().saturating_sub(offset),
-                ))
+                Ok((stream, bytes, offset, position))
             }
-            ReadJob::Reading(job) => match job.await {
-                Err(error) => Err(io::Error::other(error)),
-                Ok(output) => {
-                    let (stream, mut bytes, result) = output.into_parts();
-                    let count = match result {
-                        Ok(count) => count,
-                        Err(error) => {
-                            self.job = ReadJob::Idle(Some(stream));
-                            return Err(error);
-                        }
-                    };
-                    bytes.truncate(count);
-                    let unread = bytes.len();
-                    bytes.clear();
-                    self.job = ReadJob::Idle(Some(stream));
-                    Ok((
-                        match std::mem::replace(&mut self.job, ReadJob::Failed) {
-                            ReadJob::Idle(Some(stream)) => stream,
-                            _ => unreachable!("read stream was restored above"),
-                        },
-                        unread,
-                    ))
-                }
-            },
+            _ => Err(io::Error::other("remote read stream is unavailable")),
         }
     }
 
@@ -263,6 +278,8 @@ impl futures_io::AsyncRead for UnblockRead {
             } = &mut this.job
             {
                 if let Some(error) = error.take() {
+                    let stream = stream.take().expect("buffered read always owns its stream");
+                    this.job = ReadJob::Idle(Some(stream));
                     return Poll::Ready(Err(error));
                 }
                 if *offset < bytes.len() {
@@ -298,21 +315,27 @@ impl AsyncRemoteRead for UnblockRead {
         if !self.seekable {
             return Err(io::ErrorKind::Unsupported.into());
         }
-        let (mut stream, unread) = self.recover_for_seek().await?;
-        let position = match adjust_current(position, unread) {
-            Ok(position) => position,
-            Err(error) => {
-                self.job = ReadJob::Idle(Some(stream));
-                return Err(error);
-            }
-        };
+        let (mut stream, bytes, offset, position) = self.recover_for_seek(position).await?;
         let result = spawn_io_worker(move || {
             let result = stream.seek(position);
-            (stream, result)
+            SeekOutput {
+                stream: Some(stream),
+                result: Some(result),
+            }
         })
         .await
-        .map_err(io::Error::other)?;
-        self.job = ReadJob::Idle(Some(result.0));
+        .map_err(io::Error::other)?
+        .into_parts();
+        self.job = if result.1.is_err() && !bytes.is_empty() {
+            ReadJob::Buffered {
+                stream: Some(result.0),
+                bytes,
+                offset,
+                error: None,
+            }
+        } else {
+            ReadJob::Idle(Some(result.0))
+        };
         result.1
     }
 
@@ -351,6 +374,8 @@ enum WriteJob {
 pub(super) struct UnblockWrite {
     job: WriteJob,
     seekable: bool,
+    // Accepted bytes cannot be retried by the caller. Keep failures visible through finish.
+    error: Option<Arc<io::Error>>,
 }
 
 impl UnblockWrite {
@@ -359,12 +384,13 @@ impl UnblockWrite {
         Self {
             job: WriteJob::Idle(Some(stream)),
             seekable,
+            error: None,
         }
     }
 
-    fn poll_writing(&mut self, context: &mut Context<'_>) -> Poll<io::Result<Option<usize>>> {
+    fn poll_writing(&mut self, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         let WriteJob::Writing(job) = &mut self.job else {
-            return Poll::Ready(Ok(None));
+            return Poll::Ready(Ok(()));
         };
         let result = Pin::new(job).poll(context);
         match result {
@@ -374,9 +400,14 @@ impl UnblockWrite {
                 Poll::Ready(Err(io::Error::other(error)))
             }
             Poll::Ready(Ok(output)) => {
-                let (stream, count, result) = output.into_parts();
+                let (stream, result) = output.into_parts();
                 self.job = WriteJob::Idle(Some(stream));
-                Poll::Ready(result.map(|()| Some(count)))
+                Poll::Ready(result.map_err(|error| {
+                    let error = Arc::new(error);
+                    let reported = io::Error::new(error.kind(), Arc::clone(&error));
+                    self.error = Some(error);
+                    reported
+                }))
             }
         }
     }
@@ -400,24 +431,27 @@ impl UnblockWrite {
         }
     }
 
-    fn start_write(&mut self, buffer: &[u8]) {
+    fn start_write(&mut self, buffer: &[u8]) -> usize {
         let WriteJob::Idle(stream) = &mut self.job else {
-            return;
+            unreachable!("writes start only with an idle stream");
         };
-        let Some(mut stream) = stream.take() else {
-            self.job = WriteJob::Failed;
-            return;
-        };
-        let bytes = buffer[..buffer.len().min(8192)].to_vec();
+        let mut stream = stream.take().expect("idle writer owns its stream");
+        let count = buffer.len().min(8192);
+        let bytes = buffer[..count].to_vec();
         self.job = WriteJob::Writing(spawn_io_worker(move || {
-            let result = stream.write(&bytes);
-            let count = result.as_ref().copied().unwrap_or(0);
+            let result = stream.write_all(&bytes);
             WriteOutput {
                 stream: Some(stream),
-                count,
-                result: Some(result.map(|_| ())),
+                result: Some(result),
             }
         }));
+        count
+    }
+
+    fn pending_error(&self) -> Option<io::Error> {
+        self.error
+            .as_ref()
+            .map(|error| io::Error::new(error.kind(), Arc::clone(error)))
     }
 
     fn start_flush(&mut self) {
@@ -438,38 +472,14 @@ impl UnblockWrite {
     }
 
     async fn recover_for_seek(&mut self) -> io::Result<WriteStream> {
-        let job = std::mem::replace(&mut self.job, WriteJob::Failed);
-        match job {
+        if let Some(error) = self.pending_error() {
+            return Err(error);
+        }
+        poll_fn(|context| self.poll_writing(context)).await?;
+        poll_fn(|context| self.poll_flushing(context)).await?;
+        match std::mem::replace(&mut self.job, WriteJob::Failed) {
             WriteJob::Idle(Some(stream)) => Ok(stream),
-            WriteJob::Idle(None) | WriteJob::Failed => {
-                Err(io::Error::other("remote write stream is unavailable"))
-            }
-            WriteJob::Writing(job) => match job.await {
-                Err(error) => Err(io::Error::other(error)),
-                Ok(output) => {
-                    let (stream, _count, result) = output.into_parts();
-                    self.job = WriteJob::Idle(Some(stream));
-                    result.map(
-                        |()| match std::mem::replace(&mut self.job, WriteJob::Failed) {
-                            WriteJob::Idle(Some(stream)) => stream,
-                            _ => unreachable!("write stream was restored above"),
-                        },
-                    )
-                }
-            },
-            WriteJob::Flushing(job) => match job.await {
-                Err(error) => Err(io::Error::other(error)),
-                Ok(output) => {
-                    let (stream, result) = output.into_parts();
-                    self.job = WriteJob::Idle(Some(stream));
-                    result.and_then(
-                        |()| match std::mem::replace(&mut self.job, WriteJob::Failed) {
-                            WriteJob::Idle(Some(stream)) => Ok(stream),
-                            _ => Err(io::Error::other("remote write stream is unavailable")),
-                        },
-                    )
-                }
-            },
+            _ => Err(io::Error::other("remote write stream is unavailable")),
         }
     }
 
@@ -478,7 +488,7 @@ impl UnblockWrite {
     ) -> Result<(WriteStream, Option<io::Error>), RemoteError> {
         let job = std::mem::replace(&mut self.job, WriteJob::Failed);
         match job {
-            WriteJob::Idle(Some(stream)) => Ok((stream, None)),
+            WriteJob::Idle(Some(stream)) => Ok((stream, self.pending_error())),
             WriteJob::Idle(None) | WriteJob::Failed => Err(RemoteError::with_message(
                 RemoteErrorType::ProtocolError,
                 "remote write stream is unavailable",
@@ -489,7 +499,7 @@ impl UnblockWrite {
                     error,
                 )),
                 Ok(output) => {
-                    let (stream, _count, result) = output.into_parts();
+                    let (stream, result) = output.into_parts();
                     Ok((stream, result.err()))
                 }
             },
@@ -517,30 +527,32 @@ impl futures_io::AsyncWrite for UnblockWrite {
         if buffer.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        loop {
-            match this.poll_flushing(context) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok(())) => {}
-            }
-            if let WriteJob::Writing(_) = this.job {
-                return match this.poll_writing(context) {
-                    Poll::Pending => Poll::Pending,
-                    Poll::Ready(Ok(Some(count))) => Poll::Ready(Ok(count)),
-                    Poll::Ready(Ok(None)) => continue,
-                    Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
-                };
-            }
-            if matches!(this.job, WriteJob::Idle(Some(_))) {
-                this.start_write(buffer);
-                continue;
-            }
-            return Poll::Ready(Err(io::Error::other("remote write stream is unavailable")));
+        if let Some(error) = this.pending_error() {
+            return Poll::Ready(Err(error));
         }
+        match this.poll_flushing(context) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+            Poll::Ready(Ok(())) => {}
+        }
+        match this.poll_writing(context) {
+            Poll::Pending => return Poll::Pending,
+            Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+            Poll::Ready(Ok(())) => {}
+        }
+        if matches!(this.job, WriteJob::Idle(Some(_))) {
+            // Only bytes copied from this call are acknowledged. A later poll may
+            // carry an entirely different buffer after a canceled write future.
+            return Poll::Ready(Ok(this.start_write(buffer)));
+        }
+        Poll::Ready(Err(io::Error::other("remote write stream is unavailable")))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         let this = self.as_mut().get_mut();
+        if let Some(error) = this.pending_error() {
+            return Poll::Ready(Err(error));
+        }
         match this.poll_writing(context) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
@@ -574,10 +586,14 @@ impl AsyncRemoteWrite for UnblockWrite {
         let mut stream = self.recover_for_seek().await?;
         let result = spawn_io_worker(move || {
             let result = stream.seek(position);
-            (stream, result)
+            SeekOutput {
+                stream: Some(stream),
+                result: Some(result),
+            }
         })
         .await
-        .map_err(io::Error::other)?;
+        .map_err(io::Error::other)?
+        .into_parts();
         self.job = WriteJob::Idle(Some(result.0));
         result.1
     }
@@ -633,14 +649,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || {
-        std::thread::scope(|scope| {
-            scope
-                .spawn(operation)
-                .join()
-                .expect("remote stream worker panicked")
-        })
-    })
+    tokio::task::spawn_blocking(operation)
 }
 
 #[derive(Debug, thiserror::Error)]

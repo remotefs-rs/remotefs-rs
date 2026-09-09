@@ -4,7 +4,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll};
 
 use futures_io::{AsyncRead, AsyncWrite};
 use tokio::runtime::Handle;
@@ -52,7 +52,7 @@ where
         Ok(copied)
     };
 
-    join_transfer(pump, worker).await
+    join_transfer(pump, worker, false).await
 }
 
 pub(super) async fn write_file<T>(
@@ -88,16 +88,26 @@ where
 
     let pump = async move {
         let mut writer = local.compat_write();
-        let copied = crate::io::copy(src, &mut writer)
+        let mut source = TrackedSource {
+            inner: src,
+            failed: false,
+        };
+        let copied = crate::io::copy(&mut source, &mut writer)
             .await
-            .map_err(PumpFailure::from_io)?;
+            .map_err(|error| PumpFailure {
+                consequential: !source.failed && error.kind() == std::io::ErrorKind::BrokenPipe,
+                error: RemoteError::from(error),
+            })?;
         close_writer(&mut writer)
             .await
-            .map_err(PumpFailure::from_io)?;
+            .map_err(|error| PumpFailure {
+                consequential: error.kind() == std::io::ErrorKind::BrokenPipe,
+                error: RemoteError::from(error),
+            })?;
         Ok(copied)
     };
 
-    join_transfer(pump, worker).await
+    join_transfer(pump, worker, true).await
 }
 
 fn spawn_io_worker<F, R>(operation: F) -> JoinHandle<R>
@@ -105,14 +115,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    spawn_blocking(move || {
-        std::thread::scope(|scope| {
-            scope
-                .spawn(operation)
-                .join()
-                .expect("remote transfer worker panicked")
-        })
-    })
+    spawn_blocking(operation)
 }
 
 async fn close_writer(writer: &mut (impl AsyncWrite + Unpin)) -> std::io::Result<()> {
@@ -127,7 +130,7 @@ struct PumpFailure {
 impl PumpFailure {
     fn from_io(error: std::io::Error) -> Self {
         Self {
-            consequential: error.kind() == std::io::ErrorKind::BrokenPipe,
+            consequential: false,
             error: RemoteError::from(error),
         }
     }
@@ -141,7 +144,11 @@ struct TransferPairFailure {
     worker: RemoteError,
 }
 
-async fn join_transfer<'a, F>(pump: F, worker: JoinHandle<RemoteResult<u64>>) -> RemoteResult<u64>
+async fn join_transfer<'a, F>(
+    pump: F,
+    worker: JoinHandle<RemoteResult<u64>>,
+    upload: bool,
+) -> RemoteResult<u64>
 where
     F: Future<Output = Result<u64, PumpFailure>> + 'a,
 {
@@ -196,6 +203,17 @@ where
             return Poll::Ready(result);
         }
 
+        // Upload overrides may consume only a declared length, without waiting for
+        // EOF. Their success closes our pipe; it must also stop the source pump.
+        // Downloads must keep pumping until all buffered bytes reach the caller.
+        if upload && worker_result.as_ref().is_some_and(Result::is_ok) {
+            pump = None;
+            return Poll::Ready(match pump_result.take() {
+                Some(Err(error)) if !error.consequential => Err(error.error),
+                _ => worker_result.take().expect("worker result exists"),
+            });
+        }
+
         match (pump_result.as_ref(), worker_result.as_ref()) {
             (Some(Err(_)), _) => {
                 pump = None;
@@ -221,3 +239,26 @@ where
     })
     .await
 }
+
+struct TrackedSource<'a> {
+    inner: &'a mut (dyn AsyncRead + Send + Unpin),
+    failed: bool,
+}
+
+impl AsyncRead for TrackedSource<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let result = Pin::new(&mut *self.inner).poll_read(context, buffer);
+        if matches!(&result, Poll::Ready(Err(error)) if error.kind() != std::io::ErrorKind::Interrupted)
+        {
+            self.failed = true;
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod tests;
