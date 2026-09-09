@@ -26,7 +26,7 @@ jobs:
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --profile minimal --component rustfmt
       - name: Check formatting
-        uses: dprint/check@06e1a587a762d4e06663c3e3d46afedc93d9f185 # v2.4
+        uses: dprint/check@7dc032d8874778fc024f6f9b4a7e6d896782c330 # v2.5
         with:
           dprint-version: 0.56.1
 
@@ -45,6 +45,8 @@ jobs:
         run: just clippy "--no-default-features -- -D warnings"
       - name: Lint with all features
         run: just clippy "--all-features -- -D warnings"
+      - name: Lint async without Tokio
+        run: just clippy "--no-default-features --features async -- -D warnings"
 
   quality-linux:
     name: Quality (Linux)
@@ -64,7 +66,7 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-llvm-cov
       - name: Build
@@ -73,6 +75,8 @@ jobs:
         run: just coverage
         env:
           RUST_LOG: trace
+      - name: Test all supported feature combinations
+        run: just test_features "--no-fail-fast"
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
@@ -90,8 +94,8 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - name: Build
         run: just build
-      - name: Test
-        run: just test "--no-fail-fast"
+      - name: Test all supported feature combinations
+        run: just test_features "--no-fail-fast"
         env:
           RUST_LOG: trace
       - name: Lint
@@ -108,8 +112,8 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - name: Build
         run: just build
-      - name: Test
-        run: just test "--no-fail-fast"
+      - name: Test all supported feature combinations
+        run: just test_features "--no-fail-fast"
         env:
           RUST_LOG: trace
       - name: Lint
@@ -126,6 +130,8 @@ jobs:
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - name: Build documentation
         run: just doc "--all-features"
+      - name: Check async-only documentation
+        run: just doc "--no-default-features --features async"
 
   dependencies:
     name: Dependencies
@@ -135,7 +141,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-deny
-        uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+        uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-deny
       - name: Install just
