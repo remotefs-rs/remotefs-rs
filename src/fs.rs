@@ -3,8 +3,8 @@
 //! This module is the whole public surface of the crate. It is split in four
 //! parts, each of which a client crate re-exports as-is:
 //!
-//! - [`RemoteFs`], the trait every protocol client implements. It is the only
-//!   thing a consumer programs against.
+//! - [`RemoteFs`] and `AsyncRemoteFs`, the blocking and runtime-neutral async
+//!   contracts every protocol client can implement.
 //! - The entry types — [`File`], [`Metadata`], [`FileType`], [`UnixPex`] and
 //!   [`UnixPexClass`] — which describe a remote entry the way `std::fs`
 //!   describes a local one, minus the parts no protocol can answer.
@@ -13,9 +13,10 @@
 //! - The failure types [`RemoteError`], [`RemoteErrorType`] and
 //!   [`RemoteResult`], plus [`Welcome`], the banner a server may greet with.
 //!
-//! Because every client crate re-exports these types, a change here is a change
-//! for the whole remotefs family: treat a new [`RemoteErrorType`] variant or a
-//! new [`Metadata`] field as a breaking change.
+//! Because every client crate re-exports these types, additions to the public
+//! contract are coordinated across the remotefs family. Paths passed to these
+//! contracts are absolute; use [`crate::WorkingDir`] or `AsyncWorkingDir` when
+//! a consumer needs relative paths.
 //!
 //! # Examples
 //!

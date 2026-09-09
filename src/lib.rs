@@ -12,9 +12,10 @@
 //! A protocol-agnostic view of a remote host as a file system.
 //!
 //! remotefs describes a remote host as if it were a directory tree mounted on the
-//! local machine. The entire contract is the [`RemoteFs`] trait: a protocol
-//! implements it once, and every consumer — a file manager, a FUSE mount, a backup
-//! job — works against every protocol without a single protocol-specific branch.
+//! local machine. A protocol implements [`RemoteFs`] or, with the `async`
+//! feature, `AsyncRemoteFs`. Every consumer — a file manager, a FUSE
+//! mount, a backup job — can then work against every compatible protocol without
+//! a protocol-specific branch.
 //!
 //! This crate carries the contract and the types that travel across it
 //! ([`File`], [`fs::Metadata`], [`fs::UnixPex`], [`fs::ReadStream`],
@@ -35,8 +36,7 @@
 //! Add remotefs and the client you need to your dependencies:
 //!
 //! ```toml
-//! remotefs = "0.3"
-//! remotefs-ssh = "0.4"
+//! remotefs = "1"
 //! ```
 //!
 //! Depend on this crate directly only when you write a client of your own or when
@@ -48,31 +48,37 @@
 //! | name     | description                                                                     | default |
 //! | -------- | ------------------------------------------------------------------------------- | ------- |
 //! | `async`  | Enable the runtime-neutral asynchronous filesystem contract and transfer types. |         |
-//! | `find`   | Enable `RemoteFs::find`, a recursive search matching names against a wildcard.   | ✔       |
-//! | `no-log` | Compile out every log statement by forcing `log/max_level_off`.                  |         |
+//! | `find`   | Enable the `find` and `find_async` explicit-root search functions.                | ✔       |
 //! | `tokio`  | Enable Tokio adapters for bridging blocking and asynchronous clients.             |         |
+//! | `no-log` | Compile out every log statement by forcing `log/max_level_off`.                  |         |
 //!
 //! ## Examples
 //!
-//! Code written against the trait works with any client:
+//! One-shot transfers borrow the caller's I/O object and return the byte count:
 //!
 //! ```
+//! use std::io::Cursor;
+//! use std::path::Path;
+//!
 //! use remotefs::fs::WriteOptions;
 //! use remotefs::{RemoteFs, RemoteResult};
 //!
-//! /// Upload content to an absolute path through any compatible client.
-//! fn upload<T>(client: &T, path: &std::path::Path, content: &[u8]) -> RemoteResult<u64>
-//! where
-//!     T: RemoteFs,
-//! {
-//!     let mut input = std::io::Cursor::new(content);
-//!     client.write_file(
-//!         path,
-//!         &WriteOptions::default().size_hint(content.len() as u64),
-//!         &mut input,
-//!     )
+//! fn upload(fs: &dyn RemoteFs, path: &Path, bytes: &[u8]) -> RemoteResult<u64> {
+//!     let opts = WriteOptions::default().size_hint(bytes.len() as u64);
+//!     let mut input = Cursor::new(bytes);
+//!     fs.write_file(path, &opts, &mut input)
 //! }
 //! ```
+//!
+//! Backends receive absolute paths. Use [`WorkingDir`] or `AsyncWorkingDir`
+//! when a consumer needs relative paths; use `find` or `find_async` with an
+//! explicit root for recursive search. Streams are owned and must be consumed
+//! by calling `finish`; dropping one abandons the transfer.
+//!
+//! With `tokio`, `adapters::blocking::BlockOn` exposes an async client to a
+//! blocking consumer and `adapters::r#async::Unblock` offloads a blocking
+//! client. Native async clients should be preferred when the protocol provides
+//! them.
 
 // -- export
 #[cfg(feature = "async")]
