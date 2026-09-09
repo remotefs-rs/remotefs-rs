@@ -93,6 +93,9 @@ pub mod working_dir;
 #[cfg(feature = "find")]
 #[doc(inline)]
 pub use find::find;
+#[cfg(all(feature = "async", feature = "find"))]
+#[doc(inline)]
+pub use find::find_async;
 #[cfg(feature = "async")]
 #[doc(inline)]
 pub use working_dir::AsyncWorkingDir;
