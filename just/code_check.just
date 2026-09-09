@@ -15,6 +15,11 @@ fmt_check args="":
 clippy args="":
   cargo clippy --all-targets {{ args }}
 
+# Inspect the resolved dependency graph.
+[group('code-check')]
+dependency_tree args="":
+  cargo tree {{ args }}
+
 # Build Rust documentation and deny warnings.
 [group('code-check')]
 doc args="":
@@ -24,6 +29,16 @@ doc args="":
 [group('code-check')]
 deny args="":
   cargo deny check {{ args }}
+
+# Audit GitHub Actions workflows.
+[group('code-check')]
+zizmor args="":
+  zizmor .github/workflows {{ args }}
+
+# Align Markdown tables in place.
+[group('code-check')]
+fmt_md_tables file:
+  fmt-md-tables -i {{ quote(file) }}
 
 # Scan paths for verified or unknown secrets.
 [group('code-check')]

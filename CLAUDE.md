@@ -15,12 +15,17 @@ recipe, add one under `just/` before using it. Run `just` to list all recipes.
 just build                 # cargo build --all-targets
 just release               # release build
 just test                  # cargo test --lib, then --doc
+just test_features         # every supported feature combination
 just coverage              # cargo llvm-cov, writes lcov.info
 just fmt                   # dprint fmt (Markdown, Rust, TOML, YAML)
 just fmt_check             # dprint check
 just lint "-- -D warnings" # alias of just clippy
 just doc                   # cargo doc --no-deps with RUSTDOCFLAGS="-D warnings"
 just deny                  # cargo deny check
+just dependency_tree       # inspect normal dependency edges
+just zizmor                # audit GitHub Actions workflows
+just fmt_md_tables FILE    # align a Markdown table in place
+just package_list          # inspect package contents without Cargo.lock
 just scan_secrets          # trufflehog filesystem
 just check                 # the full local quality gate
 just setup_githooks        # point core.hooksPath at .githooks
@@ -32,11 +37,11 @@ just publish "--dry-run --allow-dirty"
 `just check` is the required gate before declaring work done. It chains
 `fmt_check`, Clippy with warnings denied, `doc`, `deny`, and `test`.
 
-Recipes build with default features (`find`). CI additionally lints with
-`--no-default-features` and with `--all-features`, because `no-log` compiles
-out every `log` macro and can turn otherwise-live bindings into dead code.
-There is no container, network, or platform dependency: the whole suite is
-plain unit tests plus doctests and runs everywhere.
+Recipes build with default features (`find`). CI tests the no-default,
+default, async-only, async-with-find, Tokio-only, Tokio-with-find, and
+all-feature combinations. There is no container, network, or platform
+dependency: the whole suite is plain unit tests plus doctests and runs
+everywhere.
 
 If a required tool is missing, say so. Never claim a check passed or silently
 swap in a weaker command.
@@ -51,26 +56,32 @@ family. It defines the protocol-agnostic contract that every backend
 is a library-only crate (`src/lib.rs`, crate name `remotefs`) with no binaries
 and no examples.
 
-- **`RemoteFs` is the whole API surface.** `src/fs/sync.rs` declares the trait:
-  required methods are the ones only a protocol can answer (`connect`,
-  `list_dir`, `stat`, `open`, `create`, ...), while `remove_dir_all`,
-  `append_file`, `create_file`, `open_file`, `on_written`, `on_read`, and
-  `find` ship default implementations built on top of the required ones. A
-  backend overrides a defaulted method only when the protocol offers a faster
-  path. Because the trait must stay object-safe (`Box<dyn RemoteFs>` is tested
-  in `src/fs/sync.rs`), never add generic methods to it.
+- **The filesystem contracts are absolute-path APIs.** `src/fs/sync.rs` declares
+  `RemoteFs` and `src/fs/async.rs` declares `AsyncRemoteFs` when the `async`
+  feature is enabled. Required methods answer protocol questions; recursive
+  removal and one-shot transfers have default implementations. Backends may
+  override defaults when the protocol offers a faster path. Both traits must
+  remain object-safe, so never add generic methods to them.
 - **Types are shared, not per-backend.** `src/fs/file/` holds `File`,
   `Metadata`, `FileType`, `UnixPex`, and `UnixPexClass`; `src/fs/errors.rs`
-  holds `RemoteError`/`RemoteErrorType`/`RemoteResult`; `src/fs/welcome.rs`
-  holds `Welcome`. Every downstream crate re-exports these, so any change here
-  is a breaking change for the entire family — treat additions to
-  `RemoteErrorType` and `Metadata` as semver-major.
-- **Streams erase the backend.** `src/fs/stream.rs` wraps caller-supplied
-  readers and writers in `ReadStream`/`WriteStream`. Each holds either a plain
-  `Read`/`Write` or a `Read + Seek`/`Write + Seek` box; `seekable()` reports
-  which, and seeking a non-seekable stream returns `ErrorKind::Unsupported`.
-  All boxed trait objects are `Send` so a backend can move a transfer to
-  another thread.
+  holds `RemoteError`/`RemoteErrorType`/`RemoteResult`, and `src/fs/options.rs`
+  holds transfer options and command
+  output. Downstream crates re-export these types; coordinate public contract
+  changes across the family.
+- **Streams own transfer state.** `src/fs/stream.rs` defines `RemoteRead` and
+  `RemoteWrite`, which back `ReadStream`/`WriteStream`. Each stream may be
+  seekable; seeking a non-seekable stream returns `ErrorKind::Unsupported`.
+  `finish` consumes the stream and completes the protocol transfer. Dropping
+  one abandons it, with backend-specific best-effort cleanup.
+- **Async streams are runtime-neutral.** `src/fs/stream/async.rs` uses
+  `futures-io` and exposes `AsyncReadStream`/`AsyncWriteStream`. The Tokio
+  adapters live in `src/adapters/blocking/` and `src/adapters/async/`:
+  `BlockOn` presents async clients to blocking consumers, while `Unblock`
+  offloads blocking clients for async consumers.
+- **Paths are absolute on the remote host.** `src/path.rs` validates POSIX,
+  Windows drive, and UNC roots independently of the client platform. There is
+  no working-directory wrapper or relative-path resolver. `src/find.rs`
+  provides explicit-root `find` and `find_async`.
 - **Command layer.** `Justfile` is a thin importer. Each recipe group lives in
   its own file under `just/` (`build`, `test`, `code_check`, `changelog`,
   `publish`) and carries a `[group(...)]` attribute so `just --list` stays
@@ -84,7 +95,9 @@ and no examples.
   `just fmt`.
 - **Release path.** Commits follow Conventional Commits and `cliff.toml` turns
   them into `CHANGELOG.md`. Publishing goes through `just publish`
-  (`cargo publish --locked`); version bumps live in `Cargo.toml`.
+  (`cargo publish --locked`); the package is prepared as version `1.0.0` in
+  `Cargo.toml`. `MIGRATION.md` and the packaged migration skill are included
+  in the crate.
 - **Supply-chain policy.** `deny.toml` is strict: license allowlist,
   `yanked = "deny"`, `unmaintained = "all"`, wildcard versions denied, and
   crates.io as the only allowed source. It runs with `all-features = true`.

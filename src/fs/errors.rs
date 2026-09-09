@@ -1,57 +1,159 @@
 //! Failure types shared by every remotefs client.
 //!
-//! A client never invents its own error type. It maps whatever the protocol
-//! reported onto one of the [`RemoteErrorType`] variants, optionally attaching
-//! the original message, and returns the pair as a [`RemoteError`]. Callers can
-//! therefore match on the kind of failure without knowing which protocol
-//! produced it, and still surface the protocol's own wording to a user.
-//!
-//! [`RemoteErrorType`] is deliberately small and closed. Adding a variant is a
-//! breaking change for every crate in the family, so a protocol-specific failure
-//! that does not fit an existing variant belongs in the message, not in a new
-//! variant.
+//! A client maps protocol failures onto [`RemoteErrorType`] and retains the
+//! original cause in [`RemoteError`] whenever one is available. Callers can
+//! classify failures without losing protocol-specific diagnostic information.
 
 use std::error::Error as StdError;
-use std::fmt;
+use std::{fmt, io};
 
 use thiserror::Error;
 
 /// The result of any fallible [`crate::RemoteFs`] operation.
 pub type RemoteResult<T> = Result<T, RemoteError>;
 
-/// A failure reported by a remote file system, with optional detail.
-///
-/// The [`kind`](RemoteError::kind) classifies the failure in protocol-agnostic
-/// terms, so callers can react to it. The [`msg`](RemoteError::msg) carries
-/// whatever the protocol said, so a user can be told what actually went wrong.
-///
-/// # Examples
-///
-/// ```
-/// use remotefs::{RemoteError, RemoteErrorType};
-///
-/// let err = RemoteError::new_ex(RemoteErrorType::StatFailed, "permission denied");
-///
-/// assert_eq!(err.kind, RemoteErrorType::StatFailed);
-/// assert_eq!(err.to_string(), "could not stat file (permission denied)");
-/// ```
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+/// A protocol-agnostic failure with an optional typed source error.
+#[non_exhaustive]
+#[derive(Debug)]
 pub struct RemoteError {
-    /// Protocol-agnostic classification of the failure.
-    pub kind: RemoteErrorType,
-    /// The detail reported by the protocol, when there is one.
-    pub msg: Option<String>,
+    kind: RemoteErrorType,
+    source: Option<Box<dyn StdError + Send + Sync>>,
+}
+
+impl RemoteError {
+    /// Creates an error without a source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use remotefs::{RemoteError, RemoteErrorType};
+    ///
+    /// let error = RemoteError::new(RemoteErrorType::NotConnected);
+    /// assert_eq!(error.kind(), RemoteErrorType::NotConnected);
+    /// assert!(std::error::Error::source(&error).is_none());
+    /// ```
+    pub fn new(kind: RemoteErrorType) -> Self {
+        Self { kind, source: None }
+    }
+
+    /// Creates an error while preserving a typed source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::io;
+    ///
+    /// use remotefs::{RemoteError, RemoteErrorType};
+    ///
+    /// let error = RemoteError::with_source(
+    ///     RemoteErrorType::IoError,
+    ///     io::Error::new(io::ErrorKind::UnexpectedEof, "short read"),
+    /// );
+    /// assert_eq!(error.kind(), RemoteErrorType::IoError);
+    /// assert_eq!(error.to_string(), "IO error (short read)");
+    /// ```
+    pub fn with_source<E>(kind: RemoteErrorType, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self {
+            kind,
+            source: Some(Box::new(source)),
+        }
+    }
+
+    /// Creates an error with human-readable detail as its source message.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use remotefs::{RemoteError, RemoteErrorType};
+    ///
+    /// let error = RemoteError::with_message(RemoteErrorType::BadFile, "not regular");
+    /// assert_eq!(error.to_string(), "bad file (not regular)");
+    /// ```
+    pub fn with_message(kind: RemoteErrorType, message: impl Into<String>) -> Self {
+        Self::with_source(kind, Message(message.into()))
+    }
+
+    /// Returns the protocol-agnostic classification of this error.
+    pub const fn kind(&self) -> RemoteErrorType {
+        self.kind
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("{0}")]
+struct Message(String);
+
+impl fmt::Display for RemoteError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.source {
+            Some(source) => write!(formatter, "{} ({source})", self.kind),
+            None => self.kind.fmt(formatter),
+        }
+    }
+}
+
+impl StdError for RemoteError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        self.source
+            .as_ref()
+            .map(|source| &**source as &(dyn StdError + 'static))
+    }
+}
+
+impl From<io::Error> for RemoteError {
+    fn from(error: io::Error) -> Self {
+        let kind = match error.kind() {
+            io::ErrorKind::NotFound => RemoteErrorType::NoSuchFileOrDirectory,
+            io::ErrorKind::PermissionDenied => RemoteErrorType::PermissionDenied,
+            io::ErrorKind::AlreadyExists => RemoteErrorType::AlreadyExists,
+            io::ErrorKind::NotConnected => RemoteErrorType::NotConnected,
+            io::ErrorKind::InvalidInput => RemoteErrorType::InvalidPath,
+            io::ErrorKind::Unsupported => RemoteErrorType::UnsupportedFeature,
+            io::ErrorKind::DirectoryNotEmpty => RemoteErrorType::DirectoryNotEmpty,
+            io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted => RemoteErrorType::ConnectionError,
+            _ => RemoteErrorType::IoError,
+        };
+        Self::with_source(kind, error)
+    }
+}
+
+impl From<RemoteError> for io::Error {
+    fn from(error: RemoteError) -> Self {
+        let kind = match error.kind {
+            RemoteErrorType::NoSuchFileOrDirectory => io::ErrorKind::NotFound,
+            RemoteErrorType::PermissionDenied | RemoteErrorType::AuthenticationFailed => {
+                io::ErrorKind::PermissionDenied
+            }
+            RemoteErrorType::AlreadyExists => io::ErrorKind::AlreadyExists,
+            RemoteErrorType::NotConnected => io::ErrorKind::NotConnected,
+            RemoteErrorType::InvalidPath
+            | RemoteErrorType::SizeRequired
+            | RemoteErrorType::BadAddress => io::ErrorKind::InvalidInput,
+            RemoteErrorType::UnsupportedFeature => io::ErrorKind::Unsupported,
+            RemoteErrorType::DirectoryNotEmpty => io::ErrorKind::DirectoryNotEmpty,
+            RemoteErrorType::ConnectionError => io::ErrorKind::ConnectionAborted,
+            RemoteErrorType::ProtocolError => io::ErrorKind::InvalidData,
+            _ => io::ErrorKind::Other,
+        };
+        io::Error::new(kind, error)
+    }
 }
 
 /// The protocol-agnostic classification of a [`RemoteError`].
-///
-/// Every variant renders as a short lower-case sentence through [`fmt::Display`],
-/// which [`RemoteError`] embeds in its own message.
+#[non_exhaustive]
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RemoteErrorType {
     /// A connection was requested while one was already established.
     #[error("already connected")]
     AlreadyConnected,
+    /// The connection is not established.
+    #[error("not connected yet")]
+    NotConnected,
     /// The server rejected the supplied credentials.
     #[error("authentication failed")]
     AuthenticationFailed,
@@ -61,181 +163,195 @@ pub enum RemoteErrorType {
     /// The transport could not be established or was lost.
     #[error("connection error")]
     ConnectionError,
-    /// The TLS or SSH layer failed to negotiate or verify.
-    #[error("SSL error")]
-    SslError,
-    /// The metadata of an entry could not be read.
-    #[error("could not stat file")]
-    StatFailed,
+    /// An entry already exists at the requested path.
+    #[error("already exists")]
+    AlreadyExists,
     /// The entry exists but is not usable for the requested operation.
     #[error("bad file")]
     BadFile,
-    /// A directory was created at a path that already holds one.
-    #[error("directory already exists")]
-    DirectoryAlreadyExists,
+    /// The file could not be opened.
+    #[error("failed to open file")]
+    CouldNotOpenFile,
+    /// The file could not be removed.
+    #[error("failed to remove file")]
+    CouldNotRemoveFile,
     /// A directory was removed while it still had entries.
     #[error("directory is not empty")]
     DirectoryNotEmpty,
-    /// The server refused to create the file.
+    /// The server refused to create a file.
     #[error("failed to create file")]
     FileCreateDenied,
-    /// The file exists but could not be opened.
-    #[error("failed to open file")]
-    CouldNotOpenFile,
-    /// The file exists but could not be removed.
-    #[error("failed to remove file")]
-    CouldNotRemoveFile,
-    /// A read or write on the underlying stream failed.
+    /// An input or output operation failed without a more specific category.
     #[error("IO error")]
     IoError,
     /// No entry exists at the requested path.
     #[error("no such file or directory")]
     NoSuchFileOrDirectory,
-    /// The credentials in use are not entitled to the operation.
+    /// The server refused a metadata or permission operation.
     #[error("not enough permissions")]
-    PexError,
+    PermissionDenied,
+    /// A path is relative or otherwise malformed for the operation.
+    #[error("invalid path")]
+    InvalidPath,
+    /// A protocol requires a transfer size before opening it.
+    #[error("size required")]
+    SizeRequired,
+    /// The metadata of an entry could not be read.
+    #[error("could not stat file")]
+    StatFailed,
     /// The server answered in a way the protocol does not allow.
     #[error("protocol error")]
     ProtocolError,
-    /// An operation was requested before connecting.
-    #[error("not connected yet")]
-    NotConnected,
     /// The protocol has no equivalent for the requested operation.
     #[error("unsupported feature")]
     UnsupportedFeature,
 }
 
-impl RemoteError {
-    /// Build an error of the given kind, with no detail.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use remotefs::{RemoteError, RemoteErrorType};
-    ///
-    /// let err = RemoteError::new(RemoteErrorType::NotConnected);
-    ///
-    /// assert!(err.msg.is_none());
-    /// assert_eq!(err.to_string(), "not connected yet");
-    /// ```
-    pub fn new(kind: RemoteErrorType) -> RemoteError {
-        RemoteError { kind, msg: None }
-    }
-
-    /// Build an error of the given kind, carrying the protocol's own detail.
-    ///
-    /// Use this whenever the protocol said something more precise than the kind
-    /// does; `msg` is rendered in parentheses after the kind.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use remotefs::{RemoteError, RemoteErrorType};
-    ///
-    /// let err = RemoteError::new_ex(RemoteErrorType::ConnectionError, "connection reset");
-    ///
-    /// assert_eq!(err.to_string(), "connection error (connection reset)");
-    /// ```
-    pub fn new_ex<S: ToString>(kind: RemoteErrorType, msg: S) -> RemoteError {
-        let mut err: RemoteError = RemoteError::new(kind);
-        err.msg = Some(msg.to_string());
-        err
-    }
-}
-
-impl fmt::Display for RemoteError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.msg {
-            Some(msg) => write!(f, "{} ({})", self.kind, msg),
-            None => write!(f, "{}", self.kind),
-        }
-    }
-}
-
-impl StdError for RemoteError {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(&self.kind)
-    }
-}
-
 #[cfg(test)]
 mod test {
+    use std::error::Error;
+    use std::io;
+
     use pretty_assertions::assert_eq;
 
     use super::*;
 
     #[test]
     fn should_format_errors() {
-        let err: RemoteError = RemoteError::new_ex(
-            RemoteErrorType::NoSuchFileOrDirectory,
-            String::from("non va una mazza"),
-        );
-        assert_eq!(*err.msg.as_ref().unwrap(), String::from("non va una mazza"));
+        let error =
+            RemoteError::with_message(RemoteErrorType::NoSuchFileOrDirectory, "non va una mazza");
         assert_eq!(
-            err.to_string(),
-            String::from("no such file or directory (non va una mazza)")
+            error.to_string(),
+            "no such file or directory (non va una mazza)"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::AlreadyConnected).to_string(),
-            String::from("already connected")
+            "already connected"
         );
         assert_eq!(
-            format!(
-                "{}",
-                RemoteError::new(RemoteErrorType::AuthenticationFailed)
-            ),
-            String::from("authentication failed")
+            RemoteError::new(RemoteErrorType::AuthenticationFailed).to_string(),
+            "authentication failed"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::BadAddress).to_string(),
-            String::from("bad address syntax")
+            "bad address syntax"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::ConnectionError).to_string(),
-            String::from("connection error")
+            "connection error"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::StatFailed).to_string(),
-            String::from("could not stat file")
+            "could not stat file"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::FileCreateDenied).to_string(),
-            String::from("failed to create file")
+            "failed to create file"
         );
         assert_eq!(
-            format!(
-                "{}",
-                RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)
-            ),
-            String::from("no such file or directory")
+            RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory).to_string(),
+            "no such file or directory"
         );
         assert_eq!(
-            RemoteError::new(RemoteErrorType::PexError).to_string(),
-            String::from("not enough permissions")
+            RemoteError::new(RemoteErrorType::PermissionDenied).to_string(),
+            "not enough permissions"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::ProtocolError).to_string(),
-            String::from("protocol error")
-        );
-        assert_eq!(
-            RemoteError::new(RemoteErrorType::SslError).to_string(),
-            String::from("SSL error")
+            "protocol error"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::NotConnected).to_string(),
-            String::from("not connected yet")
+            "not connected yet"
         );
         assert_eq!(
             RemoteError::new(RemoteErrorType::UnsupportedFeature).to_string(),
-            String::from("unsupported feature")
+            "unsupported feature"
         );
-        let err = RemoteError::new(RemoteErrorType::UnsupportedFeature);
-        assert_eq!(err.kind, RemoteErrorType::UnsupportedFeature);
     }
 
     #[test]
     fn should_report_error_cause() {
         let error = RemoteError::new(RemoteErrorType::UnsupportedFeature);
-        assert!(error.source().is_some());
+        assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn io_error_round_trip_preserves_original_source() {
+        let original = io::Error::new(io::ErrorKind::PermissionDenied, "denied");
+        let remote = RemoteError::from(original);
+        assert_eq!(remote.kind(), RemoteErrorType::PermissionDenied);
+        assert!(remote.source().unwrap().is::<io::Error>());
+
+        let outer = io::Error::from(remote);
+        assert_eq!(outer.kind(), io::ErrorKind::PermissionDenied);
+        let remote = outer
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<RemoteError>()
+            .unwrap();
+        assert_eq!(remote.source().unwrap().to_string(), "denied");
+    }
+
+    #[test]
+    fn remote_error_displays_kind_and_source() {
+        assert_eq!(
+            RemoteError::new(RemoteErrorType::InvalidPath).to_string(),
+            "invalid path"
+        );
+        assert_eq!(
+            RemoteError::with_message(RemoteErrorType::IoError, "denied").to_string(),
+            "IO error (denied)"
+        );
+        assert_eq!(
+            RemoteError::with_source(
+                RemoteErrorType::ConnectionError,
+                io::Error::new(io::ErrorKind::ConnectionReset, "reset"),
+            )
+            .to_string(),
+            "connection error (reset)"
+        );
+    }
+
+    #[test]
+    fn io_error_kinds_map_to_remote_error_types() {
+        let cases = [
+            (
+                io::ErrorKind::NotFound,
+                RemoteErrorType::NoSuchFileOrDirectory,
+            ),
+            (
+                io::ErrorKind::PermissionDenied,
+                RemoteErrorType::PermissionDenied,
+            ),
+            (io::ErrorKind::AlreadyExists, RemoteErrorType::AlreadyExists),
+            (io::ErrorKind::NotConnected, RemoteErrorType::NotConnected),
+            (io::ErrorKind::InvalidInput, RemoteErrorType::InvalidPath),
+            (
+                io::ErrorKind::Unsupported,
+                RemoteErrorType::UnsupportedFeature,
+            ),
+            (
+                io::ErrorKind::DirectoryNotEmpty,
+                RemoteErrorType::DirectoryNotEmpty,
+            ),
+            (
+                io::ErrorKind::ConnectionRefused,
+                RemoteErrorType::ConnectionError,
+            ),
+            (
+                io::ErrorKind::ConnectionReset,
+                RemoteErrorType::ConnectionError,
+            ),
+            (
+                io::ErrorKind::ConnectionAborted,
+                RemoteErrorType::ConnectionError,
+            ),
+            (io::ErrorKind::Other, RemoteErrorType::IoError),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(RemoteError::from(io::Error::from(kind)).kind(), expected);
+        }
     }
 }
