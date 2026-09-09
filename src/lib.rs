@@ -77,6 +77,7 @@
 pub use fs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
 pub mod fs;
+pub mod path;
 
 // -- utils
 pub(crate) mod utils;

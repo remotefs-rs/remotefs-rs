@@ -15,10 +15,8 @@ use super::{FileType, UnixPex};
 /// "zero".
 ///
 /// The builder methods each set one field and return `self`, so metadata can be
-/// assembled in one expression. They are also what a caller passes to
-/// [`crate::RemoteFs::setstat`], and what
-/// [`crate::RemoteFs::create`]/[`crate::RemoteFs::append`] read for the transfer
-/// size that SCP requires up front.
+/// assembled in one expression. A missing size means the protocol did not
+/// report one, while `Some(0)` means the known size is explicitly zero.
 ///
 /// # Examples
 ///
@@ -34,9 +32,10 @@ use super::{FileType, UnixPex};
 ///     .gid(1000);
 ///
 /// assert!(metadata.is_dir());
-/// assert_eq!(metadata.size, 0);
+/// assert_eq!(metadata.size, None);
 /// assert!(metadata.created.is_none());
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Metadata {
     /// Last access time, when the protocol reports one.
@@ -49,8 +48,8 @@ pub struct Metadata {
     pub mode: Option<UnixPex>,
     /// Last modification time, when the protocol reports one.
     pub modified: Option<SystemTime>,
-    /// Size in bytes; zero for entries that have no size.
-    pub size: u64,
+    /// Size in bytes, or `None` when the protocol did not report one.
+    pub size: Option<u64>,
     /// For a symbolic link, the path it points at.
     pub symlink: Option<PathBuf>,
     /// Whether the entry is a directory, a file, or a link.
@@ -67,7 +66,7 @@ impl Default for Metadata {
             gid: None,
             mode: None,
             modified: None,
-            size: 0,
+            size: None,
             symlink: None,
             file_type: FileType::File,
             uid: None,
@@ -107,12 +106,8 @@ impl Metadata {
     }
 
     /// Set the size in bytes, consuming and returning `self`.
-    ///
-    /// Set this before a [`crate::RemoteFs::create`] or
-    /// [`crate::RemoteFs::append`] on a protocol such as SCP, which needs the
-    /// transfer size before the first byte is sent.
     pub fn size(mut self, size: u64) -> Self {
-        self.size = size;
+        self.size = Some(size);
         self
     }
 
@@ -169,7 +164,7 @@ impl From<StdMetadata> for Metadata {
             file_type: FileType::from(metadata.file_type()),
             modified: metadata.modified().ok(),
             mode: None,
-            size: metadata.len(),
+            size: Some(metadata.len()),
             symlink: None,
             uid: None,
         }
@@ -189,11 +184,11 @@ impl From<StdMetadata> for Metadata {
             file_type: FileType::from(metadata.file_type()),
             modified: metadata.modified().ok(),
             mode: Some(UnixPex::from(metadata.mode())),
-            size: if metadata.is_dir() {
+            size: Some(if metadata.is_dir() {
                 metadata.blksize()
             } else {
                 metadata.len()
-            },
+            }),
             symlink: None,
             uid: Some(metadata.uid()),
         }
@@ -218,7 +213,7 @@ mod test {
         assert!(metadata.gid.is_none());
         assert!(metadata.mode.is_none());
         assert!(metadata.modified.is_none());
-        assert_eq!(metadata.size, 0);
+        assert_eq!(metadata.size, None);
         assert!(metadata.symlink.is_none());
         assert_eq!(metadata.file_type, FileType::File);
         assert!(metadata.uid.is_none());
@@ -252,7 +247,7 @@ mod test {
         assert_eq!(metadata.gid.unwrap(), 14);
         assert!(metadata.mode.is_some());
         assert_eq!(metadata.modified, Some(modified));
-        assert_eq!(metadata.size, 1024);
+        assert_eq!(metadata.size, Some(1024));
         assert!(metadata.is_symlink());
         assert!(!metadata.is_dir());
         assert!(!metadata.is_file());
@@ -271,7 +266,7 @@ mod test {
         let metadata = Metadata::from(metadata);
         assert!(metadata.is_file());
         assert!(metadata.symlink.is_none());
-        assert_eq!(metadata.size, 0);
+        assert_eq!(metadata.size, Some(0));
         assert!(metadata.gid.is_none());
         assert!(metadata.uid.is_none());
         assert!(metadata.mode.is_none());
@@ -285,7 +280,7 @@ mod test {
         let metadata = Metadata::from(metadata);
         assert!(metadata.is_file());
         assert!(metadata.symlink.is_none());
-        assert_eq!(metadata.size, 0);
+        assert_eq!(metadata.size, Some(0));
         assert!(metadata.gid.is_some());
         assert!(metadata.uid.is_some());
         assert!(metadata.mode.is_some());

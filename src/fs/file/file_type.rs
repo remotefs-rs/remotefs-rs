@@ -20,6 +20,7 @@ use std::fs::FileType as StdFileType;
 /// assert!(!FileType::Symlink.is_file());
 /// assert_eq!(FileType::default(), FileType::File);
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum FileType {
     /// A directory.
