@@ -131,7 +131,14 @@ impl AsyncRead for BorrowedRead<'_> {
         _context: &mut Context<'_>,
         buffer: &mut [u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.0.read(buffer))
+        let source = &mut *self.0;
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| source.read(buffer))
+                .join()
+                .expect("borrowed reader worker panicked")
+        });
+        Poll::Ready(result)
     }
 }
 
@@ -149,14 +156,28 @@ impl AsyncWrite for BorrowedWrite<'_> {
         _context: &mut Context<'_>,
         buffer: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Poll::Ready(self.0.write(buffer))
+        let target = &mut *self.0;
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| target.write(buffer))
+                .join()
+                .expect("borrowed writer worker panicked")
+        });
+        Poll::Ready(result)
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(self.0.flush())
+        let target = &mut *self.0;
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| target.flush())
+                .join()
+                .expect("borrowed writer worker panicked")
+        });
+        Poll::Ready(result)
     }
 
-    fn poll_close(mut self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(self.0.flush())
+    fn poll_close(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.poll_flush(_context)
     }
 }

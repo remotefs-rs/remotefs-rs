@@ -156,3 +156,176 @@ fn block_on_panics_inside_async_context() {
         adapter.stat(&MockRemoteFs::path("missing")).unwrap();
     });
 }
+
+#[test]
+fn unblock_block_on_round_trip_keeps_the_contract() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let blocking = BlockOn::new(MockRemoteFs::new(), runtime.handle().clone());
+    runtime.block_on(async {
+        use crate::r#async::Unblock;
+        use crate::fs::AsyncRemoteFs;
+
+        let mut fs = Unblock::new(blocking);
+        AsyncRemoteFs::connect(&mut fs).await.unwrap();
+        let path = MockRemoteFs::path("round-trip");
+        let mut input = crate::mock::async_io::AsyncCursor::new(b"round trip".to_vec());
+        AsyncRemoteFs::write_file(&fs, &path, &WriteOptions::default(), &mut input)
+            .await
+            .unwrap();
+        let mut output = crate::mock::async_io::AsyncCursor::new(Vec::new());
+        assert_eq!(
+            AsyncRemoteFs::read_file(&fs, &path, &ReadOptions::default(), &mut output)
+                .await
+                .unwrap(),
+            10
+        );
+        assert_eq!(output.into_inner(), b"round trip");
+        AsyncRemoteFs::disconnect(&mut fs).await.unwrap();
+        assert!(!AsyncRemoteFs::is_connected(&fs));
+    });
+}
+
+#[test]
+fn unblock_streams_offload_io_and_finish_once() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let client = MockRemoteFs::connected();
+    let path = MockRemoteFs::path("stream-round-trip");
+    client.seed_file(&path, b"stream data");
+
+    runtime.block_on(async {
+        use crate::r#async::Unblock;
+        use crate::fs::AsyncRemoteFs;
+
+        let fs = Unblock::new(client);
+        let mut reader = AsyncRemoteFs::open(&fs, &path, &ReadOptions::default())
+            .await
+            .unwrap();
+        let mut output = crate::mock::async_io::AsyncCursor::new(Vec::new());
+        assert_eq!(crate::io::copy(&mut reader, &mut output).await.unwrap(), 11);
+        crate::io::flush(&mut output).await.unwrap();
+        reader.finish().await.unwrap();
+        assert_eq!(output.into_inner(), b"stream data");
+
+        let mut writer = AsyncRemoteFs::create(&fs, &path, &WriteOptions::default())
+            .await
+            .unwrap();
+        let mut input = crate::mock::async_io::AsyncCursor::new(b"new data".to_vec());
+        assert_eq!(crate::io::copy(&mut input, &mut writer).await.unwrap(), 8);
+        crate::io::flush(&mut writer).await.unwrap();
+        writer.finish().await.unwrap();
+
+        let mut output = crate::mock::async_io::AsyncCursor::new(Vec::new());
+        assert_eq!(
+            AsyncRemoteFs::read_file(&fs, &path, &ReadOptions::default(), &mut output)
+                .await
+                .unwrap(),
+            8
+        );
+        assert_eq!(output.into_inner(), b"new data");
+    });
+}
+
+#[test]
+fn unblock_streams_preserve_seek_and_current_position() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let client = MockRemoteFs::connected();
+    let path = MockRemoteFs::path("seek-round-trip");
+    client.seed_file(&path, b"abcdef");
+
+    runtime.block_on(async {
+        use std::io::SeekFrom;
+        use std::pin::Pin;
+
+        use crate::r#async::Unblock;
+        use crate::fs::AsyncRemoteFs;
+
+        let fs = Unblock::new(client);
+        let mut reader = AsyncRemoteFs::open(&fs, &path, &ReadOptions::default())
+            .await
+            .unwrap();
+        let position = std::future::poll_fn(|context| {
+            futures_io::AsyncSeek::poll_seek(Pin::new(&mut reader), context, SeekFrom::Start(2))
+        })
+        .await
+        .unwrap();
+        assert_eq!(position, 2);
+        let mut output = crate::mock::async_io::AsyncCursor::new(Vec::new());
+        crate::io::copy(&mut reader, &mut output).await.unwrap();
+        reader.finish().await.unwrap();
+        assert_eq!(output.into_inner(), b"cdef");
+
+        let mut writer = AsyncRemoteFs::create(&fs, &path, &WriteOptions::default())
+            .await
+            .unwrap();
+        let _ = futures_io::AsyncWrite::poll_write(
+            Pin::new(&mut writer),
+            &mut std::task::Context::from_waker(std::task::Waker::noop()),
+            b"abc",
+        );
+        let position = std::future::poll_fn(|context| {
+            futures_io::AsyncSeek::poll_seek(Pin::new(&mut writer), context, SeekFrom::Start(1))
+        })
+        .await
+        .unwrap();
+        assert_eq!(position, 1);
+        std::future::poll_fn(|context| {
+            futures_io::AsyncWrite::poll_write(Pin::new(&mut writer), context, b"X")
+        })
+        .await
+        .unwrap();
+        crate::io::flush(&mut writer).await.unwrap();
+        writer.finish().await.unwrap();
+
+        let mut output = crate::mock::async_io::AsyncCursor::new(Vec::new());
+        AsyncRemoteFs::read_file(&fs, &path, &ReadOptions::default(), &mut output)
+            .await
+            .unwrap();
+        assert_eq!(output.into_inner(), b"aXc");
+    });
+}
+
+#[test]
+fn block_on_unblock_can_run_while_the_owner_drives_tokio() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    let done = Arc::new(AtomicBool::new(false));
+    let done_from_worker = done.clone();
+    let path = MockRemoteFs::path("reverse-round-trip");
+    let handle = runtime.handle().clone();
+    let worker = std::thread::spawn(move || {
+        let adapter = BlockOn::new(
+            crate::r#async::Unblock::new(MockRemoteFs::connected()),
+            handle,
+        );
+        let mut input = std::io::Cursor::new(b"reverse".to_vec());
+        adapter
+            .write_file(&path, &WriteOptions::default(), &mut input)
+            .unwrap();
+        let mut output = Vec::new();
+        assert_eq!(
+            adapter
+                .read_file(&path, &ReadOptions::default(), &mut output)
+                .unwrap(),
+            7
+        );
+        assert_eq!(output, b"reverse");
+        done_from_worker.store(true, Ordering::Release);
+    });
+
+    runtime.block_on(async {
+        while !done.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    });
+    worker.join().unwrap();
+}

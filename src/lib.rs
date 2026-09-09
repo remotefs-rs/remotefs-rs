@@ -50,6 +50,7 @@
 //! | `async`  | Enable the runtime-neutral asynchronous filesystem contract and transfer types. |         |
 //! | `find`   | Enable `RemoteFs::find`, a recursive search matching names against a wildcard.   | ✔       |
 //! | `no-log` | Compile out every log statement by forcing `log/max_level_off`.                  |         |
+//! | `tokio`  | Enable Tokio adapters for bridging blocking and asynchronous clients.             |         |
 //!
 //! ## Examples
 //!
@@ -85,6 +86,9 @@ pub use fs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
 #[cfg(feature = "tokio")]
 pub mod adapters;
+#[cfg(feature = "tokio")]
+#[doc(inline)]
+pub use adapters::r#async;
 #[cfg(feature = "tokio")]
 #[doc(inline)]
 pub use adapters::blocking;

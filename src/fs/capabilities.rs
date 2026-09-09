@@ -47,6 +47,16 @@ impl Capabilities {
         Self(self.0 | other.0)
     }
 
+    #[cfg(feature = "tokio")]
+    pub(crate) const fn bits(self) -> u32 {
+        self.0
+    }
+
+    #[cfg(feature = "tokio")]
+    pub(crate) const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
+
     fn names(self) -> impl Iterator<Item = CapabilityName> {
         [
             (Self::STREAM_READ, "STREAM_READ"),
