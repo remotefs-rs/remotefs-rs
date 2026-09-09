@@ -25,33 +25,58 @@ same backend-oriented checklist.
 
 ## API changes
 
-| remotefs 0.3                     | remotefs 1                                                 |
-| -------------------------------- | ---------------------------------------------------------- |
-| `&mut self` operations           | `&self` operations; lifecycle keeps mutable receivers      |
-| `pwd` / `change_dir`             | removed; pass absolute paths to every operation            |
-| `find` / `iter_search`           | `find` / `find_async` free functions with an explicit root |
-| `setstat`                        | `set_metadata(&SetMetadata)`                               |
-| `mov`                            | `rename`                                                   |
-| `open_file` / `create_file`      | `read_file` / `write_file`                                 |
-| `on_read` / `on_written`         | consuming stream `finish`                                  |
-| Owned boxed one-shot I/O         | borrowed `&mut (dyn Read/Write + Send)`                    |
-| Async boxed one-shot I/O         | borrowed futures I/O forms with `Send + Unpin`             |
-| `&Metadata` transfer arguments   | `ReadOptions` / `WriteOptions`                             |
-| Create-directory mode            | `Option<UnixPex>`                                          |
-| `(u32, String)` exec result      | `ExecOutput::new` and readable fields                      |
-| `DirectoryAlreadyExists`         | `AlreadyExists`                                            |
-| `PexError`                       | `PermissionDenied`                                         |
-| `SslError`                       | `ConnectionError` with its source                          |
-| `RemoteError.kind`               | `RemoteError::kind()`                                      |
-| `RemoteError.msg`                | source/display text                                        |
-| `RemoteError::new_ex`            | `with_source` / `with_message`                             |
-| `RemoteError: Clone + Eq + Hash` | compare `kind()`; errors retain typed sources              |
-| `Metadata::size: u64`            | `Metadata::size: Option<u64>`                              |
-| File struct literals             | `File::new`                                                |
-| Exhaustive public enum matches   | wildcard arms for future variants                          |
-| `ReadAndSeek` / `WriteAndSeek`   | `RemoteRead` / `RemoteWrite` plus `ReadStream::new`        |
-| Old stream `From` constructors   | backend implementations passed to `ReadStream::new`        |
-| Runtime constructor parameters   | native async clients or `BlockOn` / `Unblock` adapters     |
+| remotefs 0.3                         | remotefs 1                                                 |
+| ------------------------------------ | ---------------------------------------------------------- |
+| `&mut self` operations               | `&self` operations; lifecycle keeps mutable receivers      |
+| `connect() -> RemoteResult<Welcome>` | `connect() -> RemoteResult<()>`; `Welcome` is removed      |
+| `pwd` / `change_dir`                 | removed; pass absolute paths to every operation            |
+| `find` / `iter_search`               | `find` / `find_async` free functions with an explicit root |
+| `setstat`                            | `set_metadata(&SetMetadata)`                               |
+| `mov`                                | `rename`                                                   |
+| `open_file` / `create_file`          | `read_file` / `write_file`                                 |
+| `on_read` / `on_written`             | consuming stream `finish`                                  |
+| Owned boxed one-shot I/O             | borrowed `&mut (dyn Read/Write + Send)`                    |
+| Async boxed one-shot I/O             | borrowed futures I/O forms with `Send + Unpin`             |
+| `&Metadata` transfer arguments       | `ReadOptions` / `WriteOptions`                             |
+| Create-directory mode                | `Option<UnixPex>`                                          |
+| `(u32, String)` exec result          | `ExecOutput::new` and readable fields                      |
+| `DirectoryAlreadyExists`             | `AlreadyExists`                                            |
+| `PexError`                           | `PermissionDenied`                                         |
+| `SslError`                           | `ConnectionError` with its source                          |
+| `RemoteError.kind`                   | `RemoteError::kind()`                                      |
+| `RemoteError.msg`                    | source/display text                                        |
+| `RemoteError::new_ex`                | `with_source` / `with_message`                             |
+| `RemoteError: Clone + Eq + Hash`     | compare `kind()`; errors retain typed sources              |
+| `Metadata::size: u64`                | `Metadata::size: Option<u64>`                              |
+| File struct literals                 | `File::new`                                                |
+| Exhaustive public enum matches       | wildcard arms for future variants                          |
+| `ReadAndSeek` / `WriteAndSeek`       | `RemoteRead` / `RemoteWrite` plus `ReadStream::new`        |
+| Old stream `From` constructors       | backend implementations passed to `ReadStream::new`        |
+| Runtime constructor parameters       | native async clients or `BlockOn` / `Unblock` adapters     |
+
+### Connection results
+
+Both traits report successful connection and authentication with `Ok(())`:
+
+```rust
+// RemoteFs
+fn connect(&mut self) -> RemoteResult<()>;
+
+// AsyncRemoteFs
+async fn connect(&mut self) -> RemoteResult<()>;
+```
+
+Remove `Welcome` imports, reexports, constructors, and banner builders. Replace
+successful `Ok(Welcome::default())` or banner-bearing results with `Ok(())`,
+preserving connection and authentication errors. Update forwarding implementations,
+adapters, and mocks to return the same unit result.
+
+Consumers should call `client.connect()?` or `client.connect().await?` without
+binding a greeting. If they displayed `welcome.banner`, use a backend-specific
+banner accessor when available, or remove banner display. The core traits provide
+no generic banner replacement.
+
+### Absolute paths
 
 The backend receives absolute paths:
 

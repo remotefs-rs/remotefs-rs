@@ -30,6 +30,14 @@ already migrated.
    root checks are independent of the client platform; `Path::is_absolute`
    checks the client platform's syntax and is not a substitute. The crate
    provides no working-directory wrapper or relative-path resolver.
+   Change `RemoteFs::connect` to `fn connect(&mut self) -> RemoteResult<()>`
+   and `AsyncRemoteFs::connect` to
+   `async fn connect(&mut self) -> RemoteResult<()>`. Return `Ok(())` after
+   successful connection and authentication, preserving errors. Remove `Welcome`
+   imports, reexports, constructors, and banner builders; update forwarding
+   implementations, adapters, and mocks. Consumers must stop reading
+   `welcome.banner`: use a backend-specific banner accessor when available or
+   remove banner display. There is no generic replacement in the core traits.
 4. Apply the protocol-specific notes: SCP requires a size, SFTP and kube use
    the bound, GCS uses a hint; memory removes unsafe downcasts and retains
    observable callback behavior; SSH moves Drop finalization into explicit

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::{
     Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteError, SetMetadata, UnixPex,
-    Welcome, WriteOptions, WriteStream,
+    WriteOptions, WriteStream,
 };
 use crate::RemoteResult;
 
@@ -16,7 +16,7 @@ pub trait RemoteFs: Send + Sync {
     /// # Errors
     ///
     /// Returns a connection or authentication error when setup fails.
-    fn connect(&mut self) -> RemoteResult<Welcome>;
+    fn connect(&mut self) -> RemoteResult<()>;
 
     /// Disconnects from the remote server.
     ///

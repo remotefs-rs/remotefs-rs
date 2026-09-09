@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use crate::fs::{AsyncReadStream, AsyncRemoteFs, AsyncWriteStream};
 use crate::fs::{
     Capabilities, ExecOutput, File, FileType, Metadata, ReadOptions, ReadStream, RemoteError,
-    RemoteErrorType, RemoteFs, SetMetadata, UnixPex, Welcome, WriteOptions, WriteStream,
+    RemoteErrorType, RemoteFs, SetMetadata, UnixPex, WriteOptions, WriteStream,
 };
 
 #[cfg(feature = "async")]
@@ -248,11 +248,11 @@ impl Capabilities {
 }
 
 impl RemoteFs for MockRemoteFs {
-    fn connect(&mut self) -> crate::RemoteResult<Welcome> {
+    fn connect(&mut self) -> crate::RemoteResult<()> {
         if self.connected.swap(true, Ordering::AcqRel) {
             Err(RemoteError::new(RemoteErrorType::AlreadyConnected))
         } else {
-            Ok(Welcome::default())
+            Ok(())
         }
     }
 
@@ -556,7 +556,7 @@ impl RemoteFs for MockRemoteFs {
 #[cfg(feature = "async")]
 #[async_trait::async_trait]
 impl AsyncRemoteFs for MockRemoteFs {
-    async fn connect(&mut self) -> crate::RemoteResult<Welcome> {
+    async fn connect(&mut self) -> crate::RemoteResult<()> {
         <Self as RemoteFs>::connect(self)
     }
 
