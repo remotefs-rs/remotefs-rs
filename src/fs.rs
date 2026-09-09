@@ -44,6 +44,7 @@
 mod capabilities;
 mod errors;
 mod file;
+mod forward;
 mod options;
 pub mod stream;
 mod sync;
@@ -58,7 +59,7 @@ pub use self::file::{File, FileType, Metadata, SetMetadata, UnixPex, UnixPexClas
 #[doc(inline)]
 pub use self::options::{ExecOutput, ReadOptions, WriteOptions};
 #[doc(inline)]
-pub use self::stream::{ReadStream, WriteStream};
+pub use self::stream::{ReadStream, RemoteRead, RemoteWrite, WriteStream};
 #[doc(inline)]
 pub use self::sync::RemoteFs;
 #[doc(inline)]

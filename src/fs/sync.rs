@@ -1,554 +1,346 @@
-//! The blocking [`RemoteFs`] trait every protocol client implements.
+//! The blocking [`RemoteFs`] contract every protocol client implements.
 
-use std::io;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-
-use log::{debug, trace};
+use std::io::{self, Read, Write};
+use std::path::Path;
 
 use super::{
-    File, Metadata, ReadStream, RemoteError, RemoteErrorType, UnixPex, Welcome, WriteStream,
+    Capabilities, ExecOutput, File, ReadOptions, ReadStream, RemoteError, SetMetadata, UnixPex,
+    Welcome, WriteOptions, WriteStream,
 };
 use crate::RemoteResult;
 
-/// The blocking contract a protocol client implements to expose a remote host.
-///
-/// A client implements the required methods — the ones only the protocol can
-/// answer — and inherits the rest. The defaulted methods
-/// ([`RemoteFs::remove_dir_all`], [`RemoteFs::append_file`],
-/// [`RemoteFs::create_file`], [`RemoteFs::open_file`], [`RemoteFs::on_written`],
-/// [`RemoteFs::on_read`], and, behind the `find` feature, `find` and
-/// `iter_search`) are written on top of the required ones and are worth
-/// overriding only when the protocol offers a faster path.
-///
-/// # Not every protocol can do everything
-///
-/// The trait is the union of what the protocols can do, not the intersection.
-/// A method a protocol has no equivalent for returns
-/// [`RemoteErrorType::UnsupportedFeature`] — S3 cannot [`RemoteFs::exec`], SCP
-/// cannot [`RemoteFs::setstat`]. Treat that error as an answer, not a bug, and
-/// fall back accordingly: when [`RemoteFs::create`] is unsupported, for instance,
-/// [`RemoteFs::create_file`] transfers the whole file in one call instead.
-///
-/// # Connection state
-///
-/// Every method other than [`RemoteFs::connect`] and [`RemoteFs::is_connected`]
-/// requires an established connection, and returns
-/// [`RemoteErrorType::NotConnected`] without one. Connecting twice returns
-/// [`RemoteErrorType::AlreadyConnected`].
-///
-/// # Object safety
-///
-/// The trait is object-safe on purpose: consumers keep clients as
-/// `Box<dyn RemoteFs>` to choose a protocol at runtime. Do not add generic
-/// methods to it.
-///
-/// # Examples
-///
-/// ```
-/// use std::io::Cursor;
-///
-/// use remotefs::fs::Metadata;
-/// use remotefs::{RemoteFs, RemoteResult};
-///
-/// /// Upload `content` to `path`, whatever the protocol underneath is.
-/// fn upload<T>(client: &mut T, path: &str, content: Vec<u8>) -> RemoteResult<u64>
-/// where
-///     T: RemoteFs,
-/// {
-///     // SCP needs the size up front, so always set it.
-///     let metadata = Metadata::default().size(content.len() as u64);
-///
-///     client.create_file(path.as_ref(), &metadata, Box::new(Cursor::new(content)))
-/// }
-/// ```
-pub trait RemoteFs {
-    /// Connect to the remote server and authenticate.
-    ///
-    /// On success returns the server's greeting, which carries a banner for the
-    /// protocols that send one.
+/// The blocking contract for a protocol-backed remote file system.
+pub trait RemoteFs: Send + Sync {
+    /// Connects to the remote server and authenticates the client.
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::AlreadyConnected`] when a connection is already
-    /// established, [`RemoteErrorType::AuthenticationFailed`] when the server
-    /// rejects the credentials, and [`RemoteErrorType::ConnectionError`] or
-    /// [`RemoteErrorType::BadAddress`] when the transport cannot be set up.
+    /// Returns a connection or authentication error when setup fails.
     fn connect(&mut self) -> RemoteResult<Welcome>;
 
-    /// Close the connection to the remote server.
+    /// Disconnects from the remote server.
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::NotConnected`] when there is nothing to close,
-    /// or [`RemoteErrorType::ProtocolError`] when the server refuses the
-    /// shutdown.
+    /// Returns [`crate::fs::RemoteErrorType::NotConnected`] when no connection exists.
     fn disconnect(&mut self) -> RemoteResult<()>;
 
-    /// Return whether the client currently holds a connection.
-    ///
-    /// The receiver is `&mut self` because some protocols have to probe the
-    /// transport to answer.
-    fn is_connected(&mut self) -> bool;
+    /// Returns the cached connection state without probing the transport.
+    fn is_connected(&self) -> bool;
 
-    /// Return the current working directory on the remote host.
+    /// Returns the operations natively supported by this client.
+    fn capabilities(&self) -> Capabilities;
+
+    /// Lists the direct children of an absolute directory path.
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected, or
-    /// [`RemoteErrorType::ProtocolError`] when the server answers unexpectedly.
-    fn pwd(&mut self) -> RemoteResult<PathBuf>;
+    /// Returns [`crate::fs::RemoteErrorType::InvalidPath`] for relative paths and the
+    /// backend's lookup error when the directory cannot be listed.
+    fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>>;
 
-    /// Change the working directory, returning the real path of the new one.
+    /// Returns metadata for an absolute path without following symlinks.
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `dir` does not
-    /// exist, [`RemoteErrorType::PermissionDenied`] when it may not be entered, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
+    /// Returns [`crate::fs::RemoteErrorType::InvalidPath`] for relative paths and the
+    /// backend's lookup error when the entry cannot be inspected.
+    fn stat(&self, path: &Path) -> RemoteResult<File>;
 
-    /// List the entries of the directory at `path`.
+    /// Reports whether an absolute path exists.
     ///
-    /// The listing is not recursive and the order is whatever the server sent.
+    /// A missing entry is `Ok(false)`; invalid paths and transport failures are
+    /// returned as errors.
+    fn exists(&self, path: &Path) -> RemoteResult<bool>;
+
+    /// Changes the specified metadata fields of an absolute path.
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
-    /// exist, [`RemoteErrorType::PermissionDenied`] when it may not be read, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>>;
+    /// Returns [`crate::fs::RemoteErrorType::UnsupportedFeature`] when metadata changes
+    /// are unavailable.
+    fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()>;
 
-    /// Return the entry at `path` with its metadata.
+    /// Creates a directory at an absolute path.
     ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
-    /// exist, [`RemoteErrorType::StatFailed`] when the server has the entry but
-    /// will not describe it, and [`RemoteErrorType::NotConnected`] when not
-    /// connected.
-    fn stat(&mut self, path: &Path) -> RemoteResult<File>;
+    /// The optional mode is ignored when POSIX permissions are unavailable.
+    fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()>;
 
-    /// Apply `metadata` to the entry at `path`.
-    ///
-    /// A client applies only the fields the protocol supports and the caller set;
-    /// an empty [`Option`] means "leave it alone".
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
-    /// notion of settable metadata, [`RemoteErrorType::NoSuchFileOrDirectory`]
-    /// when `path` does not exist, [`RemoteErrorType::PermissionDenied`] when the change
-    /// is not permitted, and [`RemoteErrorType::NotConnected`] when not
-    /// connected.
-    fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
+    /// Removes a file or symbolic link at an absolute path.
+    fn remove_file(&self, path: &Path) -> RemoteResult<()>;
 
-    /// Return whether an entry exists at `path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected, or
-    /// [`RemoteErrorType::ProtocolError`] when the server answers in a way that
-    /// is neither "yes" nor "no". A missing entry is `Ok(false)`, not an error.
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool>;
+    /// Removes an empty directory at an absolute path.
+    fn remove_dir(&self, path: &Path) -> RemoteResult<()>;
 
-    /// Remove the file at `path`.
+    /// Removes an entry and its descendants using depth-first traversal.
     ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
-    /// exist, [`RemoteErrorType::BadFile`] when it is not a file,
-    /// [`RemoteErrorType::CouldNotRemoveFile`] when the server refuses, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()>;
-
-    /// Remove the directory at `path`, which must be empty.
-    ///
-    /// Use [`RemoteFs::remove_dir_all`] to remove a directory with contents.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::DirectoryNotEmpty`] when the directory still
-    /// has entries, [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does
-    /// not exist, [`RemoteErrorType::PermissionDenied`] when the removal is not
-    /// permitted, and [`RemoteErrorType::NotConnected`] when not connected.
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
-
-    /// Remove the entry at `path` and everything below it. **Use carefully!**
-    ///
-    /// A [`crate::fs::FileType::File`] at `path` is removed as well, since a
-    /// directory is a file too. Symbolic links are removed, never followed.
-    ///
-    /// # Default implementation
-    ///
-    /// Walks the tree with [`RemoteFs::list_dir`] and removes what it finds with
-    /// [`RemoteFs::remove_dir`] and [`RemoteFs::remove_file`], depth first.
-    /// Override it when the protocol can delete a tree in one request.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected, and
-    /// whatever the underlying [`RemoteFs::stat`], [`RemoteFs::list_dir`],
-    /// [`RemoteFs::remove_dir`] or [`RemoteFs::remove_file`] call reported. A
-    /// failure partway through leaves the already-removed entries removed.
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        if self.is_connected() {
-            let path = crate::utils::path::absolutize(&self.pwd()?, path);
-            debug!("Removing {path}...", path = path.display());
-            let entry = self.stat(path.as_path())?;
-            if entry.is_dir() {
-                // list dir
-                debug!(
-                    "{name} is a directory; removing all directory entries",
-                    name = entry.name()
-                );
-                let directory_content = self.list_dir(entry.path())?;
-                for entry in directory_content.iter() {
-                    self.remove_dir_all(entry.path())?;
-                }
-                trace!(
-                    "Removed all files in {path}; removing directory",
-                    path = entry.path().display()
-                );
-                self.remove_dir(entry.path())
-            } else {
-                self.remove_file(entry.path())
+    /// Symlinks are removed as entries and are never followed. A failure during
+    /// traversal may leave earlier deletions applied remotely.
+    fn remove_dir_all(&self, path: &Path) -> RemoteResult<()> {
+        crate::path::ensure_absolute(path)?;
+        let entry = self.stat(path)?;
+        if entry.is_dir() {
+            for child in self.list_dir(entry.path())? {
+                self.remove_dir_all(child.path())?;
             }
+            self.remove_dir(entry.path())
         } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
+            self.remove_file(entry.path())
         }
     }
 
-    /// Create a directory at `path` with the given permissions.
-    ///
-    /// `mode` is ignored by protocols with no notion of POSIX permissions.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::AlreadyExists`] when something is
-    /// already there, [`RemoteErrorType::PermissionDenied`] when the parent may not be
-    /// written, and [`RemoteErrorType::NotConnected`] when not connected.
-    fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
+    /// Renames an absolute source path to an absolute destination path.
+    fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// Create a symbolic link at `path` pointing at `target`.
-    ///
-    /// The link is created whether or not `target` exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
-    /// links, [`RemoteErrorType::FileCreateDenied`] when the server refuses, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()>;
+    /// Copies an absolute source path to an absolute destination path.
+    fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// Copy the entry at `src` to `dest` on the remote host.
-    ///
-    /// The copy happens server-side; nothing travels through the client.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol that cannot
-    /// copy server-side, [`RemoteErrorType::NoSuchFileOrDirectory`] when `src`
-    /// does not exist, [`RemoteErrorType::PermissionDenied`] when `dest` may not be
-    /// written, and [`RemoteErrorType::NotConnected`] when not connected.
-    fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
+    /// Creates a symbolic link at `path` pointing to an absolute `target`.
+    fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()>;
 
-    /// Move the entry at `src` to `dest` on the remote host.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `src` does not
-    /// exist, [`RemoteErrorType::PermissionDenied`] when `dest` may not be written, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
+    /// Opens an absolute file path for a ranged read.
+    fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream>;
 
-    /// Run `cmd` on the remote host, returning its exit code and stdout.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
-    /// shell, [`RemoteErrorType::PermissionDenied`] when execution is not permitted, and
-    /// [`RemoteErrorType::NotConnected`] when not connected. A command that runs
-    /// and fails is `Ok` with a non-zero exit code, not an error.
-    fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
+    /// Creates or truncates an absolute file path for writing.
+    fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream>;
 
-    /// Open the file at `path` for appending, creating it when absent.
-    ///
-    /// Hand the returned stream back to [`RemoteFs::on_written`] once the last
-    /// byte is written; dropping it is not enough on every protocol.
-    ///
-    /// # ⚠️ Warning
-    ///
-    /// `metadata` should describe the local file being sent. Protocols such as
-    /// SCP take [`Metadata::size`] as the transfer size and will truncate or hang
-    /// if it is wrong.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol without
-    /// streamed writes — use [`RemoteFs::append_file`] then —
-    /// [`RemoteErrorType::CouldNotOpenFile`] when the server refuses, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream>;
+    /// Opens or creates an absolute file path for appending.
+    fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream>;
 
-    /// Open the file at `path` for writing, truncating any existing content.
-    ///
-    /// Hand the returned stream back to [`RemoteFs::on_written`] once the last
-    /// byte is written; dropping it is not enough on every protocol.
-    ///
-    /// # ⚠️ Warning
-    ///
-    /// `metadata` should describe the local file being sent. Protocols such as
-    /// SCP take [`Metadata::size`] as the transfer size and will truncate or hang
-    /// if it is wrong.
+    /// Reads a remote file into a borrowed destination and finalizes its stream.
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol without
-    /// streamed writes — use [`RemoteFs::create_file`] then —
-    /// [`RemoteErrorType::FileCreateDenied`] when the server refuses, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream>;
-
-    /// Open the file at `path` for reading.
-    ///
-    /// Hand the returned stream back to [`RemoteFs::on_read`] once the last byte
-    /// is read; dropping it is not enough on every protocol.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol without
-    /// streamed reads — use [`RemoteFs::open_file`] then —
-    /// [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not exist,
-    /// [`RemoteErrorType::CouldNotOpenFile`] when the server refuses, and
-    /// [`RemoteErrorType::NotConnected`] when not connected.
-    fn open(&mut self, path: &Path) -> RemoteResult<ReadStream>;
-
-    /// Finalize a write started by [`RemoteFs::create`] or [`RemoteFs::append`].
-    ///
-    /// Call this every time a streamed write ends. FTP, for one, only counts the
-    /// transfer once the data connection is closed and the final reply read.
-    ///
-    /// # Default implementation
-    ///
-    /// Returns [`Ok`]. Override it only when the protocol has something to do.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::ProtocolError`] when the server rejects the
-    /// transfer at the very end, so a write is not durable until this returns
-    /// [`Ok`].
-    fn on_written(&mut self, _writable: WriteStream) -> RemoteResult<()> {
-        Ok(())
+    /// Returns copy, flush, open, or finalization failures. If copying and
+    /// finalization both fail, both causes are retained in the returned error.
+    fn read_file(
+        &self,
+        path: &Path,
+        opts: &ReadOptions,
+        dest: &mut (dyn Write + Send),
+    ) -> RemoteResult<u64> {
+        crate::path::ensure_absolute(path)?;
+        let mut stream = self.open(path, opts)?;
+        let copied = io::copy(&mut stream, dest)
+            .and_then(|count| dest.flush().map(|()| count))
+            .map_err(RemoteError::from);
+        let finished = stream.finish();
+        super::stream::complete_transfer(copied, finished)
     }
 
-    /// Finalize a read started by [`RemoteFs::open`].
+    /// Writes a borrowed source to a remote file and finalizes its stream.
     ///
-    /// Call this every time a streamed read ends, for the same reason as
-    /// [`RemoteFs::on_written`].
-    ///
-    /// # Default implementation
-    ///
-    /// Returns [`Ok`]. Override it only when the protocol has something to do.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::ProtocolError`] when the server reports the
-    /// transfer was incomplete.
-    fn on_read(&mut self, _readable: ReadStream) -> RemoteResult<()> {
-        Ok(())
+    /// Existing content is replaced.
+    fn write_file(
+        &self,
+        path: &Path,
+        opts: &WriteOptions,
+        src: &mut (dyn Read + Send),
+    ) -> RemoteResult<u64> {
+        crate::path::ensure_absolute(path)?;
+        let mut stream = self.create(path, opts)?;
+        let copied = io::copy(src, &mut stream)
+            .and_then(|count| stream.flush().map(|()| count))
+            .map_err(RemoteError::from);
+        let finished = stream.finish();
+        super::stream::complete_transfer(copied, finished)
     }
 
-    /// Append everything `reader` yields to `path`, returning the bytes written.
-    ///
-    /// This is the one-shot form of [`RemoteFs::append`]: reach for it when
-    /// [`RemoteFs::append`] answered [`RemoteErrorType::UnsupportedFeature`], or
-    /// when you do not want to drive the stream yourself.
-    ///
-    /// # Default implementation
-    ///
-    /// Opens the file with [`RemoteFs::append`], copies the reader into it, and
-    /// finalizes with [`RemoteFs::on_written`]. Override it on a protocol with no
-    /// streamed writes at all.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected,
-    /// [`RemoteErrorType::ProtocolError`] when the copy fails, and whatever
-    /// [`RemoteFs::append`] reported.
+    /// Appends a borrowed source to a remote file and finalizes its stream.
     fn append_file(
-        &mut self,
+        &self,
         path: &Path,
-        metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
+        opts: &WriteOptions,
+        src: &mut (dyn Read + Send),
     ) -> RemoteResult<u64> {
-        if self.is_connected() {
-            trace!("Opened remote file");
-            let mut stream = self.append(path, metadata)?;
-            let sz = io::copy(&mut reader, &mut stream)
-                .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))?;
-            self.on_written(stream)?;
-            trace!("Written {sz} bytes to destination");
-            Ok(sz)
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
+        crate::path::ensure_absolute(path)?;
+        let mut stream = self.append(path, opts)?;
+        let copied = io::copy(src, &mut stream)
+            .and_then(|count| stream.flush().map(|()| count))
+            .map_err(RemoteError::from);
+        let finished = stream.finish();
+        super::stream::complete_transfer(copied, finished)
     }
 
-    /// Write everything `reader` yields to `path`, returning the bytes written.
-    ///
-    /// This is the one-shot form of [`RemoteFs::create`]: reach for it when
-    /// [`RemoteFs::create`] answered [`RemoteErrorType::UnsupportedFeature`], or
-    /// when you do not want to drive the stream yourself. Any existing content at
-    /// `path` is replaced.
-    ///
-    /// # Default implementation
-    ///
-    /// Opens the file with [`RemoteFs::create`], copies the reader into it, and
-    /// finalizes with [`RemoteFs::on_written`]. Override it on a protocol with no
-    /// streamed writes at all.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected,
-    /// [`RemoteErrorType::ProtocolError`] when the copy fails, and whatever
-    /// [`RemoteFs::create`] reported.
-    fn create_file(
-        &mut self,
-        path: &Path,
-        metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
-    ) -> RemoteResult<u64> {
-        if self.is_connected() {
-            let mut stream = self.create(path, metadata)?;
-            trace!("Opened remote file");
-            let sz = io::copy(&mut reader, &mut stream)
-                .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))?;
-            self.on_written(stream)?;
-            trace!("Written {sz} bytes to destination");
-            Ok(sz)
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    /// Read `src` into `dest`, returning the bytes written.
-    ///
-    /// This is the one-shot form of [`RemoteFs::open`]: reach for it when
-    /// [`RemoteFs::open`] answered [`RemoteErrorType::UnsupportedFeature`], or
-    /// when you do not want to drive the stream yourself.
-    ///
-    /// # Default implementation
-    ///
-    /// Opens the file with [`RemoteFs::open`], copies it into `dest`, and
-    /// finalizes with [`RemoteFs::on_read`]. Override it on a protocol with no
-    /// streamed reads at all.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected,
-    /// [`RemoteErrorType::ProtocolError`] when the copy fails, and whatever
-    /// [`RemoteFs::open`] reported.
-    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
-        if self.is_connected() {
-            let mut stream = self.open(src)?;
-            trace!("File opened");
-            let sz = io::copy(&mut stream, &mut dest)
-                .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))?;
-            self.on_read(stream)?;
-            trace!("Copied {sz} bytes to destination");
-            Ok(sz)
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    /// Search the working directory and below for names matching `search`.
-    ///
-    /// `search` is a wildcard pattern where `?` matches one character and `*`
-    /// matches any run of them. A matching directory is returned *and* descended
-    /// into.
-    ///
-    /// # Default implementation
-    ///
-    /// Walks the tree with [`RemoteFs::list_dir`] through
-    /// [`RemoteFs::iter_search`]. On a large tree this is one request per
-    /// directory; override it when the protocol can search server-side.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RemoteErrorType::NotConnected`] when not connected, and
-    /// whatever [`RemoteFs::pwd`] or [`RemoteFs::list_dir`] reported.
-    #[cfg(feature = "find")]
-    fn find(&mut self, search: &str) -> RemoteResult<Vec<File>> {
-        use wildmatch::WildMatch;
-
-        match self.is_connected() {
-            true => {
-                // Starting from current directory, iter dir
-                match self.pwd() {
-                    Ok(p) => self.iter_search(p.as_path(), &WildMatch::new(search)),
-                    Err(err) => Err(err),
-                }
-            }
-            false => Err(RemoteError::new(RemoteErrorType::NotConnected)),
-        }
-    }
-
-    /// Recursively collect the entries under `dir` matching `filter`.
-    ///
-    /// # ⚠️ Warning
-    ///
-    /// This is the engine behind [`RemoteFs::find`] and is not meant to be called
-    /// from outside; treat it as private. Do not re-implement it unless the
-    /// protocol offers a faster way to walk a tree.
-    ///
-    /// # Errors
-    ///
-    /// Returns whatever [`RemoteFs::list_dir`] reported for `dir` or for any
-    /// directory below it.
-    #[cfg(feature = "find")]
-    fn iter_search(
-        &mut self,
-        dir: &Path,
-        filter: &wildmatch::WildMatch,
-    ) -> RemoteResult<Vec<File>> {
-        let mut drained: Vec<File> = Vec::new();
-        // Scan directory
-        match self.list_dir(dir) {
-            Ok(entries) => {
-                /* For each entry:
-                - if is dir: call iter_search with `dir`
-                    - push `iter_search` result to `drained`
-                - if is file: check if it matches `filter`
-                    - if it matches `filter`: push to to filter
-                */
-                for entry in entries.into_iter() {
-                    if entry.is_dir() {
-                        // If directory name, matches wildcard, push it to drained
-                        if filter.matches(entry.name().as_str()) {
-                            drained.push(entry.clone());
-                        }
-                        drained.append(&mut self.iter_search(entry.path(), filter)?);
-                    } else if filter.matches(entry.name().as_str()) {
-                        drained.push(entry);
-                    }
-                }
-                Ok(drained)
-            }
-            Err(err) => Err(err),
-        }
-    }
+    /// Executes a command and returns its exit code and standard output.
+    fn exec(&self, cmd: &str) -> RemoteResult<ExecOutput>;
 }
 
 #[cfg(test)]
 mod test {
+    use std::io::{Read, Write};
 
     use super::*;
+    use crate::RemoteErrorType;
     use crate::mock::MockRemoteFs;
 
     #[test]
     fn should_be_able_to_create_trait_object() {
-        let _: Box<dyn RemoteFs> = Box::new(MockRemoteFs {});
+        let _: Box<dyn RemoteFs> = Box::new(MockRemoteFs::new());
+    }
+
+    #[test]
+    fn write_file_finishes_before_returning() {
+        let fs = MockRemoteFs::connected();
+        let path = MockRemoteFs::path("upload");
+        let mut input = io::Cursor::new(b"hello");
+        let count = fs
+            .write_file(&path, &WriteOptions::default(), &mut input)
+            .unwrap();
+        assert_eq!(count, 5);
+        assert_eq!(fs.contents(&path), b"hello");
+        assert_eq!(fs.finish_count(), 1);
+        assert_eq!(fs.unfinished_count(), 0);
+    }
+
+    #[test]
+    fn shared_and_boxed_clients_are_object_safe() {
+        let _: Box<dyn RemoteFs> = Box::new(MockRemoteFs::new());
+        let _: std::sync::Arc<dyn RemoteFs> = std::sync::Arc::new(MockRemoteFs::new());
+        fn assert_client<T: RemoteFs>() {}
+        assert_client::<Box<dyn RemoteFs>>();
+    }
+
+    #[test]
+    fn create_truncates_and_append_preserves_existing_bytes() {
+        let fs = MockRemoteFs::connected();
+        let path = MockRemoteFs::path("file");
+        fs.seed_file(&path, b"old");
+
+        let mut writer = fs.create(&path, &WriteOptions::default()).unwrap();
+        writer.write_all(b"new").unwrap();
+        writer.finish().unwrap();
+        assert_eq!(fs.contents(&path), b"new");
+
+        let mut writer = fs.append(&path, &WriteOptions::default()).unwrap();
+        writer.write_all(b"!").unwrap();
+        writer.finish().unwrap();
+        assert_eq!(fs.contents(&path), b"new!");
+    }
+
+    #[test]
+    fn missing_parent_is_not_created_by_create() {
+        let fs = MockRemoteFs::connected();
+        let path = MockRemoteFs::path("missing/file");
+        let error = fs.create(&path, &WriteOptions::default()).unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::NoSuchFileOrDirectory);
+        assert!(!fs.exists(&path).unwrap());
+    }
+
+    #[test]
+    fn required_size_hint_fails_before_opening_a_stream() {
+        let fs = MockRemoteFs::connected();
+        fs.require_size_hint(true);
+        let path = MockRemoteFs::path("sized");
+        let error = fs.create(&path, &WriteOptions::default()).unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::SizeRequired);
+        assert_eq!(fs.finish_count(), 0);
+        assert_eq!(fs.unfinished_count(), 0);
+        assert!(!fs.exists(&path).unwrap());
+    }
+
+    #[test]
+    fn range_options_handle_zero_and_beyond_eof() {
+        let fs = MockRemoteFs::connected();
+        let path = MockRemoteFs::path("range");
+        fs.seed_file(&path, b"abcdef");
+
+        let mut output = Vec::new();
+        fs.read_file(
+            &path,
+            &ReadOptions::default().offset(2).length(0),
+            &mut output,
+        )
+        .unwrap();
+        assert!(output.is_empty());
+
+        let mut output = Vec::new();
+        fs.read_file(&path, &ReadOptions::default().offset(100), &mut output)
+            .unwrap();
+        assert!(output.is_empty());
+
+        let mut output = Vec::new();
+        fs.read_file(
+            &path,
+            &ReadOptions::default().offset(2).length(2),
+            &mut output,
+        )
+        .unwrap();
+        assert_eq!(output, b"cd");
+        assert_eq!(fs.finish_count(), 3);
+    }
+
+    #[test]
+    fn failing_finish_is_returned_and_does_not_commit_staged_data() {
+        let fs = MockRemoteFs::connected();
+        fs.fail_finish(Some(RemoteErrorType::ProtocolError));
+        let path = MockRemoteFs::path("failed");
+        let mut input = io::Cursor::new(b"data");
+        let error = fs
+            .write_file(&path, &WriteOptions::default(), &mut input)
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::ProtocolError);
+        assert_eq!(fs.finish_count(), 1);
+        assert_eq!(fs.unfinished_count(), 0);
+        assert!(!fs.exists(&path).unwrap());
+    }
+
+    #[test]
+    fn recursive_removal_is_depth_first_and_does_not_follow_links() {
+        let fs = MockRemoteFs::connected();
+        let root = MockRemoteFs::path("tree");
+        let nested = root.join("nested");
+        let file = nested.join("file");
+        let cycle = nested.join("cycle");
+        fs.seed_dir(&root);
+        fs.seed_dir(&nested);
+        fs.seed_file(&file, b"data");
+        fs.seed_symlink(&cycle, &root);
+        fs.remove_dir_all(&root).unwrap();
+        assert!(!fs.exists(&root).unwrap());
+        assert!(!fs.exists(&file).unwrap());
+    }
+
+    #[test]
+    fn paths_must_be_absolute_and_connection_is_required() {
+        let fs = MockRemoteFs::new();
+        assert_eq!(
+            fs.stat(Path::new("relative")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        let path = MockRemoteFs::path("file");
+        assert_eq!(
+            fs.stat(&path).unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        let mut fs = fs;
+        fs.connect().unwrap();
+        assert_eq!(
+            fs.connect().unwrap_err().kind(),
+            RemoteErrorType::AlreadyConnected
+        );
+        fs.disconnect().unwrap();
+        assert!(!fs.is_connected());
+    }
+
+    #[test]
+    fn capabilities_control_stream_and_seek_independently() {
+        let fs = MockRemoteFs::connected();
+        let path = MockRemoteFs::path("capabilities");
+        fs.seed_file(&path, b"abcdef");
+        fs.set_capabilities(Capabilities::empty());
+        assert_eq!(
+            fs.open(&path, &ReadOptions::default()).unwrap_err().kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+
+        fs.set_capabilities(Capabilities::STREAM_READ | Capabilities::RANGE_READ);
+        let stream = fs.open(&path, &ReadOptions::default().offset(2)).unwrap();
+        assert!(!stream.seekable());
+        let mut output = Vec::new();
+        let mut stream = stream;
+        stream.read_to_end(&mut output).unwrap();
+        stream.finish().unwrap();
+        assert_eq!(output, b"cdef");
     }
 }
