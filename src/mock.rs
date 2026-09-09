@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "async")]
+use crate::fs::{AsyncReadStream, AsyncRemoteFs, AsyncWriteStream};
 use crate::fs::{
     Capabilities, ExecOutput, File, FileType, Metadata, ReadOptions, ReadStream, RemoteError,
     RemoteErrorType, RemoteFs, SetMetadata, UnixPex, Welcome, WriteOptions, WriteStream,
@@ -172,7 +174,7 @@ impl MockRemoteFs {
     }
 
     fn ensure_connected(&self) -> crate::RemoteResult<()> {
-        if self.is_connected() {
+        if <Self as RemoteFs>::is_connected(self) {
             Ok(())
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
@@ -551,6 +553,114 @@ impl RemoteFs for MockRemoteFs {
     }
 }
 
+#[cfg(feature = "async")]
+#[async_trait::async_trait]
+impl AsyncRemoteFs for MockRemoteFs {
+    async fn connect(&mut self) -> crate::RemoteResult<Welcome> {
+        <Self as RemoteFs>::connect(self)
+    }
+
+    async fn disconnect(&mut self) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::disconnect(self)
+    }
+
+    fn is_connected(&self) -> bool {
+        <Self as RemoteFs>::is_connected(self)
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        <Self as RemoteFs>::capabilities(self)
+    }
+
+    async fn list_dir(&self, path: &Path) -> crate::RemoteResult<Vec<File>> {
+        <Self as RemoteFs>::list_dir(self, path)
+    }
+
+    async fn stat(&self, path: &Path) -> crate::RemoteResult<File> {
+        <Self as RemoteFs>::stat(self, path)
+    }
+
+    async fn exists(&self, path: &Path) -> crate::RemoteResult<bool> {
+        <Self as RemoteFs>::exists(self, path)
+    }
+
+    async fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::set_metadata(self, path, metadata)
+    }
+
+    async fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::create_dir(self, path, mode)
+    }
+
+    async fn remove_file(&self, path: &Path) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::remove_file(self, path)
+    }
+
+    async fn remove_dir(&self, path: &Path) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::remove_dir(self, path)
+    }
+
+    async fn rename(&self, src: &Path, dest: &Path) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::rename(self, src, dest)
+    }
+
+    async fn copy(&self, src: &Path, dest: &Path) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::copy(self, src, dest)
+    }
+
+    async fn symlink(&self, path: &Path, target: &Path) -> crate::RemoteResult<()> {
+        <Self as RemoteFs>::symlink(self, path, target)
+    }
+
+    async fn open(&self, path: &Path, opts: &ReadOptions) -> crate::RemoteResult<AsyncReadStream> {
+        crate::path::ensure_absolute(path)?;
+        self.ensure_connected()?;
+        if !self.has_capability(Capabilities::STREAM_READ) {
+            return Self::unsupported();
+        }
+        let state = self.lock_state();
+        let entry = state.entries.get(path).ok_or_else(Self::missing)?;
+        if entry.metadata.is_dir() || entry.metadata.is_symlink() {
+            return Err(RemoteError::new(RemoteErrorType::BadFile));
+        }
+        let bytes = Self::ranged_bytes(&entry.bytes, opts);
+        let seekable = state.capabilities.contains(Capabilities::SEEK_READ);
+        Ok(AsyncReadStream::new(
+            crate::mock::async_io::AsyncMockReader::new(self.state.clone(), bytes, seekable),
+        ))
+    }
+
+    async fn create(
+        &self,
+        path: &Path,
+        opts: &WriteOptions,
+    ) -> crate::RemoteResult<AsyncWriteStream> {
+        crate::path::ensure_absolute(path)?;
+        self.ensure_connected()?;
+        if !self.has_capability(Capabilities::STREAM_WRITE) {
+            return Self::unsupported();
+        }
+        self.open_async_writer(path, opts, false)
+    }
+
+    async fn append(
+        &self,
+        path: &Path,
+        opts: &WriteOptions,
+    ) -> crate::RemoteResult<AsyncWriteStream> {
+        crate::path::ensure_absolute(path)?;
+        self.ensure_connected()?;
+        if !self.has_capability(Capabilities::APPEND) {
+            return Self::unsupported();
+        }
+        self.open_async_writer(path, opts, true)
+    }
+
+    async fn exec(&self, cmd: &str) -> crate::RemoteResult<ExecOutput> {
+        <Self as RemoteFs>::exec(self, cmd)
+    }
+}
+
 impl MockRemoteFs {
     fn open_writer(
         &self,
@@ -601,5 +711,57 @@ impl MockRemoteFs {
             writer.seek_to_end();
         }
         Ok(WriteStream::new(writer))
+    }
+
+    #[cfg(feature = "async")]
+    fn open_async_writer(
+        &self,
+        path: &Path,
+        opts: &WriteOptions,
+        append: bool,
+    ) -> crate::RemoteResult<AsyncWriteStream> {
+        let state = self.lock_state();
+        if state.require_size_hint && opts.size_hint.is_none() {
+            return Err(RemoteError::new(RemoteErrorType::SizeRequired));
+        }
+        let (bytes, metadata) = match state.entries.get(path) {
+            Some(entry) if entry.metadata.is_dir() => {
+                return Err(RemoteError::new(RemoteErrorType::BadFile));
+            }
+            Some(entry) if append => (entry.bytes.clone(), entry.metadata.clone()),
+            Some(entry) => (Vec::new(), entry.metadata.clone()),
+            None => {
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| RemoteError::new(RemoteErrorType::InvalidPath))?;
+                if !state
+                    .entries
+                    .get(parent)
+                    .is_some_and(|entry| entry.metadata.is_dir())
+                {
+                    return Err(Self::missing());
+                }
+                (Vec::new(), Metadata::default())
+            }
+        };
+        let seekable = state.capabilities.contains(Capabilities::SEEK_WRITE);
+        let mut metadata = metadata;
+        if let Some(mode) = opts.mode {
+            metadata.mode = Some(mode);
+        }
+        if let Some(modified) = opts.modified {
+            metadata.modified = Some(modified);
+        }
+        let mut writer = crate::mock::async_io::AsyncMockWriter::new(
+            self.state.clone(),
+            path.to_path_buf(),
+            bytes,
+            metadata,
+            seekable,
+        );
+        if append {
+            writer.seek_to_end();
+        }
+        Ok(AsyncWriteStream::new(writer))
     }
 }

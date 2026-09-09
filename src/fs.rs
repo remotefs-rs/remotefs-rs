@@ -41,6 +41,8 @@
 //! assert!(file.is_file());
 //! ```
 
+#[cfg(feature = "async")]
+mod r#async;
 mod capabilities;
 mod errors;
 mod file;
@@ -50,6 +52,9 @@ pub mod stream;
 mod sync;
 mod welcome;
 
+#[cfg(feature = "async")]
+#[doc(inline)]
+pub use self::r#async::AsyncRemoteFs;
 #[doc(inline)]
 pub use self::capabilities::Capabilities;
 #[doc(inline)]
