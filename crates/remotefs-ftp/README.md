@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs FTP client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.me/" target="_blank">@veeso_dev</a></p>
-<p align="center">Current version: 0.4.0 (18/01/2026)</p>
+<p align="center">Current version: 1.0.0 (09/09/2026)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -72,20 +72,51 @@ for the FTP/FTPS protocols.
 First of all, add `remotefs-ftp` to your project dependencies:
 
 ```toml
-remotefs = "0.3"
-remotefs-ftp = "0.4"
+remotefs = "1"
+remotefs-ftp = "1"
 ```
 
 ## Features
 
 these features are supported:
 
-- `find`: enable `find()` method on client (_enabled by default_)
+- `find`: enable the remotefs `find()` function (_enabled by default_)
 - `native-tls`: enable FTPS support using native-tls as backend
 - `native-tls-vendored`: enable static link for native-tls
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 - `rustls-aws-lc-rs`: enable FTPS support using rustls with aws-lc-rs as backend
 - `rustls-ring`: enable FTPS support using rustls with ring as backend
+
+The TLS feature suites verify backend configuration while using the plain FTP
+container for filesystem behavior. They do not claim FTPS transfer coverage:
+this repository has no controlled certificate fixture for an encrypted test
+server.
+
+`FtpFs` implements `remotefs::RemoteFs`. Every path is absolute and there is no
+working directory. Operations take `&self`, but FTP allows a single data
+connection: while a stream returned by `open`, `create` or `append` is alive,
+managed control-channel operations return `ProtocolError` until it is finished
+or dropped. The observational `is_connected()`, `capabilities()` and
+`welcome_message()` methods remain available, while `stream()` returns `None`.
+The server banner is available through `FtpFs::welcome_message()`.
+
+FTP paths must be UTF-8 POSIX paths rooted by exactly one `/`. ASCII control
+characters and parent components (`..`) are rejected. Windows drive and UNC
+forms are rejected because they are not absolute FTP paths.
+
+Read offsets use FTP `REST` when the server accepts it; otherwise the client
+falls back to skipping the prefix locally.
+
+`stream()` is a raw escape hatch into the FTP control connection. Commands
+issued through it bypass managed coordination. Raw transfers must be finished
+and their completion reply consumed before managed operations resume; leave the
+connection authenticated and in binary transfer mode.
+
+For managed streams, call `finish()` explicitly: it reports transfer and
+finalization errors. Dropping a stream performs best-effort cleanup, and a
+cleanup failure makes the control connection unusable until the client is
+reconnected. Finishing or dropping a limited read drains the unread tail, so
+cleanup can block and download the rest of the file.
 
 ---
 
@@ -99,26 +130,26 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | -------------- | --- |
 | append_file    | Yes |
 | append         | Yes |
-| change_dir     | Yes |
 | copy           | No  |
 | create_dir     | Yes |
-| create_file    | Yes |
 | create         | Yes |
 | exec           | Yes |
 | exists         | Yes |
 | list_dir       | Yes |
-| mov            | Yes |
-| open_file      | Yes |
 | open           | Yes |
-| pwd            | Yes |
+| read_file      | Yes |
 | remove_dir_all | Yes |
 | remove_dir     | Yes |
 | remove_file    | Yes |
-| setstat        | No  |
+| rename         | Yes |
+| set_metadata   | No  |
 | stat           | Yes |
 | symlink        | No  |
+| write_file     | Yes |
 
-> `exec` is implemented via the FTP `SITE` command, so it only runs commands the server exposes as `SITE` subcommands (e.g. `CHMOD`, `HELP`), not arbitrary shell/console commands.
+> `exec` is implemented via the FTP `SITE` command, so it only runs commands the server exposes as `SITE` subcommands (for example `CHMOD`), not arbitrary shell/console commands. `suppaftp` accepts only `200 CommandOk` for this operation.
+
+Capabilities: `STREAM_READ`, `STREAM_WRITE`, `APPEND`, `RANGE_READ`, `EXEC`.
 
 ---
 
