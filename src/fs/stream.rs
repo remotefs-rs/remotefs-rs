@@ -16,6 +16,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 
 use super::{RemoteError, RemoteResult};
 
+#[cfg(feature = "async")]
+pub mod r#async;
+
 /// A remote reader that can optionally seek and finalize its transfer.
 pub trait RemoteRead: Read + Send {
     /// Returns whether this reader supports seeking.

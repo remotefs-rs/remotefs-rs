@@ -20,12 +20,15 @@ rust-version = "1.89.0"
 description = "a client library to work with all file transfer protocols"
 
 [features]
+async = ["dep:async-trait", "dep:futures-io"]
 default = ["find"]
 # misc
 find = ["dep:wildmatch"]
 no-log = ["log/max_level_off"]
 
 [dependencies]
+async-trait = { version = "0.1", optional = true }
+futures-io = { version = "0.3", optional = true }
 log = "0.4"
 thiserror = "2"
 wildmatch = { version = "2", optional = true }

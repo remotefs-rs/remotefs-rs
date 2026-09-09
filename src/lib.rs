@@ -47,6 +47,7 @@
 //!
 //! | name     | description                                                                     | default |
 //! | -------- | ------------------------------------------------------------------------------- | ------- |
+//! | `async`  | Enable the runtime-neutral asynchronous filesystem contract and transfer types. |         |
 //! | `find`   | Enable `RemoteFs::find`, a recursive search matching names against a wildcard.   | ✔       |
 //! | `no-log` | Compile out every log statement by forcing `log/max_level_off`.                  |         |
 //!
@@ -79,6 +80,8 @@ pub use fs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 #[cfg(feature = "find")]
 mod find;
 pub mod fs;
+#[cfg(feature = "async")]
+mod io;
 pub mod path;
 #[cfg(feature = "find")]
 #[doc(inline)]

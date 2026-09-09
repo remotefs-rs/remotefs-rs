@@ -58,6 +58,11 @@ pub use self::errors::{RemoteError, RemoteErrorType, RemoteResult};
 pub use self::file::{File, FileType, Metadata, SetMetadata, UnixPex, UnixPexClass};
 #[doc(inline)]
 pub use self::options::{ExecOutput, ReadOptions, WriteOptions};
+#[cfg(feature = "async")]
+#[doc(inline)]
+pub use self::stream::r#async::{
+    AsyncReadStream, AsyncRemoteRead, AsyncRemoteWrite, AsyncWriteStream,
+};
 #[doc(inline)]
 pub use self::stream::{ReadStream, RemoteRead, RemoteWrite, WriteStream};
 #[doc(inline)]
