@@ -83,6 +83,11 @@ pub use fs::AsyncRemoteFs;
 #[doc(inline)]
 pub use fs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 // -- modules
+#[cfg(feature = "tokio")]
+pub mod adapters;
+#[cfg(feature = "tokio")]
+#[doc(inline)]
+pub use adapters::blocking;
 #[cfg(feature = "find")]
 mod find;
 pub mod fs;

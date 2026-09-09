@@ -84,6 +84,26 @@ impl AsyncReadStream {
         self.seekable
     }
 
+    /// Wraps a Tokio asynchronous reader with a no-op remote finalizer.
+    #[cfg(feature = "tokio")]
+    pub fn from_tokio<R>(inner: R) -> Self
+    where
+        R: tokio::io::AsyncRead + Send + Unpin + 'static,
+    {
+        Self::new(super::tokio::TokioReader::new(inner))
+    }
+
+    /// Converts this remote reader into a Tokio-compatible asynchronous reader.
+    ///
+    /// Call `into_inner().finish().await` on the returned compatibility wrapper
+    /// to complete the remote transfer.
+    #[cfg(feature = "tokio")]
+    pub fn into_tokio(self) -> tokio_util::compat::Compat<Self> {
+        use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+        FuturesAsyncReadCompatExt::compat(self)
+    }
+
     /// Completes the remote read and consumes the stream.
     pub async fn finish(self) -> RemoteResult<()> {
         let (reader, seek_result) = match self.state {
@@ -203,6 +223,26 @@ impl AsyncWriteStream {
     /// Returns whether the wrapped writer supports seeking.
     pub fn seekable(&self) -> bool {
         self.seekable
+    }
+
+    /// Wraps a Tokio asynchronous writer with a no-op remote finalizer.
+    #[cfg(feature = "tokio")]
+    pub fn from_tokio<R>(inner: R) -> Self
+    where
+        R: tokio::io::AsyncWrite + Send + Unpin + 'static,
+    {
+        Self::new(super::tokio::TokioWriter::new(inner))
+    }
+
+    /// Converts this remote writer into a Tokio-compatible asynchronous writer.
+    ///
+    /// Call `into_inner().finish().await` on the returned compatibility wrapper
+    /// to complete the remote transfer.
+    #[cfg(feature = "tokio")]
+    pub fn into_tokio(self) -> tokio_util::compat::Compat<Self> {
+        use tokio_util::compat::FuturesAsyncWriteCompatExt;
+
+        FuturesAsyncWriteCompatExt::compat_write(self)
     }
 
     /// Completes the remote write and consumes the stream.
