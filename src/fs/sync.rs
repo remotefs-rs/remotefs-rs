@@ -104,7 +104,7 @@ pub trait RemoteFs {
     /// # Errors
     ///
     /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `dir` does not
-    /// exist, [`RemoteErrorType::PexError`] when it may not be entered, and
+    /// exist, [`RemoteErrorType::PermissionDenied`] when it may not be entered, and
     /// [`RemoteErrorType::NotConnected`] when not connected.
     fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf>;
 
@@ -115,7 +115,7 @@ pub trait RemoteFs {
     /// # Errors
     ///
     /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does not
-    /// exist, [`RemoteErrorType::PexError`] when it may not be read, and
+    /// exist, [`RemoteErrorType::PermissionDenied`] when it may not be read, and
     /// [`RemoteErrorType::NotConnected`] when not connected.
     fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>>;
 
@@ -138,7 +138,7 @@ pub trait RemoteFs {
     ///
     /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
     /// notion of settable metadata, [`RemoteErrorType::NoSuchFileOrDirectory`]
-    /// when `path` does not exist, [`RemoteErrorType::PexError`] when the change
+    /// when `path` does not exist, [`RemoteErrorType::PermissionDenied`] when the change
     /// is not permitted, and [`RemoteErrorType::NotConnected`] when not
     /// connected.
     fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
@@ -170,7 +170,7 @@ pub trait RemoteFs {
     ///
     /// Returns [`RemoteErrorType::DirectoryNotEmpty`] when the directory still
     /// has entries, [`RemoteErrorType::NoSuchFileOrDirectory`] when `path` does
-    /// not exist, [`RemoteErrorType::PexError`] when the removal is not
+    /// not exist, [`RemoteErrorType::PermissionDenied`] when the removal is not
     /// permitted, and [`RemoteErrorType::NotConnected`] when not connected.
     fn remove_dir(&mut self, path: &Path) -> RemoteResult<()>;
 
@@ -225,8 +225,8 @@ pub trait RemoteFs {
     ///
     /// # Errors
     ///
-    /// Returns [`RemoteErrorType::DirectoryAlreadyExists`] when something is
-    /// already there, [`RemoteErrorType::PexError`] when the parent may not be
+    /// Returns [`RemoteErrorType::AlreadyExists`] when something is
+    /// already there, [`RemoteErrorType::PermissionDenied`] when the parent may not be
     /// written, and [`RemoteErrorType::NotConnected`] when not connected.
     fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()>;
 
@@ -249,7 +249,7 @@ pub trait RemoteFs {
     ///
     /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol that cannot
     /// copy server-side, [`RemoteErrorType::NoSuchFileOrDirectory`] when `src`
-    /// does not exist, [`RemoteErrorType::PexError`] when `dest` may not be
+    /// does not exist, [`RemoteErrorType::PermissionDenied`] when `dest` may not be
     /// written, and [`RemoteErrorType::NotConnected`] when not connected.
     fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
@@ -258,7 +258,7 @@ pub trait RemoteFs {
     /// # Errors
     ///
     /// Returns [`RemoteErrorType::NoSuchFileOrDirectory`] when `src` does not
-    /// exist, [`RemoteErrorType::PexError`] when `dest` may not be written, and
+    /// exist, [`RemoteErrorType::PermissionDenied`] when `dest` may not be written, and
     /// [`RemoteErrorType::NotConnected`] when not connected.
     fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
@@ -267,7 +267,7 @@ pub trait RemoteFs {
     /// # Errors
     ///
     /// Returns [`RemoteErrorType::UnsupportedFeature`] on a protocol with no
-    /// shell, [`RemoteErrorType::PexError`] when execution is not permitted, and
+    /// shell, [`RemoteErrorType::PermissionDenied`] when execution is not permitted, and
     /// [`RemoteErrorType::NotConnected`] when not connected. A command that runs
     /// and fails is `Ok` with a non-zero exit code, not an error.
     fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)>;
@@ -386,7 +386,7 @@ pub trait RemoteFs {
             trace!("Opened remote file");
             let mut stream = self.append(path, metadata)?;
             let sz = io::copy(&mut reader, &mut stream)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+                .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))?;
             self.on_written(stream)?;
             trace!("Written {sz} bytes to destination");
             Ok(sz)
@@ -423,7 +423,7 @@ pub trait RemoteFs {
             let mut stream = self.create(path, metadata)?;
             trace!("Opened remote file");
             let sz = io::copy(&mut reader, &mut stream)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+                .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))?;
             self.on_written(stream)?;
             trace!("Written {sz} bytes to destination");
             Ok(sz)
@@ -454,7 +454,7 @@ pub trait RemoteFs {
             let mut stream = self.open(src)?;
             trace!("File opened");
             let sz = io::copy(&mut stream, &mut dest)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e.to_string()))?;
+                .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))?;
             self.on_read(stream)?;
             trace!("Copied {sz} bytes to destination");
             Ok(sz)
