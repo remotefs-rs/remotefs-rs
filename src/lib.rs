@@ -89,9 +89,15 @@ pub mod fs;
 #[cfg(feature = "async")]
 mod io;
 pub mod path;
+pub mod working_dir;
 #[cfg(feature = "find")]
 #[doc(inline)]
 pub use find::find;
+#[cfg(feature = "async")]
+#[doc(inline)]
+pub use working_dir::AsyncWorkingDir;
+#[doc(inline)]
+pub use working_dir::WorkingDir;
 
 // -- mock
 #[cfg(test)]
