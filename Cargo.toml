@@ -1,11 +1,18 @@
 [package]
 name = "remotefs"
-version = "0.3.1"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs"
 edition = "2024"
-include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+include = [
+  "src/**/*",
+  "LICENSE",
+  "README.md",
+  "CHANGELOG.md",
+  "MIGRATION.md",
+  "skills/migrate-to-remotefs-1/SKILL.md",
+]
 keywords = [
   "scp-client",
   "sftp-client",
