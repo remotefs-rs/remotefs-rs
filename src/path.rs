@@ -1,6 +1,8 @@
 //! Validation helpers for paths accepted by remote filesystem operations.
 
-use std::path::Path;
+#[cfg(windows)]
+use std::path::Component;
+use std::path::{Path, PathBuf};
 
 use crate::fs::{RemoteError, RemoteErrorType, RemoteResult};
 
@@ -33,6 +35,28 @@ pub fn ensure_absolute(path: &Path) -> RemoteResult<&Path> {
     }
 }
 
+pub(crate) fn absolutize(cwd: &Path, path: &Path) -> RemoteResult<PathBuf> {
+    ensure_absolute(cwd)?;
+    if path.as_os_str().is_empty() {
+        return Err(RemoteError::new(RemoteErrorType::InvalidPath));
+    }
+    #[cfg(windows)]
+    if !path.is_absolute()
+        && path
+            .components()
+            .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+    {
+        return Err(RemoteError::new(RemoteErrorType::InvalidPath));
+    }
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    ensure_absolute(&resolved)?;
+    Ok(resolved)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -45,6 +69,29 @@ mod tests {
             let error = super::ensure_absolute(Path::new(input)).unwrap_err();
             assert_eq!(error.kind(), RemoteErrorType::InvalidPath);
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolutizes_relative_paths_without_collapsing_components() -> RemoteResult<()> {
+        let cwd = Path::new("/tmp/work");
+        assert_eq!(
+            super::absolutize(cwd, Path::new("file"))?,
+            Path::new("/tmp/work/file")
+        );
+        assert_eq!(
+            super::absolutize(cwd, Path::new("../file"))?,
+            Path::new("/tmp/work/../file")
+        );
+        assert_eq!(
+            super::absolutize(cwd, Path::new("/other/file"))?,
+            Path::new("/other/file")
+        );
+        assert_eq!(
+            super::absolutize(cwd, Path::new("")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        Ok(())
     }
 
     #[cfg(unix)]
