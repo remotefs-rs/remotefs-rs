@@ -29,7 +29,11 @@ impl fmt::Display for KubePath {
 impl KubePath {
     /// Get Kube Path from a path, using the current pod and container.
     pub fn from_path(pod: Option<&str>, container: Option<&str>, path: &Path) -> Self {
-        if path.is_absolute() {
+        // Paths are always POSIX-style pod/container paths, regardless of the
+        // host platform, so check for a root component rather than
+        // `Path::is_absolute()`: on Windows, a rootless `/pod/...` path is
+        // not absolute without a drive prefix.
+        if path.has_root() {
             Self::from_absolute_path(path)
         } else {
             Self::from_relative_path(pod, container, path)

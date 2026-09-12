@@ -4,28 +4,36 @@
 
 //! # remotefs-kube
 //!
-//! remotefs-kube is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the Kube API protocol.
+//! remotefs-kube is a [remotefs](https://github.com/remotefs-rs/remotefs-rs)
+//! client implementation for Kubernetes, giving shell-level access to the
+//! containers of a pod.
+//!
+//! It exposes two client types: [`KubeContainerFs`], which talks to a single
+//! container, and [`KubeMultiPodFs`], which exposes every pod and container
+//! in a namespace as one abstract file system.
 //!
 //! ## Get started
 //!
-//! First of all you need to add **remotefs** and the client to your project dependencies:
+//! First of all you need to add **remotefs** and **remotefs-kube** to your
+//! project dependencies:
 //!
 //! ```toml
-//! remotefs = "^0.3"
-//! remotefs-kube = "^0.4"
+//! [dependencies]
+//! remotefs = "0.3"
+//! remotefs-kube = "0.4"
 //! ```
 //!
-//! these features are supported:
+//! ## Feature flags
 //!
-//! - `find`: enable `find()` method for RemoteFs. (*enabled by default*)
-//! - `no-log`: disable logging. By default, this library will log via the `log` crate.
+//! | name      | description                                                          | default |
+//! | --------- | --------------------------------------------------------------------- | ------- |
+//! | `find`    | Enable the `find()` method on the client.                             | ✔       |
+//! | `no-log`  | Disable logging. By default this library logs via the `log` crate.    |         |
 //!
+//! ## `KubeMultiPodFs`
 //!
-//! ### Kube multi pod client
-//!
-//! The MultiPod client gives access to all the pods with their own containers in a namespace.
-//!
-//! This client creates an abstract file system with the following structure
+//! The MultiPod client gives access to every pod and container in a
+//! namespace at once, laid out as one abstract file system:
 //!
 //! - / (root)
 //!   - pod-a
@@ -44,58 +52,61 @@
 //!
 //! So paths have the following structure: `/pod-name/container-name/path/to/file`.
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! use std::path::Path;
+//! use std::sync::Arc;
 //!
-//! // import remotefs trait and client
 //! use remotefs::RemoteFs;
 //! use remotefs_kube::KubeMultiPodFs;
-//! use std::path::Path;
 //!
-//! let rt = Arc::new(
+//! let runtime = Arc::new(
 //!     tokio::runtime::Builder::new_current_thread()
-//!     .enable_all()
-//!     .build()
-//!     .unwrap(),
+//!         .enable_all()
+//!         .build()
+//!         .expect("failed to build the Tokio runtime"),
 //! );
-//! let mut client: KubeMultiPodFs = KubeMultiPodFs::new(&rt);
+//! let mut client = KubeMultiPodFs::new(&runtime);
 //!
-//! // connect
-//! assert!(client.connect().is_ok());
-//! // get working directory
-//! println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-//! // change working directory
-//! assert!(client.change_dir(Path::new("/my-pod/alpine/tmp")).is_ok());
+//! // connect, using the default kubeconfig
+//! client.connect().expect("connection failed");
+//! // print the working directory
+//! println!("wrkdir: {wrkdir}", wrkdir = client.pwd().expect("pwd failed").display());
+//! // change the working directory to a container's `/tmp`
+//! client
+//!     .change_dir(Path::new("/my-pod/alpine/tmp"))
+//!     .expect("cd failed");
 //! // disconnect
-//! assert!(client.disconnect().is_ok());
+//! client.disconnect().expect("disconnection failed");
 //! ```
 //!
-//! ### Kube container client
+//! ## `KubeContainerFs`
 //!
-//! Here is a basic usage example, with the `KubeContainerFs` client, which is used to connect and interact with a single container on a certain pod. This client gives the entire access to the container file system.
+//! The container client connects to and interacts with a single container on
+//! a given pod, giving full access to that container's file system.
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! use std::path::Path;
+//! use std::sync::Arc;
 //!
-//! // import remotefs trait and client
 //! use remotefs::RemoteFs;
 //! use remotefs_kube::KubeContainerFs;
-//! use std::path::Path;
 //!
-//! let rt = Arc::new(
+//! let runtime = Arc::new(
 //!     tokio::runtime::Builder::new_current_thread()
-//!     .enable_all()
-//!     .build()
-//!     .unwrap(),
+//!         .enable_all()
+//!         .build()
+//!         .expect("failed to build the Tokio runtime"),
 //! );
-//! let mut client: KubeContainerFs = KubeContainerFs::new("my-pod", "container-name", &rt);
+//! let mut client = KubeContainerFs::new("my-pod", "container-name", &runtime);
 //!
-//! // connect
-//! assert!(client.connect().is_ok());
-//! // get working directory
-//! println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-//! // change working directory
-//! assert!(client.change_dir(Path::new("/tmp")).is_ok());
+//! // connect, using the default kubeconfig
+//! client.connect().expect("connection failed");
+//! // print the working directory
+//! println!("wrkdir: {wrkdir}", wrkdir = client.pwd().expect("pwd failed").display());
+//! // change the working directory
+//! client.change_dir(Path::new("/tmp")).expect("cd failed");
 //! // disconnect
-//! assert!(client.disconnect().is_ok());
+//! client.disconnect().expect("disconnection failed");
 //! ```
 //!
 
