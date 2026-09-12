@@ -43,9 +43,11 @@ fn should_not_append_to_file() {
     // Append to file
     let file_data = "Hello, world!\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .append_file(p, &Metadata::default(), Box::new(reader))
-        .is_err());
+    assert!(
+        client
+            .append_file(p, &Metadata::default(), Box::new(reader))
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -61,9 +63,11 @@ fn should_change_directory() {
 #[test]
 fn should_not_change_directory() {
     let mut client = setup_client();
-    assert!(client
-        .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-        .is_err());
+    assert!(
+        client
+            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -74,9 +78,11 @@ fn should_copy_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     assert!(client.copy(p, Path::new("b.txt")).is_ok());
     assert!(client.stat(p).is_ok());
     assert!(client.stat(Path::new("b.txt")).is_ok());
@@ -90,9 +96,11 @@ fn should_not_copy_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
     finalize_client(client);
 }
@@ -101,9 +109,11 @@ fn should_not_copy_file() {
 fn should_create_directory() {
     let mut client = setup_client();
     // create directory
-    assert!(client
-        .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-        .is_ok());
+    assert!(
+        client
+            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+            .is_ok()
+    );
     finalize_client(client);
 }
 
@@ -111,9 +121,11 @@ fn should_create_directory() {
 fn should_not_create_directory_cause_already_exists() {
     let mut client = setup_client();
     // create directory
-    assert!(client
-        .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-        .is_ok());
+    assert!(
+        client
+            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
+            .is_ok()
+    );
     assert_eq!(
         client
             .create_dir(Path::new("mydir"), UnixPex::from(0o755))
@@ -129,12 +141,14 @@ fn should_not_create_directory_cause_already_exists() {
 fn should_not_create_directory() {
     let mut client = setup_client();
     // create directory
-    assert!(client
-        .create_dir(
-            Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-            UnixPex::from(0o755)
-        )
-        .is_err());
+    assert!(
+        client
+            .create_dir(
+                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
+                UnixPex::from(0o755)
+            )
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -164,9 +178,11 @@ fn should_not_create_file() {
     let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_err());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -185,9 +201,11 @@ fn should_tell_whether_file_exists() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     // Verify size
     assert_eq!(client.exists(p).unwrap(), true);
     assert_eq!(client.exists(Path::new("b.txt")).unwrap(), false);
@@ -207,15 +225,17 @@ fn should_list_dir() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default().size(10), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
+            .is_ok()
+    );
     // Verify size
     let file = client
         .list_dir(wrkdir.as_path())
         .ok()
         .unwrap()
-        .get(0)
+        .first()
         .unwrap()
         .clone();
     assert_eq!(file.name().as_str(), "a.txt");
@@ -243,9 +263,11 @@ fn should_move_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     // Verify size
     let dest = Path::new("b.txt");
     assert!(client.mov(p, dest).is_ok());
@@ -261,15 +283,19 @@ fn should_not_move_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     // Verify size
     let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
     assert!(client.mov(p, dest).is_err());
-    assert!(client
-        .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-        .is_err());
+    assert!(
+        client
+            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -280,9 +306,11 @@ fn should_open_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default().size(10), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default().size(10), Box::new(reader))
+            .is_ok()
+    );
     // Verify size
     let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
     assert_eq!(client.open_file(p, buffer).unwrap(), 10);
@@ -294,9 +322,11 @@ fn should_not_open_file() {
     let mut client = setup_client();
     // Verify size
     let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-    assert!(client
-        .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-        .is_err());
+    assert!(
+        client
+            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -313,17 +343,21 @@ fn should_remove_dir_all() {
     // Create dir
     let mut dir_path = client.pwd().unwrap();
     dir_path.push(Path::new("test/"));
-    assert!(client
-        .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-        .is_ok());
+    assert!(
+        client
+            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+            .is_ok()
+    );
     // Create file
     let mut file_path = dir_path.clone();
     file_path.push(Path::new("a.txt"));
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     // Remove dir
     assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
     finalize_client(client);
@@ -333,9 +367,11 @@ fn should_remove_dir_all() {
 fn should_not_remove_dir_all() {
     let mut client = setup_client();
     // Remove dir
-    assert!(client
-        .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-        .is_err());
+    assert!(
+        client
+            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -345,9 +381,11 @@ fn should_remove_dir() {
     // Create dir
     let mut dir_path = client.pwd().unwrap();
     dir_path.push(Path::new("test/"));
-    assert!(client
-        .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-        .is_ok());
+    assert!(
+        client
+            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+            .is_ok()
+    );
     assert!(client.remove_dir(dir_path.as_path()).is_ok());
     finalize_client(client);
 }
@@ -358,17 +396,21 @@ fn should_not_remove_dir() {
     // Create dir
     let mut dir_path = client.pwd().unwrap();
     dir_path.push(Path::new("test/"));
-    assert!(client
-        .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-        .is_ok());
+    assert!(
+        client
+            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
+            .is_ok()
+    );
     // Create file
     let mut file_path = dir_path.clone();
     file_path.push(Path::new("a.txt"));
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     // Remove dir
     assert!(client.remove_dir(dir_path.as_path()).is_err());
     finalize_client(client);
@@ -381,9 +423,11 @@ fn should_remove_file() {
     let p = Path::new("a.txt");
     let file_data = "test data\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     assert!(client.remove_file(p).is_ok());
     finalize_client(client);
 }
@@ -395,26 +439,30 @@ fn should_setstat_file() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
 
-    assert!(client
-        .setstat(
-            p,
-            Metadata {
-                accessed: Some(SystemTime::UNIX_EPOCH),
-                created: None,
-                file_type: FileType::File,
-                gid: Some(1000),
-                mode: Some(UnixPex::from(0o755)),
-                modified: Some(SystemTime::UNIX_EPOCH),
-                size: 7,
-                symlink: None,
-                uid: Some(1000),
-            }
-        )
-        .is_ok());
+    assert!(
+        client
+            .setstat(
+                p,
+                Metadata {
+                    accessed: Some(SystemTime::UNIX_EPOCH),
+                    created: None,
+                    file_type: FileType::File,
+                    gid: Some(1000),
+                    mode: Some(UnixPex::from(0o755)),
+                    modified: Some(SystemTime::UNIX_EPOCH),
+                    size: 7,
+                    symlink: None,
+                    uid: Some(1000),
+                }
+            )
+            .is_ok()
+    );
     let entry = client.stat(p).unwrap();
     let stat = entry.metadata();
     assert_eq!(stat.accessed, Some(SystemTime::UNIX_EPOCH));
@@ -433,22 +481,24 @@ fn should_not_setstat_file() {
     let mut client = setup_client();
     // Create file
     let p = Path::new("bbbbb/cccc/a.sh");
-    assert!(client
-        .setstat(
-            p,
-            Metadata {
-                accessed: None,
-                created: None,
-                file_type: FileType::File,
-                gid: Some(1),
-                mode: Some(UnixPex::from(0o755)),
-                modified: None,
-                size: 7,
-                symlink: None,
-                uid: Some(1),
-            }
-        )
-        .is_err());
+    assert!(
+        client
+            .setstat(
+                p,
+                Metadata {
+                    accessed: None,
+                    created: None,
+                    file_type: FileType::File,
+                    gid: Some(1),
+                    mode: Some(UnixPex::from(0o755)),
+                    modified: None,
+                    size: 7,
+                    symlink: None,
+                    uid: Some(1),
+                }
+            )
+            .is_err()
+    );
     finalize_client(client);
 }
 
@@ -459,13 +509,15 @@ fn should_stat_file() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(
-            p,
-            &Metadata::default().size(7).mode(UnixPex::from(0o644)),
-            Box::new(reader)
-        )
-        .is_ok());
+    assert!(
+        client
+            .create_file(
+                p,
+                &Metadata::default().size(7).mode(UnixPex::from(0o644)),
+                Box::new(reader)
+            )
+            .is_ok()
+    );
     let entry = client.stat(p).unwrap();
     assert_eq!(entry.name(), "a.sh");
     let mut expected_path = client.pwd().unwrap();
@@ -493,9 +545,11 @@ fn should_make_symlink() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     let symlink = Path::new("b.sh");
     // making b.sh -> a.sh
     assert!(client.symlink(symlink, p).is_ok());
@@ -510,15 +564,19 @@ fn should_not_make_symlink() {
     let p = Path::new("a.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(p, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(p, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     let symlink = Path::new("b.sh");
     let file_data = "echo 5\n";
     let reader = Cursor::new(file_data.as_bytes());
-    assert!(client
-        .create_file(symlink, &Metadata::default(), Box::new(reader))
-        .is_ok());
+    assert!(
+        client
+            .create_file(symlink, &Metadata::default(), Box::new(reader))
+            .is_ok()
+    );
     assert!(client.symlink(symlink, p).is_err());
     assert!(client.remove_file(symlink).is_ok());
     assert!(client.symlink(symlink, Path::new("c.sh")).is_err());

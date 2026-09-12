@@ -39,8 +39,8 @@
 <p align="center">
   <a href="https://github.com/remotefs-rs/remotefs-rs-memory/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-memory/workflows/linux/badge.svg"
-      alt="Linux CI"
+      src="https://github.com/remotefs-rs/remotefs-rs-memory/workflows/CI/badge.svg"
+      alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-memory"
     ><img
@@ -80,6 +80,15 @@ assert!(client.connect().is_ok());
 // Change directory
 assert!(client.change_dir(tempdir.as_path()).is_ok());
 ```
+
+## Contributing 🤝
+
+Contributions, bug reports, new features, and questions are welcome! 😉
+If you have any questions or concerns, or you want to suggest a new feature, or you want just want to improve remotefs, feel free to open an issue or a PR.
+
+Please read the [AI policy](AI_POLICY.md) before opening a pull request.
+
+---
 
 ## Changelog ⏳
 

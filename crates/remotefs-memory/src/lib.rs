@@ -3,8 +3,13 @@
 
 //! # remotefs-memory
 //!
-//! A memory-based implementation of the `remotefs` crate.
-//! This crate provides a simple in-memory filesystem that can be used for testing purposes.
+//! remotefs-memory is a [remotefs](https://github.com/remotefs-rs/remotefs-rs)
+//! client implementation backed entirely by an in-memory tree, useful for
+//! tests and simulations that need a [`RemoteFs`] without a real server.
+//!
+//! It exposes a single type, [`MemoryFs`], which implements the [`RemoteFs`]
+//! trait and can therefore be used interchangeably with any other remotefs
+//! client.
 //!
 //! ## Getting Started
 //!
@@ -58,7 +63,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-pub use orange_trees::{node, Node, Tree};
+pub use orange_trees::{Node, Tree, node};
 use remotefs::fs::stream::{StreamWriter, WriteAndSeek};
 use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
@@ -122,7 +127,26 @@ impl Seek for WriteHandle {
 impl WriteAndSeek for WriteHandle {}
 
 impl MemoryFs {
-    /// Create a new instance of the [`MemoryFs`] with the provided [`FsTree`].
+    /// Create a client backed by `tree`.
+    ///
+    /// The working directory starts at `/` and `uid`/`gid` default to `0`
+    /// for every file until [`MemoryFs::with_get_uid`] or
+    /// [`MemoryFs::with_get_gid`] is used to override them.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::path::PathBuf;
+    ///
+    /// use remotefs::fs::UnixPex;
+    /// use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
+    ///
+    /// let tree = Tree::new(node!(
+    ///     PathBuf::from("/"),
+    ///     Inode::dir(0, 0, UnixPex::from(0o755))
+    /// ));
+    /// let client = MemoryFs::new(tree);
+    /// ```
     pub fn new(tree: FsTree) -> Self {
         Self {
             tree,
@@ -133,7 +157,22 @@ impl MemoryFs {
         }
     }
 
-    /// Set the function to get the user id (uid).
+    /// Override the closure used to fill the uid of newly created files.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::path::PathBuf;
+    ///
+    /// use remotefs::fs::UnixPex;
+    /// use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
+    ///
+    /// let tree = Tree::new(node!(
+    ///     PathBuf::from("/"),
+    ///     Inode::dir(0, 0, UnixPex::from(0o755))
+    /// ));
+    /// let client = MemoryFs::new(tree).with_get_uid(|| 1000);
+    /// ```
     pub fn with_get_uid<F>(mut self, get_uid: F) -> Self
     where
         F: Fn() -> u32 + Send + Sync + 'static,
@@ -142,7 +181,22 @@ impl MemoryFs {
         self
     }
 
-    /// Set the function to get the group id (gid).
+    /// Override the closure used to fill the gid of newly created files.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::path::PathBuf;
+    ///
+    /// use remotefs::fs::UnixPex;
+    /// use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
+    ///
+    /// let tree = Tree::new(node!(
+    ///     PathBuf::from("/"),
+    ///     Inode::dir(0, 0, UnixPex::from(0o755))
+    /// ));
+    /// let client = MemoryFs::new(tree).with_get_gid(|| 1000);
+    /// ```
     pub fn with_get_gid<F>(mut self, get_gid: F) -> Self
     where
         F: Fn() -> u32 + Send + Sync + 'static,
