@@ -7,7 +7,7 @@
 <p align="center">~ Remotefs kube client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.4.0 (29/09/2024)</p>
+<p align="center">Current version: 1.0.0 (12/09/2026)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -49,14 +49,17 @@ First of all you need to add **remotefs** and **remotefs-kube** to your project 
 
 ```toml
 [dependencies]
-remotefs = "0.3"
-remotefs-kube = "0.4"
+remotefs = { version = "1", features = ["async"] }
+remotefs-kube = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 these features are supported:
 
-- `find`: enable `find()` method for RemoteFs. (_enabled by default_)
-- `no-log`: disable logging. By default, this library will log via the `log` crate.
+- `find`: enable `remotefs::find_async` for the clients (_enabled by default_)
+- `no-log`: disable logging. By default, this library logs via the `log` crate.
+- `tokio`: enable `into_blocking`, wrapping a client for blocking
+  `remotefs::RemoteFs` callers.
 
 The library provides two different clients:
 
@@ -88,94 +91,123 @@ So paths have the following structure: `/pod-name/container-name/path/to/file`.
 
 ```rust
 use std::path::Path;
-use std::sync::Arc;
 
-use remotefs::RemoteFs;
+use remotefs::AsyncRemoteFs;
 use remotefs_kube::KubeMultiPodFs;
 
-let runtime = Arc::new(
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build the Tokio runtime"),
-);
-let mut client = KubeMultiPodFs::new(&runtime);
+#[tokio::main]
+async fn main() -> remotefs::RemoteResult<()> {
+    let mut client = KubeMultiPodFs::new();
 
-// connect, using the default kubeconfig
-client.connect().expect("connection failed");
-// print the working directory
-println!("wrkdir: {wrkdir}", wrkdir = client.pwd().expect("pwd failed").display());
-// change the working directory to a container's `/tmp`
-client
-    .change_dir(Path::new("/my-pod/alpine/tmp"))
-    .expect("cd failed");
-// disconnect
-client.disconnect().expect("disconnection failed");
+    // connect, using the default kubeconfig
+    client.connect().await?;
+    for pod in client.list_dir(Path::new("/")).await? {
+        println!("pod: {}", pod.name());
+    }
+    let _files = client.list_dir(Path::new("/my-pod/alpine/tmp")).await?;
+    // disconnect
+    client.disconnect().await?;
+    Ok(())
+}
 ```
 
 ### Kube container client
 
-Here is a basic usage example, with the `KubeContainerFs` client, which is used to connect and interact with a single container on a certain pod. This client gives the entire access to the container file system.
+Here is a basic usage example with the `KubeContainerFs` client, which
+connects to and interacts with a single container on a pod.
 
 ```rust
 use std::path::Path;
-use std::sync::Arc;
 
-use remotefs::RemoteFs;
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::{ReadOptions, WriteOptions};
 use remotefs_kube::KubeContainerFs;
 
-let runtime = Arc::new(
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build the Tokio runtime"),
-);
-let mut client = KubeContainerFs::new("my-pod", "container-name", &runtime);
+#[tokio::main]
+async fn main() -> remotefs::RemoteResult<()> {
+    let mut client = KubeContainerFs::new("my-pod", "container-name");
 
-// connect, using the default kubeconfig
-client.connect().expect("connection failed");
-// print the working directory
-println!("wrkdir: {wrkdir}", wrkdir = client.pwd().expect("pwd failed").display());
-// change the working directory
-client.change_dir(Path::new("/tmp")).expect("cd failed");
-// disconnect
-client.disconnect().expect("disconnection failed");
+    // connect, using the default kubeconfig
+    client.connect().await?;
+    let mut source = futures::io::Cursor::new(b"hello".to_vec());
+    client
+        .write_file(
+            Path::new("/tmp/hello.txt"),
+            &WriteOptions::default().size_hint(5),
+            &mut source,
+        )
+        .await?;
+    let mut destination = futures::io::Cursor::new(Vec::new());
+    client
+        .read_file(
+            Path::new("/tmp/hello.txt"),
+            &ReadOptions::default().offset(1).length(3),
+            &mut destination,
+        )
+        .await?;
+    assert_eq!(destination.into_inner(), b"ell");
+    // disconnect
+    client.disconnect().await?;
+    Ok(())
+}
 ```
 
 ---
 
+### Blocking usage
+
+Enable the `tokio` feature and call `into_blocking` to get a blocking wrapper
+that implements `remotefs::RemoteFs`:
+
+```rust
+use remotefs::RemoteFs;
+use remotefs_kube::KubeContainerFs;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let mut client: Box<dyn RemoteFs> = Box::new(
+        KubeContainerFs::new("my-pod", "container-name").into_blocking(runtime.handle().clone()),
+    );
+    client.connect()?;
+    client.disconnect()?;
+    Ok(())
+}
+```
+
 ### Client compatibility table ✔️
 
-The following table states the compatibility for the client client and the remote file system trait method.
+The following table states the compatibility for each client and remote file
+system trait method.
 
-Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
+Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be
+supported, and are omitted from the table.
 
-| Client/Method  | Kube |
-| -------------- | ---- |
-| append_file    | No   |
-| append         | No   |
-| change_dir     | Yes  |
-| copy           | Yes  |
-| create_dir     | Yes  |
-| create_file    | Yes  |
-| create         | No   |
-| exec           | Yes  |
-| exists         | Yes  |
-| list_dir       | Yes  |
-| mov            | Yes  |
-| open_file      | Yes  |
-| open           | No   |
-| pwd            | Yes  |
-| remove_dir_all | Yes  |
-| remove_dir     | Yes  |
-| remove_file    | Yes  |
-| setstat        | Yes  |
-| stat           | Yes  |
-| symlink        | Yes  |
+| Client/Method  | KubeContainerFs | KubeMultiPodFs       |
+| -------------- | --------------- | -------------------- |
+| append_file    | Yes             | Yes                  |
+| append         | Yes             | Yes                  |
+| copy           | Yes             | Yes (same container) |
+| create_dir     | Yes             | Yes                  |
+| create         | Yes             | Yes                  |
+| exec           | Yes             | No                   |
+| exists         | Yes             | Yes                  |
+| list_dir       | Yes             | Yes                  |
+| open           | Yes             | Yes                  |
+| read_file      | Yes             | Yes                  |
+| remove_dir_all | Yes             | Yes                  |
+| remove_dir     | Yes             | Yes                  |
+| remove_file    | Yes             | Yes                  |
+| rename         | Yes             | Yes (same container) |
+| set_metadata   | Yes             | Yes                  |
+| stat           | Yes             | Yes                  |
+| symlink        | Yes             | Yes (same container) |
+| write_file     | Yes             | Yes                  |
 
----
+### Migrating from 0.4
 
----
+See the [remotefs migration guide](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md)
+for upstream API changes and the [1.0.0 changelog](CHANGELOG.md) for this
+client's migration details.
 
 ## Contributing 🤝
 

@@ -2,24 +2,29 @@
 //!
 //! The `KubeContainerFs` client is a client that allows you to interact with a container in a pod.
 
+mod exec;
+mod stream;
+
+use std::future::poll_fn;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::pin::Pin;
 use std::time::SystemTime;
 
-use futures_util::StreamExt as _;
+use futures_io::{AsyncRead, AsyncWrite};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::AttachParams;
 use kube::{Api, Client, Config};
 use lazy_regex::{Lazy, Regex};
 use remotefs::File;
 use remotefs::fs::{
-    FileType, Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex,
-    UnixPexClass, Welcome, WriteStream,
+    AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, FileType, Metadata,
+    ReadOptions, RemoteError, RemoteErrorType, RemoteResult, SetMetadata, UnixPex, UnixPexClass,
+    WriteOptions,
 };
-use tokio::io::AsyncWriteExt as _;
-use tokio::runtime::Runtime;
 
+use self::exec::KubeExec;
+use self::stream::{ExecHandle, Finalize, KubeReadStream, KubeWriteStream, copy_limited};
 use crate::utils::{fmt as fmt_utils, parser as parser_utils, path as path_utils};
 
 /// NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
@@ -27,1897 +32,1457 @@ static LS_RE: Lazy<Regex> = lazy_regex!(
     r#"^([\-ld])([\-rwxsStT]{9})\s+(\d+)\s+(.+)\s+(.+)\s+(\d+)\s+(\w{3}\s+\d{1,2}\s+(?:\d{1,2}:\d{1,2}|\d{4}))\s+(.+)$"#
 );
 
-/// A [`RemoteFs`] client speaking to a single Kubernetes pod container.
+const WRITER_STDIN_BUF_SIZE: usize = 64 * 1024;
+
+fn writer_script(path: &Path, opts: &WriteOptions, redirect: &str) -> String {
+    let quoted = path_utils::shell_quote(path);
+    match opts.size_hint {
+        Some(size) => format!("head -c {size} {redirect} {quoted}"),
+        None => format!("cat {redirect} {quoted}"),
+    }
+}
+
+/// Blocking adapter over [`KubeContainerFs`], implementing [`remotefs::RemoteFs`].
+#[cfg(feature = "tokio")]
+pub type BlockingKubeContainerFs = remotefs::adapters::blocking::BlockOn<KubeContainerFs>;
+
+/// An [`AsyncRemoteFs`] client speaking to a single Kubernetes pod container.
 ///
-/// The client shells out to POSIX utilities (`cat`, `tar`, `ls`, `rm`, ...)
-/// inside the container over the pod exec stream, since Kubernetes has no
-/// native remote file system API. It keeps the pod and container name, the
-/// current working directory, and the shared Tokio [`Runtime`] used to drive
-/// the async `kube` client from synchronous [`RemoteFs`] methods.
+/// The client shells out to POSIX utilities (`cat`, `ls`, `rm`, ...) inside
+/// the container over the pod exec stream, since Kubernetes has no native
+/// remote file system API. Every path must be an absolute POSIX path.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
-/// use std::sync::Arc;
+/// use std::path::Path;
 ///
-/// use remotefs::RemoteFs;
+/// use remotefs::AsyncRemoteFs;
 /// use remotefs_kube::KubeContainerFs;
 ///
-/// let runtime = Arc::new(
-///     tokio::runtime::Builder::new_current_thread()
-///         .enable_all()
-///         .build()
-///         .expect("failed to build the Tokio runtime"),
-/// );
-/// let mut client = KubeContainerFs::new("my-pod", "container-name", &runtime);
-/// client.connect().expect("connection failed");
+/// # async fn run() -> remotefs::RemoteResult<()> {
+/// let mut client = KubeContainerFs::new("my-pod", "container-name");
+/// client.connect().await?;
+/// let entries = client.list_dir(Path::new("/tmp")).await?;
+/// client.disconnect().await?;
+/// # Ok(())
+/// # }
 /// ```
+#[derive(Debug)]
 pub struct KubeContainerFs {
-    pub(crate) config: Option<Config>,
-    pub(crate) container: String,
-    pub(crate) pod_name: String,
-    pub(crate) pods: Option<Api<Pod>>,
-    runtime: Arc<Runtime>,
-    pub(crate) wrkdir: PathBuf,
+    config: Option<Config>,
+    container: String,
+    pod_name: String,
+    exec: Option<KubeExec>,
 }
 
 impl KubeContainerFs {
     /// Create a client for `container` on `pod_name`.
     ///
     /// If [`KubeContainerFs::config`] is not called before
-    /// [`connect`](RemoteFs::connect), the client falls back to the default
-    /// kubeconfig (or the in-cluster configuration, when running inside a
-    /// pod).
+    /// [`connect`](AsyncRemoteFs::connect), the client falls back to the
+    /// default kubeconfig (or the in-cluster configuration, when running
+    /// inside a pod).
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use std::sync::Arc;
-    ///
     /// use remotefs_kube::KubeContainerFs;
     ///
-    /// let runtime = Arc::new(
-    ///     tokio::runtime::Builder::new_current_thread()
-    ///         .enable_all()
-    ///         .build()
-    ///         .expect("failed to build the Tokio runtime"),
-    /// );
-    /// let client = KubeContainerFs::new("my-pod", "container-name", &runtime);
+    /// let client = KubeContainerFs::new("my-pod", "container-name");
+    /// assert_eq!(client.pod_name(), "my-pod");
     /// ```
-    pub fn new(pod_name: impl ToString, container: impl ToString, runtime: &Arc<Runtime>) -> Self {
+    pub fn new(pod_name: impl Into<String>, container: impl Into<String>) -> Self {
         Self {
             config: None,
-            container: container.to_string(),
-            pod_name: pod_name.to_string(),
-            pods: None,
-            runtime: runtime.clone(),
-            wrkdir: PathBuf::from("/"),
+            container: container.into(),
+            pod_name: pod_name.into(),
+            exec: None,
         }
     }
 
     /// Set the Kubernetes client configuration to use on
-    /// [`connect`](RemoteFs::connect), instead of the default kubeconfig.
+    /// [`connect`](AsyncRemoteFs::connect), instead of the default kubeconfig.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use remotefs_kube::{Config, KubeContainerFs};
+    ///
+    /// let config = Config::new("https://127.0.0.1:8443".parse().unwrap());
+    /// let client = KubeContainerFs::new("my-pod", "container-name").config(config);
+    /// ```
+    #[must_use]
     pub fn config(mut self, config: Config) -> Self {
         self.config = Some(config);
         self
     }
 
+    /// The pod this client targets.
+    pub fn pod_name(&self) -> &str {
+        &self.pod_name
+    }
+
+    /// The container this client targets.
+    pub fn container(&self) -> &str {
+        &self.container
+    }
+
+    /// Wrap the client for blocking callers using the given runtime handle.
+    ///
+    /// The returned value implements [`remotefs::RemoteFs`] and can be stored
+    /// as `Box<dyn RemoteFs>`. It must not be used from inside an async
+    /// context, as documented by [`tokio::runtime::Handle::block_on`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `handle` belongs to a current-thread runtime, which cannot
+    /// drive the blocked operation from a non-async caller.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use remotefs::RemoteFs;
+    /// use remotefs_kube::KubeContainerFs;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = tokio::runtime::Runtime::new()?;
+    /// let mut client: Box<dyn RemoteFs> = Box::new(
+    ///     KubeContainerFs::new("my-pod", "container-name").into_blocking(runtime.handle().clone()),
+    /// );
+    /// client.connect()?;
+    /// client.disconnect()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "tokio")]
+    #[must_use]
+    pub fn into_blocking(self, handle: tokio::runtime::Handle) -> BlockingKubeContainerFs {
+        assert_ne!(
+            handle.runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread,
+            "into_blocking requires a multi-thread Tokio runtime"
+        );
+        remotefs::adapters::blocking::BlockOn::new(self, handle)
+    }
+
+    /// Build an already-connected client over an existing pod API handle.
+    ///
+    /// Used by `KubeMultiPodFs` to address a container without mutating
+    /// shared state.
+    pub(crate) fn attached(pods: Api<Pod>, pod_name: &str, container: &str) -> Self {
+        Self {
+            config: None,
+            container: container.to_string(),
+            pod_name: pod_name.to_string(),
+            exec: Some(KubeExec::new(pods, pod_name, container)),
+        }
+    }
+
     // -- private
 
-    /// Check connection status
-    fn check_connection(&mut self) -> RemoteResult<()> {
-        if self.is_connected() {
+    /// The exec runner, or `NotConnected`.
+    fn runner(&self) -> RemoteResult<&KubeExec> {
+        self.exec
+            .as_ref()
+            .ok_or_else(|| RemoteError::new(RemoteErrorType::NotConnected))
+    }
+
+    async fn exists_at(&self, exec: &KubeExec, path: &Path) -> RemoteResult<bool> {
+        let quoted = path_utils::shell_quote(path);
+        exec.shell_test(&format!("test -e {quoted} || test -L {quoted}"))
+            .await
+            .map_err(|err| RemoteError::with_source(RemoteErrorType::StatFailed, err))
+    }
+
+    async fn is_directory(&self, exec: &KubeExec, path: &Path) -> RemoteResult<bool> {
+        exec.shell_test(&format!("test -d {}", path_utils::shell_quote(path)))
+            .await
+            .map_err(|err| RemoteError::with_source(RemoteErrorType::StatFailed, err))
+    }
+
+    /// Fail with `NoSuchFileOrDirectory` unless `path` exists.
+    async fn require_exists(&self, exec: &KubeExec, path: &Path) -> RemoteResult<()> {
+        if self.exists_at(exec, path).await? {
             Ok(())
         } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
+            Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))
         }
     }
 
-    /// Parse a line of `ls -l` output and tokenize the output into a `FsFile`
-    fn parse_ls_output(&self, path: &Path, line: &str) -> Result<File, ()> {
-        // Prepare list regex
-        trace!("Parsing LS line: '{}'", line);
-        // Apply regex to result
-        match LS_RE.captures(line) {
-            // String matches regex
-            Some(metadata) => {
-                // NOTE: metadata fmt: (regex, file_type, permissions, link_count, uid, gid, filesize, modified, filename)
-                // Expected 7 + 1 (8) values: + 1 cause regex is repeated at 0
-                if metadata.len() < 8 {
-                    return Err(());
-                }
-                // Collect metadata
-                // Get if is directory and if is symlink
-                let (is_dir, is_symlink): (bool, bool) = match metadata.get(1).unwrap().as_str() {
-                    "-" => (false, false),
-                    "l" => (false, true),
-                    "d" => (true, false),
-                    _ => return Err(()), // Ignore special files
-                };
-                // Check string length (unix pex)
-                if metadata.get(2).unwrap().as_str().len() < 9 {
-                    return Err(());
-                }
-
-                let pex = |range: Range<usize>| {
-                    let mut count: u8 = 0;
-                    for (i, c) in metadata.get(2).unwrap().as_str()[range].chars().enumerate() {
-                        match c {
-                            '-' => {}
-                            _ => {
-                                count += match i {
-                                    0 => 4,
-                                    1 => 2,
-                                    2 => 1,
-                                    _ => 0,
-                                }
-                            }
-                        }
-                    }
-                    count
-                };
-
-                // Get unix pex
-                let mode = UnixPex::new(
-                    UnixPexClass::from(pex(0..3)),
-                    UnixPexClass::from(pex(3..6)),
-                    UnixPexClass::from(pex(6..9)),
-                );
-
-                // Parse modified and convert to SystemTime
-                let modified: SystemTime = match parser_utils::parse_lstime(
-                    metadata.get(7).unwrap().as_str(),
-                    "%b %d %Y",
-                    "%b %d %H:%M",
-                ) {
-                    Ok(t) => t,
-                    Err(_) => SystemTime::UNIX_EPOCH,
-                };
-                // Get uid
-                let uid: Option<u32> = metadata.get(4).unwrap().as_str().parse::<u32>().ok();
-                // Get gid
-                let gid: Option<u32> = metadata.get(5).unwrap().as_str().parse::<u32>().ok();
-                // Get filesize
-                let size = metadata
-                    .get(6)
-                    .unwrap()
-                    .as_str()
-                    .parse::<u64>()
-                    .unwrap_or(0);
-                // Get link and name
-                let (file_name, symlink): (String, Option<PathBuf>) = match is_symlink {
-                    true => self.get_name_and_link(metadata.get(8).unwrap().as_str()),
-                    false => (String::from(metadata.get(8).unwrap().as_str()), None),
-                };
-                // Sanitize file name
-                let file_name = PathBuf::from(&file_name)
-                    .file_name()
-                    .map(|x| x.to_string_lossy().to_string())
-                    .unwrap_or(file_name);
-                // Check if file_name is '.' or '..'
-                if file_name.as_str() == "." || file_name.as_str() == ".." {
-                    debug!("File name is {}; ignoring entry", file_name);
-                    return Err(());
-                }
-                // Re-check if is directory
-                let mut path: PathBuf = path.to_path_buf();
-                path.push(file_name.as_str());
-                // get file type
-                let file_type = if symlink.is_some() {
-                    FileType::Symlink
-                } else if is_dir {
-                    FileType::Directory
-                } else {
-                    FileType::File
-                };
-                // make metadata
-                let metadata = Metadata {
-                    accessed: None,
-                    created: None,
-                    file_type,
-                    gid,
-                    mode: Some(mode),
-                    modified: Some(modified),
-                    size,
-                    symlink,
-                    uid,
-                };
-                trace!(
-                    "Found entry at {} with metadata {:?}",
-                    path.display(),
-                    metadata
-                );
-                // Push to entries
-                Ok(File { path, metadata })
-            }
-            None => Err(()),
+    /// Fail unless the parent of `path` is an existing directory.
+    async fn require_parent_dir(&self, exec: &KubeExec, path: &Path) -> RemoteResult<()> {
+        let parent = path.parent().unwrap_or(Path::new("/"));
+        if self.is_directory(exec, parent).await? {
+            Ok(())
+        } else {
+            Err(RemoteError::with_message(
+                RemoteErrorType::NoSuchFileOrDirectory,
+                format!("parent directory {} does not exist", parent.display()),
+            ))
         }
     }
 
-    /// Perform shell cmd at path and return output and return code
-    fn shell_cmd_at_with_rc(
+    /// Spawn a writer command reading from stdin.
+    async fn spawn_writer(
         &self,
-        cmd: impl std::fmt::Display,
         path: &Path,
-    ) -> RemoteResult<(u32, String)> {
-        const STDOUT_SIZE: usize = 2048;
-
-        let shell_cmd = format!(r#"cd {} && {}; echo -n ";$?""#, path.display(), cmd);
-        debug!("Executing shell command: {}", shell_cmd);
-
-        self.runtime.block_on(async {
-            let attach_params = AttachParams::default()
-                .stdout(true)
-                .stdin(false)
-                .stderr(true)
-                .container(self.container.clone())
-                .max_stdout_buf_size(STDOUT_SIZE);
-
-            let mut process = self
-                .pods
-                .as_ref()
-                .unwrap()
-                .exec(
-                    &self.pod_name,
-                    vec!["/bin/sh", "-c", &shell_cmd],
-                    &attach_params,
-                )
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-
-            let stdout_reader =
-                tokio_util::io::ReaderStream::new(process.stdout().ok_or_else(|| {
-                    RemoteError::new_ex(RemoteErrorType::ProtocolError, "failed to read stdout")
-                })?);
-
-            let stdout = stdout_reader
-                .filter_map(|r| async { r.ok().and_then(|v| String::from_utf8(v.to_vec()).ok()) })
-                .collect::<Vec<_>>()
-                .await
-                .join("");
-
-            // if level is debug print stderr
-            if log::log_enabled!(log::Level::Debug) {
-                let stderr_reader =
-                    tokio_util::io::ReaderStream::new(process.stderr().ok_or_else(|| {
-                        RemoteError::new_ex(RemoteErrorType::ProtocolError, "failed to read stderr")
-                    })?);
-
-                let stderr = stderr_reader
-                    .filter_map(|r| async {
-                        r.ok().and_then(|v| String::from_utf8(v.to_vec()).ok())
-                    })
-                    .collect::<Vec<_>>()
-                    .await
-                    .join("");
-                debug!("Shell command stderr: {stderr}",);
-            }
-
-            process.join().await.map_err(|err| {
-                RemoteError::new_ex(RemoteErrorType::ProtocolError, err.to_string())
-            })?;
-
-            // collect rc from stdout
-            // count the number of tokens
-            let token_count = stdout.chars().filter(|c| *c == ';').count();
-            let mut tokens = stdout.split(';');
-            // stdout is all tokens, except the last one
-            let stdout = tokens
-                .by_ref()
-                .take(token_count)
-                .collect::<Vec<&str>>()
-                .join(";");
-            // last token is the return code
-            let rc = tokens
-                .next()
-                .ok_or_else(|| RemoteError::new(RemoteErrorType::ProtocolError))?
-                .parse::<u32>()
-                .map_err(|_| RemoteError::new(RemoteErrorType::ProtocolError))?;
-
-            debug!("Shell command exit code: {rc}",);
-            debug!("Shell command output: {stdout}");
-
-            Ok((rc, stdout))
-        })
-    }
-
-    /// Perform shell cmd and return output and return code
-    fn shell_cmd_with_rc(&self, cmd: impl std::fmt::Display) -> RemoteResult<(u32, String)> {
-        self.shell_cmd_at_with_rc(cmd, &self.wrkdir)
-    }
-
-    /// Perform shell cmd and return output
-    fn shell_cmd(&self, cmd: impl std::fmt::Display) -> RemoteResult<String> {
-        self.shell_cmd_with_rc(cmd).map(|(_, output)| output)
-    }
-
-    /// Returns from a `ls -l` command output file name token, the name of the file and the symbolic link (if there is any)
-    fn get_name_and_link(&self, token: &str) -> (String, Option<PathBuf>) {
-        let tokens: Vec<&str> = token.split(" -> ").collect();
-        let filename: String = String::from(*tokens.first().unwrap());
-        let symlink: Option<PathBuf> = tokens.get(1).map(PathBuf::from);
-        (filename, symlink)
-    }
-
-    /// Execute setstat command and assert result is 0
-    fn assert_stat_command(&mut self, cmd: String) -> RemoteResult<()> {
-        match self.shell_cmd_with_rc(cmd) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::StatFailed)),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
-    }
-
-    /// Returns whether file at `path` is a directory
-    fn is_directory(&mut self, path: &Path) -> RemoteResult<bool> {
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        match self.shell_cmd_with_rc(format!("test -d \"{}\"", path.display())) {
-            Ok((0, _)) => Ok(true),
-            Ok(_) => Ok(false),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, err)),
-        }
+        opts: &WriteOptions,
+        redirect: &str,
+    ) -> RemoteResult<AsyncWriteStream> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        self.require_parent_dir(exec, path).await?;
+        let script = writer_script(path, opts, redirect);
+        debug!("Opening write stream: {script}");
+        let params = AttachParams::default()
+            .stdin(true)
+            // Kubernetes runtimes may require an output channel even when
+            // the command redirects stdout to the target file.
+            .stdout(true)
+            .stderr(false)
+            .max_stdin_buf_size(WRITER_STDIN_BUF_SIZE);
+        let mut process = exec.spawn(&["/bin/sh", "-c", &script], params).await?;
+        let stdin = process.stdin().ok_or_else(|| {
+            RemoteError::with_message(RemoteErrorType::ProtocolError, "failed to attach stdin")
+        })?;
+        let handle = ExecHandle::new(process)?;
+        let finalize = Finalize {
+            exec: exec.clone(),
+            path: path.to_path_buf(),
+            mode: opts.mode,
+            modified: opts.modified,
+        };
+        Ok(AsyncWriteStream::new(KubeWriteStream::new(
+            Box::new(stdin),
+            Some(handle),
+            opts.size_hint,
+            Some(finalize),
+        )))
     }
 }
 
-impl RemoteFs for KubeContainerFs {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
-        debug!("Initializing Kube connection...");
-        let api = self.runtime.block_on(async {
-            let client = match self.config.as_ref() {
-                Some(config) => Client::try_from(config.clone())
-                    .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err)),
-                None => Client::try_default()
-                    .await
-                    .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err)),
-            }?;
-            let api: Api<Pod> = Api::default_namespaced(client);
-
-            if api.get(&self.pod_name).await.is_err() {
-                Err(RemoteError::new(RemoteErrorType::ConnectionError))
-            } else {
-                Ok(api)
+/// Parse a line of `ls -l` output into a [`File`] under `path`.
+///
+/// Returns `None` for lines that are not file entries (`total N`, `.`,
+/// `..`, special files).
+pub(crate) fn parse_ls_output(path: &Path, line: &str) -> Option<File> {
+    trace!("Parsing LS line: '{line}'");
+    let metadata = LS_RE.captures(line)?;
+    // NOTE: metadata fmt: (regex, file_type, permissions, link_count, uid, gid, filesize, modified, filename)
+    if metadata.len() < 8 {
+        return None;
+    }
+    let (is_dir, is_symlink): (bool, bool) = match metadata.get(1)?.as_str() {
+        "-" => (false, false),
+        "l" => (false, true),
+        "d" => (true, false),
+        _ => return None,
+    };
+    let pex_str = metadata.get(2)?.as_str();
+    if pex_str.len() < 9 {
+        return None;
+    }
+    let pex = |range: Range<usize>| {
+        let mut count: u8 = 0;
+        for (i, c) in pex_str[range].chars().enumerate() {
+            match c {
+                '-' => {}
+                _ => {
+                    count += match i {
+                        0 => 4,
+                        1 => 2,
+                        2 => 1,
+                        _ => 0,
+                    }
+                }
             }
-        })?;
-
-        debug!("Connection established with pod {}", self.pod_name);
-        // Set pods
-        self.pods = Some(api);
-        debug!("Getting working directory...");
-        // Get working directory
-        let wrkdir = self.shell_cmd("pwd")?;
-        if !wrkdir.starts_with('/') {
-            return Err(RemoteError::new_ex(
-                RemoteErrorType::ConnectionError,
-                format!("bad pwd response: {wrkdir}"),
-            ));
         }
-        self.wrkdir = PathBuf::from(wrkdir.trim());
-        info!(
-            "Connection established; working directory: {}",
-            self.wrkdir.display()
-        );
-        Ok(Welcome::default())
+        count
+    };
+    let mode = UnixPex::new(
+        UnixPexClass::from(pex(0..3)),
+        UnixPexClass::from(pex(3..6)),
+        UnixPexClass::from(pex(6..9)),
+    );
+    let modified: SystemTime =
+        parser_utils::parse_lstime(metadata.get(7)?.as_str(), "%b %d %Y", "%b %d %H:%M")
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+    let uid: Option<u32> = metadata.get(4)?.as_str().parse::<u32>().ok();
+    let gid: Option<u32> = metadata.get(5)?.as_str().parse::<u32>().ok();
+    let size = metadata.get(6)?.as_str().parse::<u64>().unwrap_or(0);
+    let (file_name, symlink): (String, Option<PathBuf>) = match is_symlink {
+        true => get_name_and_link(metadata.get(8)?.as_str()),
+        false => (String::from(metadata.get(8)?.as_str()), None),
+    };
+    let file_name = PathBuf::from(&file_name)
+        .file_name()
+        .map(|x| x.to_string_lossy().to_string())
+        .unwrap_or(file_name);
+    if file_name.as_str() == "." || file_name.as_str() == ".." {
+        debug!("File name is {file_name}; ignoring entry");
+        return None;
+    }
+    let path = path_utils::join(path, file_name.as_str());
+    let file_type = if symlink.is_some() {
+        FileType::Symlink
+    } else if is_dir {
+        FileType::Directory
+    } else {
+        FileType::File
+    };
+    let mut meta = Metadata::default()
+        .file_type(file_type)
+        .mode(mode)
+        .modified(modified)
+        .size(size);
+    meta.gid = gid;
+    meta.uid = uid;
+    meta.symlink = symlink;
+    trace!("Found entry at {} with metadata {meta:?}", path.display());
+    Some(File::new(path, meta))
+}
+
+/// Split the `ls -l` name token into file name and symlink target.
+fn get_name_and_link(token: &str) -> (String, Option<PathBuf>) {
+    let tokens: Vec<&str> = token.split(" -> ").collect();
+    let filename: String = String::from(*tokens.first().unwrap_or(&token));
+    let symlink: Option<PathBuf> = tokens.get(1).map(PathBuf::from);
+    (filename, symlink)
+}
+
+#[remotefs::async_trait]
+impl AsyncRemoteFs for KubeContainerFs {
+    async fn connect(&mut self) -> RemoteResult<()> {
+        if self.exec.is_some() {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyConnected));
+        }
+        debug!("Initializing Kube connection...");
+        let client = match self.config.as_ref() {
+            Some(config) => Client::try_from(config.clone()),
+            None => Client::try_default().await,
+        }
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
+        let api: Api<Pod> = Api::default_namespaced(client);
+        api.get(&self.pod_name)
+            .await
+            .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
+        self.exec = Some(KubeExec::new(api, &self.pod_name, &self.container));
+        info!("Connection established with pod {}", self.pod_name);
+        Ok(())
     }
 
-    fn disconnect(&mut self) -> RemoteResult<()> {
-        if self.pods.is_none() {
+    async fn disconnect(&mut self) -> RemoteResult<()> {
+        if self.exec.take().is_none() {
             return Err(RemoteError::new(RemoteErrorType::NotConnected));
         }
-
-        debug!("Disconnecting from remote...");
-        self.pods = None;
-
         info!("Disconnected from remote");
         Ok(())
     }
 
-    fn is_connected(&mut self) -> bool {
-        if let Some(pods) = self.pods.as_ref() {
-            self.runtime
-                .block_on(async { pods.get_status(&self.pod_name).await.is_ok() })
-        } else {
-            false
-        }
+    fn is_connected(&self) -> bool {
+        self.exec.is_some()
     }
 
-    fn pwd(&mut self) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        Ok(self.wrkdir.clone())
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::STREAM_READ
+            | Capabilities::STREAM_WRITE
+            | Capabilities::APPEND
+            | Capabilities::RANGE_READ
+            | Capabilities::COPY
+            | Capabilities::SYMLINK
+            | Capabilities::SET_METADATA
+            | Capabilities::POSIX_MODE
+            | Capabilities::EXEC
     }
 
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        let dir = path_utils::absolutize(self.wrkdir.as_path(), dir);
-        debug!("Changing working directory to {}", dir.display());
-        match self.shell_cmd(format!("cd \"{}\"; echo $?; pwd", dir.display())) {
-            Ok(output) => {
-                // Trim
-                let output: String = String::from(output.as_str().trim());
-                // Check if output starts with 0; should be 0{PWD}
-                match output.as_str().starts_with('0') {
-                    true => {
-                        // Set working directory
-                        self.wrkdir = PathBuf::from(&output.as_str()[1..].trim());
-                        debug!("Changed working directory to {}", self.wrkdir.display());
-                        Ok(self.wrkdir.clone())
-                    }
-                    false => Err(RemoteError::new_ex(
-                        // No such file or directory
-                        RemoteErrorType::NoSuchFileOrDirectory,
-                        format!("\"{}\"", dir.display()),
-                    )),
-                }
-            }
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
-    }
-
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+    async fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
         debug!("Getting file entries in {}", path.display());
-        // check if exists
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        if !self.is_directory(exec, path).await? {
+            return Err(if self.exists_at(exec, path).await? {
+                RemoteError::with_message(RemoteErrorType::BadFile, "not a directory")
+            } else {
+                RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)
+            });
         }
-        match self.shell_cmd(format!("ls -la \"{}/\"", path.display()).as_str()) {
-            Ok(output) => {
-                // Split output by (\r)\n
-                let lines: Vec<&str> = output.as_str().lines().collect();
-                let mut entries: Vec<File> = Vec::with_capacity(lines.len());
-                for line in lines.iter() {
-                    // First line must always be ignored
-                    // Parse row, if ok push to entries
-                    if let Ok(entry) = self.parse_ls_output(path.as_path(), line) {
-                        entries.push(entry);
-                    }
-                }
-                debug!(
-                    "Found {} out of {} valid file entries",
-                    entries.len(),
-                    lines.len()
-                );
-                Ok(entries)
-            }
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
+        let output = exec
+            .shell(&format!("ls -la {}/", path_utils::shell_quote(path)))
+            .await?;
+        if output.exit_code != 0 {
+            return Err(RemoteError::with_message(
+                RemoteErrorType::ProtocolError,
+                format!("ls exited with status {}", output.exit_code),
+            ));
         }
+        let lines: Vec<&str> = output.stdout.lines().collect();
+        let entries: Vec<File> = lines
+            .iter()
+            .filter_map(|line| parse_ls_output(path, line))
+            .collect();
+        debug!(
+            "Found {} out of {} valid file entries",
+            entries.len(),
+            lines.len()
+        );
+        Ok(entries)
     }
 
-    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+    async fn stat(&self, path: &Path) -> RemoteResult<File> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
         debug!("Stat {}", path.display());
-        // make command; Directories require `-d` option
-        let cmd = match self.is_directory(path.as_path())? {
-            true => format!("ls -ld \"{}\"", path.display()),
-            false => format!("ls -l \"{}\"", path.display()),
+        if path == Path::new("/") {
+            return Ok(File::new(
+                PathBuf::from("/"),
+                Metadata::default().file_type(FileType::Directory),
+            ));
+        }
+        let quoted = path_utils::shell_quote(path);
+        let cmd = match self.is_directory(exec, path).await? {
+            true => format!("ls -ld {quoted}"),
+            false => format!("ls -l {quoted}"),
         };
-        match self.shell_cmd(cmd.as_str()) {
-            Ok(line) => {
-                // Parse ls line
-                let parent: PathBuf = match path.as_path().parent() {
-                    Some(p) => PathBuf::from(p),
-                    None => {
-                        return Err(RemoteError::new_ex(
-                            RemoteErrorType::StatFailed,
-                            "Path has no parent",
-                        ));
-                    }
-                };
-                match self.parse_ls_output(parent.as_path(), line.as_str().trim()) {
-                    Ok(entry) => Ok(entry),
-                    Err(_) => Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)),
-                }
-            }
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
-    }
-
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        match self.shell_cmd_with_rc(format!("test -e \"{}\"", path.display())) {
-            Ok((0, _)) => Ok(true),
-            Ok(_) => Ok(false),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, err)),
-        }
-    }
-
-    fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        debug!("Setting attributes for {}", path.display());
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
+        let output = exec.shell(&cmd).await?;
+        if output.exit_code != 0 {
             return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
         }
-        // set mode with chmod
+        let parent = path.parent().unwrap_or(Path::new("/"));
+        parse_ls_output(parent, output.stdout.trim())
+            .ok_or_else(|| RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))
+    }
+
+    async fn exists(&self, path: &Path) -> RemoteResult<bool> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        self.exists_at(exec, path).await
+    }
+
+    async fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        debug!("Setting attributes for {}", path.display());
+        self.require_exists(exec, path).await?;
+        let quoted = path_utils::shell_quote(path);
         if let Some(mode) = metadata.mode {
-            self.assert_stat_command(format!(
-                "chmod {:o} \"{}\"",
-                u32::from(mode),
-                path.display()
-            ))?;
+            exec.shell_ok(
+                &format!("chmod {:o} {quoted}", u32::from(mode)),
+                RemoteErrorType::StatFailed,
+            )
+            .await?;
         }
-        if let Some(user) = metadata.uid {
-            self.assert_stat_command(format!(
-                "chown {}{} \"{}\"",
-                user,
-                metadata.gid.map(|x| format!(":{x}")).unwrap_or_default(),
-                path.display()
-            ))?;
+        if let Some(uid) = metadata.uid {
+            let gid = metadata
+                .gid
+                .map(|gid| format!(":{gid}"))
+                .unwrap_or_default();
+            exec.shell_ok(
+                &format!("chown {uid}{gid} {quoted}"),
+                RemoteErrorType::StatFailed,
+            )
+            .await?;
+        } else if let Some(gid) = metadata.gid {
+            exec.shell_ok(
+                &format!("chgrp {gid} {quoted}"),
+                RemoteErrorType::StatFailed,
+            )
+            .await?;
         }
-        // set times
         if let Some(accessed) = metadata.accessed {
-            self.assert_stat_command(format!(
-                "touch -a -t {} \"{}\"",
-                fmt_utils::fmt_time_utc(accessed, "%Y%m%d%H%M.%S"),
-                path.display()
-            ))?;
+            exec.shell_ok(
+                &format!(
+                    "touch -a -t {} {quoted}",
+                    fmt_utils::fmt_time_utc(accessed, "%Y%m%d%H%M.%S")
+                ),
+                RemoteErrorType::StatFailed,
+            )
+            .await?;
         }
         if let Some(modified) = metadata.modified {
-            self.assert_stat_command(format!(
-                "touch -m -t {} \"{}\"",
-                fmt_utils::fmt_time_utc(modified, "%Y%m%d%H%M.%S"),
-                path.display()
-            ))?;
+            exec.shell_ok(
+                &format!(
+                    "touch -m -t {} {quoted}",
+                    fmt_utils::fmt_time_utc(modified, "%Y%m%d%H%M.%S")
+                ),
+                RemoteErrorType::StatFailed,
+            )
+            .await?;
         }
         Ok(())
     }
 
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+    async fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        if self.exists_at(exec, path).await? {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
+        let quoted = path_utils::shell_quote(path);
+        let cmd = match mode {
+            Some(mode) => format!("mkdir -m {:o} {quoted}", u32::from(mode)),
+            None => format!("mkdir {quoted}"),
+        };
+        debug!("Creating directory at {} ({cmd})", path.display());
+        exec.shell_ok(&cmd, RemoteErrorType::FileCreateDenied).await
+    }
+
+    async fn remove_file(&self, path: &Path) -> RemoteResult<()> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        self.require_exists(exec, path).await?;
         debug!("Removing file {}", path.display());
-        match self.shell_cmd_with_rc(format!("rm -f \"{}\"", path.display())) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::CouldNotRemoveFile)),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
+        exec.shell_ok(
+            &format!("rm -f {}", path_utils::shell_quote(path)),
+            RemoteErrorType::CouldNotRemoveFile,
+        )
+        .await
     }
 
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
+    async fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        self.require_exists(exec, path).await?;
         debug!("Removing directory {}", path.display());
-        match self.shell_cmd_with_rc(format!("rmdir \"{}\"", path.display())) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::DirectoryNotEmpty)),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
+        exec.shell_ok(
+            &format!("rmdir {}", path_utils::shell_quote(path)),
+            RemoteErrorType::DirectoryNotEmpty,
+        )
+        .await
     }
 
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
+    async fn remove_dir_all(&self, path: &Path) -> RemoteResult<()> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        self.require_exists(exec, path).await?;
         debug!("Removing directory {} recursively", path.display());
-        match self.shell_cmd_with_rc(format!("rm -rf \"{}\"", path.display())) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::CouldNotRemoveFile)),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
+        exec.shell_ok(
+            &format!("rm -rf {}", path_utils::shell_quote(path)),
+            RemoteErrorType::CouldNotRemoveFile,
+        )
+        .await
     }
 
-    fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        if self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
-        }
-        let mode = format!("{:o}", u32::from(mode));
-        debug!(
-            "Creating directory at {} with mode {}",
-            path.display(),
-            mode
-        );
-        match self.shell_cmd_with_rc(format!("mkdir -m {} \"{}\"", mode, path.display())) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::FileCreateDenied)),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
+    async fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        let src = path_utils::ensure_posix_absolute(src)?;
+        let dest = path_utils::ensure_posix_absolute(dest)?;
+        let exec = self.runner()?;
+        self.require_exists(exec, src).await?;
+        debug!("Moving {} to {}", src.display(), dest.display());
+        exec.shell_ok(
+            &format!(
+                "mv -f {} {}",
+                path_utils::shell_quote(src),
+                path_utils::shell_quote(dest)
+            ),
+            RemoteErrorType::FileCreateDenied,
+        )
+        .await
     }
 
-    fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
+    async fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        let src = path_utils::ensure_posix_absolute(src)?;
+        let dest = path_utils::ensure_posix_absolute(dest)?;
+        let exec = self.runner()?;
+        self.require_exists(exec, src).await?;
+        debug!("Copying {} to {}", src.display(), dest.display());
+        exec.shell_ok(
+            &format!(
+                "cp -rf {} {}",
+                path_utils::shell_quote(src),
+                path_utils::shell_quote(dest)
+            ),
+            RemoteErrorType::FileCreateDenied,
+        )
+        .await
+    }
+
+    async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let target = path_utils::ensure_posix_absolute(target)?;
+        let exec = self.runner()?;
         debug!(
             "Creating a symlink at {} pointing at {}",
             path.display(),
             target.display()
         );
-        if !self.exists(target).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
+        self.require_exists(exec, target).await?;
+        if self.exists_at(exec, path).await? {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
-        if self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::FileCreateDenied));
-        }
-        match self.shell_cmd_with_rc(format!(
-            "ln -s \"{}\" \"{}\"",
-            target.display(),
-            path.display()
-        )) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new(RemoteErrorType::FileCreateDenied)),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
+        exec.shell_ok(
+            &format!(
+                "ln -s {} {}",
+                path_utils::shell_quote(target),
+                path_utils::shell_quote(path)
+            ),
+            RemoteErrorType::FileCreateDenied,
+        )
+        .await
     }
 
-    fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = path_utils::absolutize(self.wrkdir.as_path(), src);
-        // check if file exists
-        if !self.exists(src.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
-        debug!("Copying {} to {}", src.display(), dest.display());
-        match self.shell_cmd_with_rc(
-            format!("cp -rf \"{}\" \"{}\"", src.display(), dest.display()).as_str(),
-        ) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new_ex(
-                // Could not copy file
-                RemoteErrorType::FileCreateDenied,
-                format!("\"{}\"", dest.display()),
-            )),
-            Err(err) => Err(RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                err.to_string(),
-            )),
-        }
-    }
-
-    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = path_utils::absolutize(self.wrkdir.as_path(), src);
-        // check if file exists
-        if !self.exists(src.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
-        debug!("Moving {} to {}", src.display(), dest.display());
-        match self.shell_cmd_with_rc(
-            format!("mv -f \"{}\" \"{}\"", src.display(), dest.display()).as_str(),
-        ) {
-            Ok((0, _)) => Ok(()),
-            Ok(_) => Err(RemoteError::new_ex(
-                // Could not copy file
-                RemoteErrorType::FileCreateDenied,
-                format!("\"{}\"", dest.display()),
-            )),
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err)),
-        }
-    }
-
-    fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
-        self.check_connection()?;
-        debug!(r#"Executing command "{}""#, cmd);
-        self.shell_cmd_at_with_rc(cmd, self.wrkdir.as_path())
-    }
-
-    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn open(&mut self, _path: &Path) -> RemoteResult<ReadStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create_file(
-        &mut self,
-        path: &Path,
-        metadata: &Metadata,
-        reader: Box<dyn std::io::Read + Send>,
-    ) -> RemoteResult<u64> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        let file_name = path
-            .file_name()
-            .ok_or(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))?;
-        let tar_path = PathBuf::from(file_name);
-        // prepare write
-        let mut header = tar::Header::new_gnu();
-        header
-            .set_path(tar_path)
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err))?;
-        header.set_size(metadata.size);
-        header.set_cksum();
-
-        debug!("preparing archive to upload");
-        let mut ar = tar::Builder::new(Vec::new());
-        debug!("appending data to archive");
-        ar.append(&header, reader)
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err))?;
-        debug!("uploading archive to kube at: {}", path.display());
-
-        let data = ar
-            .into_inner()
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err))?;
-
-        let dir_path = path.parent().unwrap_or(Path::new("/"));
-        debug!("uploading archive to kube in dir: {}", dir_path.display());
-
-        let size = self.runtime.block_on(async {
-            let attach_params = AttachParams::default()
-                .container(self.container.clone())
-                .stdin(true)
-                .stdout(false)
-                .stderr(false);
-            let mut cmd = self
-                .pods
-                .as_ref()
-                .unwrap()
-                .exec(
-                    &self.pod_name,
-                    vec!["tar", "xf", "-", "-C", &dir_path.display().to_string()],
-                    &attach_params,
-                )
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-
-            // Take the status future before writing, so we can wait for the
-            // remote `tar` to actually finish instead of racing it: `join()`
-            // drops the status channel receiver as soon as it is called,
-            // and this command reads no stdout/stderr to block on in the
-            // meantime, so calling `join()` alone here would very likely
-            // observe the command as still running and fail with "failed to
-            // send status object" once the background task tries to report
-            // it on a receiver that already went away.
-            let status = cmd.take_status();
-
-            let mut stdin = cmd
-                .stdin()
-                .ok_or_else(|| RemoteError::new(RemoteErrorType::ProtocolError))?;
-            stdin
-                .write_all(&data)
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-            // Signal EOF to `tar` explicitly instead of relying on the
-            // writer being dropped, so it does not keep waiting for more
-            // input on the exec stream.
-            stdin
-                .shutdown()
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-            drop(stdin);
-
-            if let Some(status) = status {
-                status.await;
-            }
-
-            debug!("uploaded archive to kube at: {}", path.display());
-
-            cmd.join()
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-
-            Ok(metadata.size)
-        })?;
-
-        if !self.exists(path.as_path())? {
-            return Err(RemoteError::new_ex(
-                RemoteErrorType::NoSuchFileOrDirectory,
-                "failed to create file",
+    /// Open `path` for reading.
+    ///
+    /// Offsets and lengths are applied remotely with `tail -c` and
+    /// `head -c`. `length == Some(0)` returns an empty stream without
+    /// spawning a process; an offset beyond the end of the file yields an
+    /// empty stream as well.
+    async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
+        let path = path_utils::ensure_posix_absolute(path)?;
+        let exec = self.runner()?;
+        let entry = self.stat(path).await?;
+        if entry.is_dir() {
+            return Err(RemoteError::with_message(
+                RemoteErrorType::BadFile,
+                "cannot read a directory",
             ));
         }
-
-        Ok(size)
+        if opts.length == Some(0) {
+            return Ok(AsyncReadStream::new(KubeReadStream::empty()));
+        }
+        let quoted = path_utils::shell_quote(path);
+        let offset = opts.offset.unwrap_or(0);
+        let start = offset.saturating_add(1);
+        let script = match (offset, opts.length) {
+            (0, None) => format!("cat {quoted}"),
+            (0, Some(length)) => format!("head -c {length} {quoted}"),
+            (_, None) => format!("tail -c +{start} {quoted}"),
+            (_, Some(length)) => {
+                format!("tail -c +{start} {quoted} | head -c {length}")
+            }
+        };
+        debug!("Opening read stream: {script}");
+        let params = AttachParams::default()
+            .stdin(false)
+            .stdout(true)
+            .stderr(false);
+        let mut process = exec.spawn(&["/bin/sh", "-c", &script], params).await?;
+        let stdout = process.stdout().ok_or_else(|| {
+            RemoteError::with_message(RemoteErrorType::ProtocolError, "failed to attach stdout")
+        })?;
+        let handle = ExecHandle::new(process)?;
+        Ok(AsyncReadStream::new(KubeReadStream::new(
+            Box::new(stdout),
+            Some(handle),
+        )))
     }
 
-    fn open_file(
-        &mut self,
-        src: &Path,
-        mut dest: Box<dyn std::io::Write + Send>,
+    /// Create or truncate `path` and return a write stream feeding `cat`.
+    ///
+    /// The parent directory must exist. The file is only complete once the
+    /// stream is finished; `WriteOptions::mode` and `modified` are applied
+    /// on `finish`, and a `size_hint` is verified on `finish`.
+    async fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
+        self.spawn_writer(path, opts, ">").await
+    }
+
+    async fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
+        self.spawn_writer(path, opts, ">>").await
+    }
+
+    /// Write `src` to `path`.
+    ///
+    /// When `opts.size_hint` is set, at most that many bytes are read from
+    /// `src` (the hint is the transfer bound) and the transfer fails unless
+    /// exactly that many bytes were written.
+    async fn write_file(
+        &self,
+        path: &Path,
+        opts: &WriteOptions,
+        src: &mut (dyn AsyncRead + Send + Unpin),
     ) -> RemoteResult<u64> {
-        self.check_connection()?;
-
-        let src = path_utils::absolutize(self.wrkdir.as_path(), src);
-        debug!("opening file from kube at: {}", src.display());
-
-        let tempfile = tempfile::NamedTempFile::new()
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-        let file_size = self.runtime.block_on(async {
-            let mut tar_writer = tokio::fs::File::create(tempfile.path())
+        let mut stream = self.create(path, opts).await?;
+        let copied = copy_limited(src, &mut stream, opts.size_hint)
+            .await
+            .map_err(RemoteError::from);
+        let copied = match copied {
+            Ok(count) => poll_fn(|cx| Pin::new(&mut stream).poll_flush(cx))
                 .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
+                .map(|()| count)
+                .map_err(RemoteError::from),
+            Err(error) => Err(error),
+        };
+        let finished = stream.finish().await;
+        match (copied, finished) {
+            (Ok(count), Ok(())) => Ok(count),
+            (Err(err), _) | (Ok(_), Err(err)) => Err(err),
+        }
+    }
 
-            let attach_params = AttachParams::default()
-                .container(self.container.clone())
-                .stdout(true)
-                .stderr(true)
-                .stdin(false);
-            let mut cmd = self
-                .pods
-                .as_ref()
-                .unwrap()
-                .exec(
-                    &self.pod_name,
-                    vec![
-                        "tar",
-                        "cf",
-                        "-",
-                        "-C",
-                        src.parent()
-                            .unwrap_or(Path::new("/"))
-                            .display()
-                            .to_string()
-                            .as_str(),
-                        src.file_name()
-                            .unwrap()
-                            .to_string_lossy()
-                            .to_string()
-                            .as_str(),
-                    ],
-                    &attach_params,
-                )
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-
-            let mut reader = cmd
-                .stdout()
-                .ok_or_else(|| RemoteError::new(RemoteErrorType::ProtocolError))?;
-
-            let file_size: u64 = tokio::io::copy(&mut reader, &mut tar_writer)
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-
-            cmd.join()
-                .await
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::ProtocolError, err))?;
-
-            debug!(
-                "copied from kube to tar {}; {file_size} bytes",
-                tempfile.path().display()
-            );
-
-            let tar_reader = std::fs::File::open(tempfile.path())
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-            let mut ar = tar::Archive::new(tar_reader);
-            let mut file_to_extract = ar
-                .entries()
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?
-                .next()
-                .ok_or(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))?
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-            let file_size = std::io::copy(&mut file_to_extract, &mut dest)
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-            debug!("extracted file to dest; {file_size} bytes");
-
-            Ok(file_size)
-        })?;
-
-        Ok(file_size)
+    async fn exec(&self, cmd: &str) -> RemoteResult<ExecOutput> {
+        let exec = self.runner()?;
+        debug!(r#"Executing command "{cmd}""#);
+        exec.shell(cmd).await
     }
 }
 
 #[cfg(test)]
 mod test {
 
-    #[cfg(feature = "integration-tests")]
-    use std::io::Cursor;
-
     use pretty_assertions::assert_eq;
-    #[cfg(feature = "integration-tests")]
-    use serial_test::serial;
 
     use super::*;
 
     #[test]
     fn should_init_kube_fs() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let mut client = KubeContainerFs::new("test", "test", &rt);
+        let client = KubeContainerFs::new("test", "test");
         assert!(client.config.is_none());
-        assert_eq!(client.is_connected(), false);
+        assert_eq!(client.pod_name(), "test");
+        assert_eq!(client.container(), "test");
+        assert!(!client.is_connected());
     }
 
     #[test]
-    fn should_fail_connection_to_bad_server() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
+    fn writer_command_uses_size_hint_to_bound_remote_read() {
+        let path = Path::new("/tmp/file");
+        assert_eq!(
+            super::writer_script(path, &WriteOptions::default(), ">"),
+            "cat > '/tmp/file'"
         );
-        let mut client = KubeContainerFs::new("aaaaaa", "test", &rt);
-        assert!(client.connect().is_err());
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_append_to_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .append_file(p, &Metadata::default(), Box::new(reader))
-                .is_err()
+        let opts = WriteOptions::default().size_hint(5);
+        assert_eq!(
+            super::writer_script(path, &opts, ">"),
+            "head -c 5 > '/tmp/file'"
         );
-        finalize_client(pods, client);
     }
 
     #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_change_directory() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        let pwd = client.pwd().ok().unwrap();
-        assert!(client.change_dir(Path::new("/tmp")).is_ok());
-        assert!(client.change_dir(pwd.as_path()).is_ok());
-        finalize_client(pods, client);
+    fn should_advertise_capabilities() {
+        let caps = KubeContainerFs::new("test", "test").capabilities();
+        assert!(caps.contains(Capabilities::STREAM_READ));
+        assert!(caps.contains(Capabilities::STREAM_WRITE));
+        assert!(caps.contains(Capabilities::APPEND));
+        assert!(caps.contains(Capabilities::RANGE_READ));
+        assert!(caps.contains(Capabilities::COPY));
+        assert!(caps.contains(Capabilities::SYMLINK));
+        assert!(caps.contains(Capabilities::SET_METADATA));
+        assert!(caps.contains(Capabilities::POSIX_MODE));
+        assert!(caps.contains(Capabilities::EXEC));
+        assert!(!caps.contains(Capabilities::SEEK_READ));
+        assert!(!caps.contains(Capabilities::SEEK_WRITE));
     }
 
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_change_directory_relative() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        assert!(
-            client
-                .create_dir(
-                    Path::new("should_change_directory_relative"),
-                    UnixPex::from(0o755)
-                )
-                .is_ok()
+    #[tokio::test]
+    async fn should_reject_relative_paths_before_connection_check() {
+        let client = KubeContainerFs::new("test", "test");
+        let relative = Path::new("a.txt");
+        assert_eq!(
+            client.stat(relative).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
-        assert!(
-            client
-                .change_dir(Path::new("should_change_directory_relative/"))
-                .is_ok()
+        assert_eq!(
+            client.list_dir(relative).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_change_directory() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        assert!(
-            client
-                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-                .is_err()
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_copy_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.copy(p, Path::new("b.txt")).is_ok());
-        assert!(client.stat(p).is_ok());
-        assert!(client.stat(Path::new("b.txt")).is_ok());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_copy_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_create_directory() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        let p = PathBuf::from(format!("{}/mydir", client.pwd().unwrap().display()));
-        assert!(client.exists(&p).unwrap());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_create_directory_cause_already_exists() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
+        assert_eq!(
+            client.exists(relative).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
         assert_eq!(
             client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .err()
-                .unwrap()
-                .kind,
-            RemoteErrorType::DirectoryAlreadyExists
+                .open(relative, &ReadOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
         );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_create_directory() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(
-                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                    UnixPex::from(0o755)
-                )
-                .is_err()
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_create_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert_eq!(
-            client.create_file(p, &metadata, Box::new(reader)).unwrap(),
-            10
-        );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_create_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_err());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_exec_command() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        assert_eq!(
-            client.exec("echo 5").ok().unwrap(),
-            (0, String::from("5\n"))
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_tell_whether_file_exists() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        assert_eq!(client.exists(p).ok().unwrap(), true);
-        assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
-        assert_eq!(
-            client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
-            false
-        );
-        assert_eq!(client.exists(Path::new("/tmp")).ok().unwrap(), true);
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_list_dir() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let wrkdir = client.pwd().ok().unwrap();
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let file = client
-            .list_dir(wrkdir.as_path())
-            .ok()
-            .unwrap()
-            .first()
-            .unwrap()
-            .clone();
-        assert_eq!(file.name().as_str(), "a.txt");
-        let mut expected_path = wrkdir;
-        expected_path.push(p);
-        assert_eq!(file.path.as_path(), expected_path.as_path());
-        assert_eq!(file.extension().as_deref().unwrap(), "txt");
-        assert_eq!(file.metadata.size, 10);
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_list_dir() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        assert!(client.list_dir(Path::new("/tmp/auhhfh/hfhjfhf/")).is_err());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_move_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let dest = Path::new("b.txt");
-        assert!(client.mov(p, dest).is_ok());
-        assert_eq!(client.exists(p).ok().unwrap(), false);
-        assert_eq!(client.exists(dest).ok().unwrap(), true);
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_move_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
-        assert!(client.mov(p, dest).is_err());
-        assert!(
-            client
-                .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-                .is_err()
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_open_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata::default().size(file_data.len() as u64);
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_open_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(
-            client
-                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-                .is_err()
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_print_working_directory() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        assert!(client.pwd().is_ok());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_remove_dir_all() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(
-            client
-                .create_file(file_path.as_path(), &metadata, Box::new(reader))
-                .is_ok()
-        );
-        // Remove dir
-        assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_remove_dir_all() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Remove dir
-        assert!(
-            client
-                .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-                .is_err()
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_remove_dir() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        assert!(client.remove_dir(dir_path.as_path()).is_ok());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_remove_dir() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(
-            client
-                .create_file(file_path.as_path(), &metadata, Box::new(reader))
-                .is_ok()
-        );
-        // Remove dir
-        assert!(client.remove_dir(dir_path.as_path()).is_err());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_remove_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.remove_file(p).is_ok());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_setstat_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-
-        assert!(
-            client
-                .setstat(
-                    p,
-                    Metadata {
-                        accessed: Some(SystemTime::UNIX_EPOCH),
-                        created: None,
-                        file_type: FileType::File,
-                        gid: Some(1000),
-                        mode: Some(UnixPex::from(0o755)),
-                        modified: Some(SystemTime::UNIX_EPOCH),
-                        size: 7,
-                        symlink: None,
-                        uid: Some(1000),
-                    }
-                )
-                .is_ok()
-        );
-        let entry = client.stat(p).ok().unwrap();
-        let stat = entry.metadata();
-        assert_eq!(stat.accessed, None);
-        assert_eq!(stat.created, None);
-        assert_eq!(stat.modified, Some(SystemTime::UNIX_EPOCH));
-        assert_eq!(stat.mode.unwrap(), UnixPex::from(0o755));
-        assert_eq!(stat.size, 7);
-
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_setstat_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("bbbbb/cccc/a.sh");
-        assert!(
-            client
-                .setstat(
-                    p,
-                    Metadata {
-                        accessed: None,
-                        created: None,
-                        file_type: FileType::File,
-                        gid: Some(1),
-                        mode: Some(UnixPex::from(0o755)),
-                        modified: None,
-                        size: 7,
-                        symlink: None,
-                        uid: Some(1),
-                    }
-                )
-                .is_err()
-        );
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_stat_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
         assert_eq!(
             client
-                .create_file(p, &metadata, Box::new(reader))
-                .ok()
-                .unwrap(),
-            7
+                .create(relative, &WriteOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
         );
-        let entry = client.stat(p).ok().unwrap();
-        assert_eq!(entry.name(), "a.sh");
-        let mut expected_path = client.pwd().ok().unwrap();
-        expected_path.push("a.sh");
-        assert_eq!(entry.path(), expected_path.as_path());
-        let meta = entry.metadata();
-        assert_eq!(meta.size, 7);
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_stat_file() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        assert!(client.stat(p).is_err());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_make_symlink() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let symlink = Path::new("b.sh");
-        assert!(client.symlink(symlink, p).is_ok());
-        assert!(client.remove_file(symlink).is_ok());
-        finalize_client(pods, client);
-    }
-
-    #[test]
-    #[cfg(feature = "integration-tests")]
-    #[serial]
-    fn should_not_make_symlink() {
-        crate::log_init();
-        let (pods, mut client) = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let symlink = Path::new("b.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
+        assert_eq!(
             client
-                .create_file(symlink, &metadata, Box::new(reader))
-                .is_ok()
+                .rename(Path::new("/a"), relative)
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
         );
-        assert!(client.symlink(symlink, p).is_err());
-        assert!(client.remove_file(symlink).is_ok());
-        assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
-        finalize_client(pods, client);
+    }
+
+    #[tokio::test]
+    async fn should_fail_as_not_connected() {
+        let client = KubeContainerFs::new("test", "test");
+        let path = Path::new("/tmp/a.txt");
+        assert_eq!(
+            client.stat(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert_eq!(
+            client.exists(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert_eq!(
+            client.exec("echo 5").await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        let mut client = client;
+        assert_eq!(
+            client.disconnect().await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+    }
+
+    #[tokio::test]
+    async fn should_fail_connection_to_bad_server() {
+        let config = Config::new("https://127.0.0.1:1".parse().unwrap());
+        let mut client = KubeContainerFs::new("aaaaaa", "test").config(config);
+        assert_eq!(
+            client.connect().await.unwrap_err().kind(),
+            RemoteErrorType::ConnectionError
+        );
+        assert!(!client.is_connected());
+    }
+
+    #[test]
+    fn should_be_send_sync_and_object_safe() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<KubeContainerFs>();
+        let _: Box<dyn AsyncRemoteFs> = Box::new(KubeContainerFs::new("test", "test"));
+    }
+
+    #[cfg(feature = "tokio")]
+    #[test]
+    fn blocking_wrapper_is_a_remote_fs_trait_object() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let client: Box<dyn remotefs::RemoteFs> =
+            Box::new(KubeContainerFs::new("test", "test").into_blocking(runtime.handle().clone()));
+        assert!(!client.is_connected());
+        assert!(client.capabilities().contains(Capabilities::EXEC));
+    }
+
+    #[cfg(feature = "tokio")]
+    #[test]
+    #[should_panic(expected = "into_blocking requires a multi-thread Tokio runtime")]
+    fn blocking_wrapper_rejects_current_thread_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _ = KubeContainerFs::new("test", "test").into_blocking(runtime.handle().clone());
     }
 
     #[test]
     fn should_get_name_and_link() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("test", "test", &rt);
         assert_eq!(
-            client.get_name_and_link("Cargo.toml"),
+            get_name_and_link("Cargo.toml"),
             (String::from("Cargo.toml"), None)
         );
         assert_eq!(
-            client.get_name_and_link("Cargo -> Cargo.toml"),
+            get_name_and_link("Cargo -> Cargo.toml"),
             (String::from("Cargo"), Some(PathBuf::from("Cargo.toml")))
         );
     }
 
     #[test]
     fn should_parse_file_ls_output() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("test", "test", &rt);
-        // File
-        let entry = client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "-rw-r--r-- 1 root root  2056 giu 13 21:11 /tmp/Cargo.toml",
-            )
-            .ok()
-            .unwrap();
+        let entry = parse_ls_output(
+            Path::new("/tmp"),
+            "-rw-r--r-- 1 root root  2056 giu 13 21:11 /tmp/Cargo.toml",
+        )
+        .unwrap();
         assert_eq!(entry.name().as_str(), "Cargo.toml");
         assert!(entry.is_file());
         assert_eq!(entry.path, PathBuf::from("/tmp/Cargo.toml"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o644_u32);
-        assert_eq!(entry.metadata.size, 2056);
+        assert_eq!(entry.metadata.size, Some(2056));
         assert_eq!(entry.extension().unwrap().as_str(), "toml");
         assert!(entry.metadata.symlink.is_none());
-        // File (year)
-        let entry = client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "-rw-rw-rw- 1 root root  3368 nov  7  2020 CODE_OF_CONDUCT.md",
-            )
-            .ok()
-            .unwrap();
+        let entry = parse_ls_output(
+            Path::new("/tmp"),
+            "-rw-rw-rw- 1 root root  3368 nov  7  2020 CODE_OF_CONDUCT.md",
+        )
+        .unwrap();
         assert_eq!(entry.name().as_str(), "CODE_OF_CONDUCT.md");
         assert!(entry.is_file());
         assert_eq!(entry.path, PathBuf::from("/tmp/CODE_OF_CONDUCT.md"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o666_u32);
-        assert_eq!(entry.metadata.size, 3368);
+        assert_eq!(entry.metadata.size, Some(3368));
         assert_eq!(entry.extension().unwrap().as_str(), "md");
         assert!(entry.metadata.symlink.is_none());
     }
 
     #[test]
     fn should_parse_directory_from_ls_output() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("test", "test", &rt);
-        // Directory
-        let entry = client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "drwxr-xr-x 1 root root   512 giu 13 21:11 docs",
-            )
-            .ok()
-            .unwrap();
+        let entry = parse_ls_output(
+            Path::new("/tmp"),
+            "drwxr-xr-x 1 root root   512 giu 13 21:11 docs",
+        )
+        .unwrap();
         assert_eq!(entry.name().as_str(), "docs");
         assert!(entry.is_dir());
         assert_eq!(entry.path, PathBuf::from("/tmp/docs"));
         assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o755_u32);
         assert!(entry.metadata.symlink.is_none());
-        // Short metadata
         assert!(
-            client
-                .parse_ls_output(
-                    PathBuf::from("/tmp").as_path(),
-                    "drwxr-xr-x 1 root root   512 giu 13 21:11",
-                )
-                .is_err()
+            parse_ls_output(
+                Path::new("/tmp"),
+                "drwxr-xr-x 1 root root   512 giu 13 21:11",
+            )
+            .is_none()
         );
-        // Special file
         assert!(
-            client
-                .parse_ls_output(
-                    PathBuf::from("/tmp").as_path(),
-                    "crwxr-xr-x 1 root root   512 giu 13 21:11 ttyS1",
-                )
-                .is_err()
+            parse_ls_output(
+                Path::new("/tmp"),
+                "crwxr-xr-x 1 root root   512 giu 13 21:11 ttyS1",
+            )
+            .is_none()
         );
-        // Bad pex
         assert!(
-            client
-                .parse_ls_output(
-                    PathBuf::from("/tmp").as_path(),
-                    "-rwxr-xr 1 root root   512 giu 13 21:11 ttyS1",
-                )
-                .is_err()
+            parse_ls_output(
+                Path::new("/tmp"),
+                "-rwxr-xr 1 root root   512 giu 13 21:11 ttyS1",
+            )
+            .is_none()
+        );
+        assert!(parse_ls_output(Path::new("/tmp"), "total 8").is_none());
+        assert!(
+            parse_ls_output(
+                Path::new("/tmp"),
+                "drwxr-xr-x 1 root root   512 giu 13 21:11 .",
+            )
+            .is_none()
         );
     }
 
     #[test]
     fn should_parse_symlink_from_ls_output() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("test", "test", &rt);
-        // File
-        let entry = client
-            .parse_ls_output(
-                PathBuf::from("/tmp").as_path(),
-                "lrw-r--r-- 1 root root  2056 giu 13 21:11 Cargo.toml -> Cargo.prod.toml",
-            )
-            .ok()
-            .unwrap();
-        assert_eq!(entry.name().as_str(), "Cargo.toml");
-        assert_eq!(entry.path, PathBuf::from("/tmp/Cargo.toml"));
-        assert_eq!(u32::from(entry.metadata.mode.unwrap()), 0o644_u32);
-        assert_eq!(entry.metadata.size, 2056);
-        assert_eq!(entry.extension().unwrap().as_str(), "toml");
+        let entry = parse_ls_output(
+            Path::new("/tmp"),
+            "lrwxrwxrwx 1 root root  2056 giu 13 21:11 Cargo -> Cargo.toml",
+        )
+        .unwrap();
+        assert_eq!(entry.name().as_str(), "Cargo");
+        assert!(entry.is_symlink());
+        assert_eq!(entry.path, PathBuf::from("/tmp/Cargo"));
         assert_eq!(
             entry.metadata.symlink.as_deref().unwrap(),
-            Path::new("Cargo.prod.toml")
+            Path::new("Cargo.toml")
         );
     }
-
-    #[test]
-    fn test_should_parse_special_permissions_ls_output() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("test", "test", &rt);
-        assert!(
-            client
-                .parse_ls_output(
-                    Path::new("/tmp"),
-                    "-rw-rwSrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-                )
-                .is_ok()
-        );
-        assert!(
-            client
-                .parse_ls_output(
-                    Path::new("/tmp"),
-                    "-rw-rwsrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-                )
-                .is_ok()
-        );
-
-        assert!(
-            client
-                .parse_ls_output(
-                    Path::new("/tmp"),
-                    "-rw-rwtrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-                )
-                .is_ok()
-        );
-
-        assert!(
-            client
-                .parse_ls_output(
-                    Path::new("/tmp"),
-                    "-rw-rwTrw-    1 manufact  manufact    241813 Apr 22 09:31 L9800.SPF",
-                )
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn should_return_errors_on_uninitialized_client() {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let mut client = KubeContainerFs::new("test", "test", &rt);
-        assert!(client.change_dir(Path::new("/tmp")).is_err());
-        assert!(
-            client
-                .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
-                .is_err()
-        );
-        assert!(client.exec("echo 5").is_err());
-        assert!(client.disconnect().is_err());
-        assert!(client.list_dir(Path::new("/tmp")).is_err());
-        assert!(
-            client
-                .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
-                .is_err()
-        );
-        assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
-        assert!(client.pwd().is_err());
-        assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
-        assert!(
-            client
-                .mov(Path::new("/nowhere"), Path::new("/culonia"))
-                .is_err()
-        );
-        assert!(client.stat(Path::new("/tmp")).is_err());
-        assert!(
-            client
-                .setstat(Path::new("/tmp"), Metadata::default())
-                .is_err()
-        );
-        assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
-        assert!(
-            client
-                .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
-                .is_err()
-        );
-        assert!(
-            client
-                .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
-                .is_err()
-        );
-    }
-
-    fn is_send<T: Send>(_send: T) {}
-
-    fn is_sync<T: Sync>(_sync: T) {}
-
-    #[test]
-    fn test_should_be_sync() {
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("pod", "alpine", &runtime);
-
-        is_sync(client);
-    }
-
-    #[test]
-    fn test_should_be_send() {
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
-        let client = KubeContainerFs::new("pod", "alpine", &runtime);
-
-        is_send(client);
-    }
-
-    // -- test utils
 
     #[cfg(feature = "integration-tests")]
-    fn setup_client() -> (Api<Pod>, KubeContainerFs) {
-        // setup pod with random name
+    mod integration {
 
-        use kube::ResourceExt as _;
-        use kube::api::PostParams;
-        use kube::config::AuthInfo;
-        let pod_name = generate_pod_name();
-        debug!("Pod name: {pod_name}");
+        use std::time::SystemTime;
 
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
+        use futures::io::Cursor;
+        use pretty_assertions::assert_eq;
+        use serial_test::serial;
 
-        let minikube_ip = std::env::var("MINIKUBE_IP").unwrap();
+        use super::*;
 
-        // setup pod
-        debug!("setting up pod");
-        // config for minikube
-        let mut auth_info = AuthInfo {
-            username: Some("minikube".to_string()),
-            ..Default::default()
-        };
-        // get home
-        let home = std::env::var("HOME").unwrap();
-        auth_info.client_certificate =
-            Some(format!("{home}/.minikube/profiles/minikube/client.crt"));
-        auth_info.client_key = Some(format!("{home}/.minikube/profiles/minikube/client.key"));
+        async fn write(client: &KubeContainerFs, path: &Path, data: &str) -> u64 {
+            let mut reader = Cursor::new(data.as_bytes().to_vec());
+            client
+                .write_file(
+                    path,
+                    &WriteOptions::default().size_hint(data.len() as u64),
+                    &mut reader,
+                )
+                .await
+                .expect("write failed")
+        }
 
-        //let root_cert = format!("{home}/.minikube/ca.crt");
+        async fn read(client: &KubeContainerFs, path: &Path, opts: &ReadOptions) -> Vec<u8> {
+            let mut dest = Cursor::new(Vec::new());
+            client
+                .read_file(path, opts, &mut dest)
+                .await
+                .expect("read failed");
+            dest.into_inner()
+        }
 
-        debug!("Auth info: {auth_info:?}");
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_append_to_file() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            assert_eq!(write(&client, &p, "hello ").await, 6);
+            let mut reader = Cursor::new(b"world".to_vec());
+            assert_eq!(
+                client
+                    .append_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap(),
+                5
+            );
+            assert_eq!(
+                read(&client, &p, &ReadOptions::default()).await,
+                b"hello world"
+            );
+            finalize_client(pods, client).await;
+        }
 
-        let mut config = Config::new(format!("https://{minikube_ip}:8443").parse().unwrap());
-        config.accept_invalid_certs = true;
-        config.auth_info = auth_info;
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_copy_file() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            write(&client, &p, "test data\n").await;
+            let dest = tempdir.join("b.txt");
+            assert!(client.copy(&p, &dest).await.is_ok());
+            assert!(client.stat(&p).await.is_ok());
+            assert!(client.stat(&dest).await.is_ok());
+            assert!(
+                client
+                    .copy(&p, &tempdir.join("aaa/bbbb/ccc/b.txt"))
+                    .await
+                    .is_err()
+            );
+            finalize_client(pods, client).await;
+        }
 
-        let pods = runtime.block_on(async {
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_create_directory() {
+            let (pods, client, tempdir) = setup_client().await;
+            let dir = tempdir.join("mydir");
+            assert!(
+                client
+                    .create_dir(&dir, Some(UnixPex::from(0o755)))
+                    .await
+                    .is_ok()
+            );
+            assert!(client.exists(&dir).await.unwrap());
+            assert_eq!(
+                client
+                    .create_dir(&dir, Some(UnixPex::from(0o755)))
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::AlreadyExists
+            );
+            assert!(
+                client
+                    .create_dir(&tempdir.join("nomode"), None)
+                    .await
+                    .is_ok()
+            );
+            assert!(
+                client
+                    .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None)
+                    .await
+                    .is_err()
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_create_file_and_verify_size() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            assert_eq!(write(&client, &p, "test data\n").await, 10);
+            assert_eq!(client.stat(&p).await.unwrap().metadata().size, Some(10));
+            let mut reader = Cursor::new(b"test data\n".to_vec());
+            assert_eq!(
+                client
+                    .write_file(
+                        Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf"),
+                        &WriteOptions::default(),
+                        &mut reader,
+                    )
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_bound_write_to_size_hint_and_apply_mode() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.sh");
+            let mut reader = Cursor::new(b"echo 5\nignored".to_vec());
+            let opts = WriteOptions::default()
+                .size_hint(7)
+                .mode(UnixPex::from(0o755))
+                .modified(SystemTime::UNIX_EPOCH);
+            assert_eq!(client.write_file(&p, &opts, &mut reader).await.unwrap(), 7);
+            let entry = client.stat(&p).await.unwrap();
+            assert_eq!(entry.metadata().size, Some(7));
+            assert_eq!(entry.metadata().mode.unwrap(), UnixPex::from(0o755));
+            assert_eq!(entry.metadata().modified, Some(SystemTime::UNIX_EPOCH));
+            let mut short = Cursor::new(b"abc".to_vec());
+            assert_eq!(
+                client
+                    .write_file(
+                        &tempdir.join("short"),
+                        &WriteOptions::default().size_hint(10),
+                        &mut short,
+                    )
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::ProtocolError
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_stream_write_and_finish() {
+            use futures::io::AsyncWriteExt as _;
+
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("streamed.txt");
+            let mut stream = client.create(&p, &WriteOptions::default()).await.unwrap();
+            stream.write_all(b"hello").await.unwrap();
+            stream.flush().await.unwrap();
+            stream.finish().await.unwrap();
+            assert_eq!(read(&client, &p, &ReadOptions::default()).await, b"hello");
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_exec_command() {
+            let (pods, client, _tempdir) = setup_client().await;
+            assert_eq!(
+                client.exec("echo 5").await.unwrap(),
+                ExecOutput::new(0, "5\n")
+            );
+            assert_eq!(client.exec("exit 3").await.unwrap().exit_code, 3);
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_tell_whether_file_exists() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            write(&client, &p, "test data\n").await;
+            assert!(client.exists(&p).await.unwrap());
+            assert!(!client.exists(&tempdir.join("b.txt")).await.unwrap());
+            assert!(!client.exists(Path::new("/tmp/ppppp/bhhrhu")).await.unwrap());
+            assert!(client.exists(Path::new("/tmp")).await.unwrap());
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_list_dir() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            write(&client, &p, "test data\n").await;
+            let files = client.list_dir(&tempdir).await.unwrap();
+            let file = files.first().unwrap();
+            assert_eq!(file.name().as_str(), "a.txt");
+            assert_eq!(file.path.as_path(), p.as_path());
+            assert_eq!(file.extension().as_deref().unwrap(), "txt");
+            assert_eq!(file.metadata.size, Some(10));
+            assert_eq!(
+                client
+                    .list_dir(Path::new("/tmp/auhhfh/hfhjfhf/"))
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            assert_eq!(
+                client.list_dir(&p).await.unwrap_err().kind(),
+                RemoteErrorType::BadFile
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_rename_file() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            write(&client, &p, "test data\n").await;
+            let dest = tempdir.join("b.txt");
+            assert!(client.rename(&p, &dest).await.is_ok());
+            assert!(!client.exists(&p).await.unwrap());
+            assert!(client.exists(&dest).await.unwrap());
+            assert!(
+                client
+                    .rename(&dest, Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                client
+                    .rename(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), &p)
+                    .await
+                    .is_err()
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_read_file_with_ranges() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            write(&client, &p, "abcdef").await;
+            assert_eq!(read(&client, &p, &ReadOptions::default()).await, b"abcdef");
+            assert_eq!(
+                read(&client, &p, &ReadOptions::default().offset(2)).await,
+                b"cdef"
+            );
+            assert_eq!(
+                read(&client, &p, &ReadOptions::default().length(3)).await,
+                b"abc"
+            );
+            assert_eq!(
+                read(&client, &p, &ReadOptions::default().offset(2).length(2)).await,
+                b"cd"
+            );
+            assert_eq!(
+                read(&client, &p, &ReadOptions::default().offset(2).length(0)).await,
+                b""
+            );
+            assert_eq!(
+                read(&client, &p, &ReadOptions::default().offset(100)).await,
+                b""
+            );
+            assert_eq!(
+                client
+                    .open(Path::new("/tmp/aashafb/hhh"), &ReadOptions::default())
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            assert_eq!(
+                client
+                    .open(&tempdir, &ReadOptions::default())
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::BadFile
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_finish_read_stream_before_eof() {
+            use futures::io::AsyncReadExt as _;
+
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("big.txt");
+            write(&client, &p, &"x".repeat(64 * 1024)).await;
+            let mut stream = client.open(&p, &ReadOptions::default()).await.unwrap();
+            let mut buf = [0_u8; 16];
+            assert_eq!(stream.read(&mut buf).await.unwrap(), 16);
+            stream.finish().await.unwrap();
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_remove_dir_all() {
+            let (pods, client, tempdir) = setup_client().await;
+            let dir = tempdir.join("test");
+            assert!(
+                client
+                    .create_dir(&dir, Some(UnixPex::from(0o775)))
+                    .await
+                    .is_ok()
+            );
+            write(&client, &dir.join("a.txt"), "test data\n").await;
+            assert!(client.remove_dir_all(&dir).await.is_ok());
+            assert!(
+                client
+                    .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                    .await
+                    .is_err()
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_remove_dir() {
+            let (pods, client, tempdir) = setup_client().await;
+            let dir = tempdir.join("test");
+            assert!(
+                client
+                    .create_dir(&dir, Some(UnixPex::from(0o775)))
+                    .await
+                    .is_ok()
+            );
+            assert!(client.remove_dir(&dir).await.is_ok());
+            assert!(
+                client
+                    .create_dir(&dir, Some(UnixPex::from(0o775)))
+                    .await
+                    .is_ok()
+            );
+            write(&client, &dir.join("a.txt"), "test data\n").await;
+            assert_eq!(
+                client.remove_dir(&dir).await.unwrap_err().kind(),
+                RemoteErrorType::DirectoryNotEmpty
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_remove_file() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.txt");
+            write(&client, &p, "test data\n").await;
+            assert!(client.remove_file(&p).await.is_ok());
+            assert_eq!(
+                client.remove_file(&p).await.unwrap_err().kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_set_metadata() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.sh");
+            write(&client, &p, "echo 5\n").await;
+            let metadata = SetMetadata::default()
+                .accessed(SystemTime::UNIX_EPOCH)
+                .modified(SystemTime::UNIX_EPOCH)
+                .mode(UnixPex::from(0o755))
+                .uid(1000)
+                .gid(1000);
+            assert!(client.set_metadata(&p, &metadata).await.is_ok());
+            let entry = client.stat(&p).await.unwrap();
+            let stat = entry.metadata();
+            assert_eq!(stat.accessed, None);
+            assert_eq!(stat.created, None);
+            assert_eq!(stat.modified, Some(SystemTime::UNIX_EPOCH));
+            assert_eq!(stat.mode.unwrap(), UnixPex::from(0o755));
+            assert_eq!(stat.size, Some(7));
+            assert_eq!(
+                client
+                    .set_metadata(&tempdir.join("bbbbb/cccc/a.sh"), &metadata)
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_stat_file() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.sh");
+            assert_eq!(write(&client, &p, "echo 5\n").await, 7);
+            let entry = client.stat(&p).await.unwrap();
+            assert_eq!(entry.name(), "a.sh");
+            assert_eq!(entry.path(), p.as_path());
+            assert_eq!(entry.metadata().size, Some(7));
+            assert!(client.stat(Path::new("/")).await.unwrap().is_dir());
+            assert!(client.stat(&tempdir).await.unwrap().is_dir());
+            assert_eq!(
+                client
+                    .stat(&tempdir.join("missing"))
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_make_symlink() {
+            let (pods, client, tempdir) = setup_client().await;
+            let p = tempdir.join("a.sh");
+            write(&client, &p, "echo 5\n").await;
+            let symlink = tempdir.join("b.sh");
+            assert!(client.symlink(&symlink, &p).await.is_ok());
+            assert!(client.stat(&symlink).await.unwrap().is_symlink());
+            assert_eq!(
+                client.symlink(&symlink, &p).await.unwrap_err().kind(),
+                RemoteErrorType::AlreadyExists
+            );
+            assert!(client.remove_file(&symlink).await.is_ok());
+            assert_eq!(
+                client
+                    .symlink(&symlink, &tempdir.join("c.sh"))
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NoSuchFileOrDirectory
+            );
+            finalize_client(pods, client).await;
+        }
+
+        #[cfg(feature = "tokio")]
+        #[test]
+        #[serial]
+        fn should_round_trip_through_blocking_wrapper() {
+            use remotefs::RemoteFs;
+
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let (pods, client, tempdir) = runtime.block_on(setup_client());
+            let mut client: Box<dyn RemoteFs> =
+                Box::new(client.into_blocking(runtime.handle().clone()));
+            let p = tempdir.join("blocking.txt");
+            let mut src = std::io::Cursor::new(b"hello".to_vec());
+            assert_eq!(
+                client
+                    .write_file(&p, &WriteOptions::default().size_hint(5), &mut src)
+                    .unwrap(),
+                5
+            );
+            let mut dest = std::io::Cursor::new(Vec::new());
+            assert_eq!(
+                client
+                    .read_file(&p, &ReadOptions::default().offset(1), &mut dest)
+                    .unwrap(),
+                4
+            );
+            assert_eq!(dest.into_inner(), b"ello");
+            let names: Vec<String> = client
+                .list_dir(&tempdir)
+                .unwrap()
+                .into_iter()
+                .map(|f| f.name())
+                .collect();
+            assert_eq!(names, vec!["blocking.txt".to_string()]);
+            if let Err(err) = runtime.block_on(delete_test_pods(&pods)) {
+                warn!("failed to clean up test pods: {err}");
+            }
+            assert!(client.disconnect().is_ok());
+        }
+
+        async fn setup_client() -> (Api<Pod>, KubeContainerFs, PathBuf) {
+            crate::log_init();
+            use kube::ResourceExt as _;
+            use kube::api::PostParams;
+            use kube::config::AuthInfo;
+
+            let pod_name = generate_pod_name();
+            let minikube_ip = std::env::var("MINIKUBE_IP").unwrap();
+
+            debug!("setting up pod");
+            let mut auth_info = AuthInfo {
+                username: Some("minikube".to_string()),
+                ..Default::default()
+            };
+            let home = std::env::var("HOME").unwrap();
+            auth_info.client_certificate =
+                Some(format!("{home}/.minikube/profiles/minikube/client.crt"));
+            auth_info.client_key = Some(format!("{home}/.minikube/profiles/minikube/client.key"));
+            debug!("Auth info: {auth_info:?}");
+
+            let mut config = Config::new(format!("https://{minikube_ip}:8443").parse().unwrap());
+            config.accept_invalid_certs = true;
+            config.auth_info = auth_info;
+
             let client = Client::try_from(config.clone()).unwrap();
             let pods: Api<Pod> = Api::default_namespaced(client);
 
@@ -1941,12 +1506,11 @@ mod test {
                 Ok(o) => {
                     let name = o.name_any();
                     assert_eq!(p.name_any(), name);
-                    info!("Created {}", name);
+                    info!("Created {name}");
                 }
-                Err(kube::Error::Api(ae)) => assert_eq!(ae.code, 409), // if you skipped delete, for instance
-                Err(e) => panic!("failed to create: {e}"), // any other case is probably bad
+                Err(kube::Error::Api(ae)) => assert_eq!(ae.code, 409),
+                Err(e) => panic!("failed to create: {e}"),
             }
-
             debug!("Pod created");
 
             let establish = kube::runtime::wait::await_condition(
@@ -1954,82 +1518,71 @@ mod test {
                 &pod_name,
                 kube::runtime::conditions::is_pod_running(),
             );
-
             info!("Waiting for pod to be running...");
             let _ = tokio::time::timeout(std::time::Duration::from_secs(30), establish)
                 .await
                 .expect("pod timeout");
 
-            pods
-        });
-
-        let mut client = KubeContainerFs::new(&pod_name, "alpine", &runtime).config(config.clone());
-        client.connect().expect("connection failed");
-        // Create wrkdir
-        let tempdir = PathBuf::from(generate_tempdir());
-        client
-            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-            .expect("failed to create tempdir");
-        // Change directory
-        client
-            .change_dir(tempdir.as_path())
-            .expect("failed to enter tempdir");
-        (pods, client)
-    }
-
-    #[cfg(feature = "integration-tests")]
-    fn finalize_client(pods: Api<Pod>, mut client: KubeContainerFs) {
-        if let Err(err) = client.runtime.clone().block_on(delete_test_pods(&pods)) {
-            warn!("failed to clean up test pods: {err}");
+            let mut client = KubeContainerFs::new(&pod_name, "alpine").config(config.clone());
+            client.connect().await.expect("connection failed");
+            let tempdir = PathBuf::from(generate_tempdir());
+            client
+                .create_dir(tempdir.as_path(), Some(UnixPex::from(0o775)))
+                .await
+                .expect("failed to create tempdir");
+            (pods, client, tempdir)
         }
-        assert!(client.disconnect().is_ok());
-    }
 
-    /// Delete every pod named by [`generate_pod_name`], leaving pods created
-    /// by other test runs alone. Test pods are never deleted after use
-    /// otherwise, and a single-node Minikube cluster runs out of room to
-    /// schedule new ones after a couple dozen accumulate.
-    #[cfg(feature = "integration-tests")]
-    async fn delete_test_pods(pods: &Api<Pod>) -> kube::Result<()> {
-        use kube::ResourceExt as _;
-        use kube::api::DeleteParams;
-
-        for pod in pods.list(&Default::default()).await? {
-            let name = pod.name_any();
-            if name.starts_with("test-") {
-                pods.delete(&name, &DeleteParams::default()).await?;
+        async fn finalize_client(pods: Api<Pod>, mut client: KubeContainerFs) {
+            if let Err(err) = delete_test_pods(&pods).await {
+                warn!("failed to clean up test pods: {err}");
             }
+            assert!(client.disconnect().await.is_ok());
         }
-        Ok(())
-    }
 
-    #[cfg(feature = "integration-tests")]
-    fn generate_pod_name() -> String {
-        use rand::RngExt as _;
-        use rand::distr::Alphanumeric;
+        /// Delete every pod named by [`generate_pod_name`], leaving pods
+        /// created by other test runs alone. A single-node Minikube cluster
+        /// runs out of room to schedule new ones after a couple dozen
+        /// accumulate.
+        async fn delete_test_pods(pods: &Api<Pod>) -> kube::Result<()> {
+            use kube::ResourceExt as _;
+            use kube::api::DeleteParams;
 
-        let mut rng = rand::rng();
-        let random_string: String = std::iter::repeat(())
-            .map(|()| rng.sample(Alphanumeric))
-            .map(char::from)
-            .filter(|c| c.is_alphabetic())
-            .map(|c| c.to_ascii_lowercase())
-            .take(12)
-            .collect();
+            for pod in pods.list(&Default::default()).await? {
+                let name = pod.name_any();
+                if name.starts_with("test-") {
+                    pods.delete(&name, &DeleteParams::default()).await?;
+                }
+            }
+            Ok(())
+        }
 
-        format!("test-{}", random_string)
-    }
+        fn generate_pod_name() -> String {
+            use rand::RngExt as _;
+            use rand::distr::Alphanumeric;
 
-    #[cfg(feature = "integration-tests")]
-    fn generate_tempdir() -> String {
-        use rand::RngExt;
-        use rand::distr::Alphanumeric;
-        let mut rng = rand::rng();
-        let name: String = std::iter::repeat(())
-            .map(|()| rng.sample(Alphanumeric))
-            .map(char::from)
-            .take(8)
-            .collect();
-        format!("/tmp/temp_{}", name)
+            let mut rng = rand::rng();
+            let random_string: String = std::iter::repeat(())
+                .map(|()| rng.sample(Alphanumeric))
+                .map(char::from)
+                .filter(|c| c.is_alphabetic())
+                .map(|c| c.to_ascii_lowercase())
+                .take(12)
+                .collect();
+            format!("test-{random_string}")
+        }
+
+        fn generate_tempdir() -> String {
+            use rand::RngExt;
+            use rand::distr::Alphanumeric;
+
+            let mut rng = rand::rng();
+            let name: String = std::iter::repeat(())
+                .map(|()| rng.sample(Alphanumeric))
+                .map(char::from)
+                .take(8)
+                .collect();
+            format!("/tmp/temp_{name}")
+        }
     }
 }

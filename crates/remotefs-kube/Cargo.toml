@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-kube"
-version = "0.4.0"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin1997@gmail.com>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-kube"
@@ -15,36 +15,31 @@ description = "remotefs implementation for kube"
 
 [dependencies]
 chrono = "0.4"
-futures-util = "0.3"
+futures-io = "0.3"
 k8s-openapi = { version = "0.28", features = ["v1_32"] }
 kube = { version = "4", features = ["client", "config", "ws"] }
 lazy-regex = "3"
 log = "0.4"
-remotefs = "0.3"
-tar = "0.4"
-tempfile = "3"
-thiserror = "2"
-tokio = { version = "1", features = ["fs", "rt"] }
-tokio-util = "0.7"
+remotefs = { version = "1", features = ["async"] }
+tokio = { version = "1", features = ["io-util", "rt"] }
 
 [dev-dependencies]
 env_logger = "0.11"
+futures = "0.3"
 k8s-openapi = { version = "0.28", features = ["v1_32"] }
 kube = { version = "4", features = ["client", "config", "runtime", "ws"] }
 pretty_assertions = "1"
 rand = "0.10"
 serde_json = "1"
 serial_test = "4"
-
-[target."cfg(target_os = \"windows\")"]
-[target."cfg(target_os = \"windows\")".dependencies]
-path-slash = "0.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 default = ["find"]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
+tokio = ["remotefs/tokio"]
 # tests
 integration-tests = []
 

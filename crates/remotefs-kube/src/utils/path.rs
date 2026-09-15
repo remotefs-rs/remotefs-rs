@@ -1,50 +1,89 @@
 //! ## Path
 //!
-//! path utilities
+//! Helpers for the POSIX paths used inside containers.
 
 use std::path::{Path, PathBuf};
 
-#[cfg(target_os = "windows")]
-use path_slash::PathExt as _;
+use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 
-/// Absolutize target path if relative.
-pub fn absolutize(wrkdir: &Path, target: &Path) -> PathBuf {
-    match target.is_absolute() {
-        true => target.to_path_buf(),
-        false => {
-            let mut p: PathBuf = wrkdir.to_path_buf();
-            p.push(target);
-            resolve(&p)
-        }
+/// Validate that `path` is an absolute POSIX path (`/...`).
+///
+/// [`remotefs::path::ensure_absolute`] also accepts Windows drive and UNC
+/// roots; a container only understands `/`-rooted paths, so those are
+/// rejected here with [`RemoteErrorType::InvalidPath`].
+pub fn ensure_posix_absolute(path: &Path) -> RemoteResult<&Path> {
+    let path = remotefs::path::ensure_absolute(path)?;
+    if path.as_os_str().as_encoded_bytes().starts_with(b"/") {
+        Ok(path)
+    } else {
+        Err(RemoteError::with_message(
+            RemoteErrorType::InvalidPath,
+            "path must be an absolute POSIX path",
+        ))
     }
 }
 
-/// Fix provided path; on Windows fixes the backslashes, converting them to slashes
-/// While on POSIX does nothing
-#[cfg(target_os = "windows")]
-fn resolve(p: &Path) -> PathBuf {
-    PathBuf::from(p.to_slash_lossy().to_string())
+/// Join `name` onto `parent` with a `/` separator regardless of the host
+/// platform, so that paths built on Windows never contain backslashes.
+pub fn join(parent: &Path, name: &str) -> PathBuf {
+    let parent = parent.to_string_lossy();
+    let parent = parent.trim_end_matches('/');
+    PathBuf::from(format!("{parent}/{name}"))
 }
 
-#[cfg(target_family = "unix")]
-fn resolve(p: &Path) -> PathBuf {
-    p.to_path_buf()
+/// Quote `path` for `/bin/sh` with single quotes.
+pub fn shell_quote(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    format!("'{raw}'", raw = raw.replace('\'', r"'\''"))
 }
 
 #[cfg(test)]
 mod test {
 
+    use std::path::PathBuf;
+
+    use pretty_assertions::assert_eq;
+    use remotefs::RemoteErrorType;
+
     use super::*;
 
     #[test]
-    fn absolutize_path() {
+    fn should_accept_posix_absolute_paths() {
         assert_eq!(
-            absolutize(Path::new("/home/omar"), Path::new("readme.txt")).as_path(),
-            Path::new("/home/omar/readme.txt")
+            ensure_posix_absolute(Path::new("/tmp/a.txt")).unwrap(),
+            Path::new("/tmp/a.txt")
         );
         assert_eq!(
-            absolutize(Path::new("/home/omar"), Path::new("/tmp/readme.txt")).as_path(),
-            Path::new("/tmp/readme.txt")
+            ensure_posix_absolute(Path::new("/")).unwrap(),
+            Path::new("/")
         );
+    }
+
+    #[test]
+    fn should_reject_relative_and_windows_paths() {
+        for input in ["", "a.txt", "tmp/a.txt", r"C:\tmp", r"\\server\share"] {
+            assert_eq!(
+                ensure_posix_absolute(Path::new(input)).unwrap_err().kind(),
+                RemoteErrorType::InvalidPath,
+                "input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn should_join_with_forward_slash() {
+        assert_eq!(join(Path::new("/"), "a"), PathBuf::from("/a"));
+        assert_eq!(join(Path::new("/tmp/"), "a"), PathBuf::from("/tmp/a"));
+        assert_eq!(
+            join(Path::new("/tmp"), "a.txt"),
+            PathBuf::from("/tmp/a.txt")
+        );
+        assert_eq!(join(Path::new("/tmp"), "a").to_string_lossy(), "/tmp/a");
+    }
+
+    #[test]
+    fn should_quote_for_shell() {
+        assert_eq!(shell_quote(Path::new("/tmp/a b")), "'/tmp/a b'");
+        assert_eq!(shell_quote(Path::new("/tmp/it's")), r"'/tmp/it'\''s'");
     }
 }
