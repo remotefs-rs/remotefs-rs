@@ -17,6 +17,8 @@ mod webdav;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use remotefs::AsyncRemoteFs;
+use remotefs::adapters::r#async::Unblock;
 use remotefs_fuse::MountOption;
 
 #[cfg(feature = "aws-s3")]
@@ -32,9 +34,10 @@ use self::memory::MemoryArgs;
 use self::smb::SmbArgs;
 #[cfg(feature = "ssh")]
 use self::ssh::{ScpArgs, SftpArgs};
+#[cfg(feature = "ssh")]
+use self::ssh::{ScpClient, SftpClient};
 #[cfg(feature = "webdav")]
 use self::webdav::WebdavArgs;
-use crate::remotefs_wrapper::RemoteFsWrapper;
 
 /// RemoteFS FUSE CLI
 ///
@@ -109,42 +112,36 @@ pub enum RemoteArgs {
 }
 
 impl CliArgs {
-    /// Create a RemoteFs instance from the CLI arguments
-    pub fn remote(self) -> anyhow::Result<RemoteFsWrapper> {
-        match self.remote {
+    /// Build the remote filesystem client selected on the command line.
+    ///
+    /// Blocking-only backends (in-memory, SMB) are adapted with
+    /// `remotefs::adapters::r#async::Unblock` so every backend is driven the
+    /// same way. This function must be called from inside the Tokio runtime.
+    pub fn remote(self) -> anyhow::Result<Box<dyn AsyncRemoteFs>> {
+        Ok(match self.remote {
             #[cfg(feature = "aws-s3")]
-            RemoteArgs::AwsS3(args) => {
-                Ok(RemoteFsWrapper::Aws(remotefs_aws_s3::AwsS3Fs::from(args)))
-            }
+            RemoteArgs::AwsS3(args) => Box::new(remotefs_aws_s3::AwsS3Fs::from(args)),
             #[cfg(feature = "ftp")]
-            RemoteArgs::Ftp(args) => Ok(RemoteFsWrapper::Ftp(remotefs_ftp::FtpFs::from(args))),
+            RemoteArgs::Ftp(args) => Box::new(remotefs_ftp::TokioFtpFs::from(args)),
             #[cfg(feature = "gcs")]
-            RemoteArgs::Gcs(args) => Ok(RemoteFsWrapper::Gcs(
-                remotefs_gcs::GoogleCloudStorageFs::try_from(args)?,
-            )),
+            RemoteArgs::Gcs(args) => Box::new(remotefs_gcs::GoogleCloudStorageFs::try_from(args)?),
             #[cfg(feature = "kube")]
-            RemoteArgs::Kube(args) => Ok(RemoteFsWrapper::Kube(
-                remotefs_kube::KubeMultiPodFs::from(args),
-            )),
-            RemoteArgs::Memory(args) => Ok(RemoteFsWrapper::Memory(
-                remotefs_memory::MemoryFs::from(args),
-            )),
-            #[cfg(feature = "ssh")]
-            RemoteArgs::Scp(args) => Ok(RemoteFsWrapper::Scp(remotefs_ssh::ScpFs::try_from(args)?)),
-            #[cfg(feature = "ssh")]
-            RemoteArgs::Sftp(args) => {
-                Ok(RemoteFsWrapper::Sftp(remotefs_ssh::SftpFs::try_from(args)?))
+            RemoteArgs::Kube(args) => Box::new(remotefs_kube::KubeMultiPodFs::from(args)),
+            RemoteArgs::Memory(args) => {
+                Box::new(Unblock::new(remotefs_memory::MemoryFs::from(args)))
             }
+            #[cfg(feature = "ssh")]
+            RemoteArgs::Scp(args) => Box::new(ScpClient::try_from(args)?),
+            #[cfg(feature = "ssh")]
+            RemoteArgs::Sftp(args) => Box::new(SftpClient::try_from(args)?),
             #[cfg(all(feature = "smb", target_family = "unix"))]
-            RemoteArgs::Smb(args) => Ok(RemoteFsWrapper::Smb(remotefs_smb::PavaoSmbFs::try_from(
-                args,
-            )?)),
+            RemoteArgs::Smb(args) => {
+                Box::new(Unblock::new(remotefs_smb::PavaoSmbFs::try_from(args)?))
+            }
             #[cfg(all(feature = "smb", target_family = "windows"))]
-            RemoteArgs::Smb(args) => Ok(RemoteFsWrapper::Smb(remotefs_smb::WNetSmbFs::from(args))),
+            RemoteArgs::Smb(args) => Box::new(Unblock::new(remotefs_smb::WNetSmbFs::from(args))),
             #[cfg(feature = "webdav")]
-            RemoteArgs::Webdav(args) => Ok(RemoteFsWrapper::Webdav(
-                remotefs_webdav::WebDAVFs::from(args),
-            )),
-        }
+            RemoteArgs::Webdav(args) => Box::new(remotefs_webdav::WebDAVFs::try_from(args)?),
+        })
     }
 }

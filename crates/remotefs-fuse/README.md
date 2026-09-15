@@ -52,10 +52,10 @@
 
 ## About remotefs-fuse ☁️
 
-remotefs-fuse mounts any [`remotefs`](https://github.com/remotefs-rs/remotefs-rs) `RemoteFs`
-implementation (SFTP/SCP, FTP, AWS S3, Google Cloud Storage, SMB, WebDAV, Kube, in-memory, ...) as
-a local filesystem, via FUSE on Linux/macOS and Dokany on Windows. It's the library (`Mount`,
-`MountOption`, `Driver`) to embed in your own project.
+remotefs-fuse mounts any [`remotefs`](https://github.com/remotefs-rs/remotefs-rs) `RemoteFs` or
+`AsyncRemoteFs` implementation (SFTP/SCP, FTP, AWS S3, Google Cloud Storage, SMB, WebDAV, Kube,
+in-memory, ...) as a local filesystem, via FUSE on Linux/macOS and Dokany on Windows. It's the
+library (`Mount`, `MountOption`, `Driver`) to embed in your own project.
 
 If you're looking for a ready-to-use CLI instead, check out
 [`fusibile`](https://github.com/remotefs-rs/remotefs-rs-fuse/tree/main/crates/fusibile), which
@@ -137,6 +137,9 @@ these features are supported:
 - `libfuse` (enabled by default, Unix only): link against the system `libfuse3`. Disable it to
   use `fuser`'s pure-Rust mount implementation, which needs no `libfuse3-dev` at build time and
   shells out to `fusermount3` instead. Inert on macOS and Windows.
+- `tokio`: enable `AsyncMount` and `AsyncUnmount`, a native async driver for any
+  `remotefs::AsyncRemoteFs` client. Unix uses one task per FUSE request; Windows uses one
+  `block_on` per Dokany callback.
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 
 ## Example
@@ -168,6 +171,26 @@ ctrlc::set_handler(move || {
 })?;
 
 mount.run().expect("Failed to run filesystem event loop");
+```
+
+### Mounting an async client
+
+With the `tokio` feature, any `AsyncRemoteFs` client can be mounted through `AsyncMount`:
+
+```rust,no_run,ignore
+use remotefs_fuse::AsyncMount;
+
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let remote = MyAsyncRemoteFsImpl::new();
+    let mut mount = AsyncMount::mount(remote, std::path::Path::new("/mnt/remote"), &[]).await?;
+    let unmount = mount.unmounter();
+    let run = tokio::spawn(mount.run());
+    tokio::signal::ctrl_c().await?;
+    unmount.unmount().await?;
+    run.await.expect("event loop panicked")?;
+    Ok(())
+}
 ```
 
 ## Requirements

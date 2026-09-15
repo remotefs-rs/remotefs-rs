@@ -1,10 +1,14 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use clap::Args;
 use remotefs_ssh::{
-    NoCheckServerKey, RusshSession, ScpFs, SftpFs, SshAgentIdentity, SshConfigParseRule, SshOpts,
+    NoCheckServerKey, RusshScpFs, RusshSftpFs, SshAgentIdentity, SshConfigParseRule, SshOpts,
 };
+
+/// The SCP client `fusibile` mounts.
+pub type ScpClient = RusshScpFs<NoCheckServerKey>;
+/// The SFTP client `fusibile` mounts.
+pub type SftpClient = RusshSftpFs<NoCheckServerKey>;
 
 /// Mount a SCP server filesystem
 #[derive(Args)]
@@ -38,28 +42,17 @@ impl std::fmt::Debug for ScpArgs {
     }
 }
 
-impl TryFrom<ScpArgs> for ScpFs<RusshSession<NoCheckServerKey>> {
+impl TryFrom<ScpArgs> for ScpClient {
     type Error = anyhow::Error;
 
     fn try_from(args: ScpArgs) -> Result<Self, Self::Error> {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .expect("Unable to create tokio runtime"),
-        );
-
-        Ok(ScpFs::russh(
-            build_ssh_opts(
-                &args.hostname,
-                args.port,
-                &args.username,
-                &args.password,
-                &args.ssh_config,
-            )?,
-            rt,
-        ))
+        Ok(RusshScpFs::new(build_ssh_opts(
+            &args.hostname,
+            args.port,
+            &args.username,
+            &args.password,
+            &args.ssh_config,
+        )?))
     }
 }
 
@@ -95,28 +88,17 @@ impl std::fmt::Debug for SftpArgs {
     }
 }
 
-impl TryFrom<SftpArgs> for SftpFs<RusshSession<NoCheckServerKey>> {
+impl TryFrom<SftpArgs> for SftpClient {
     type Error = anyhow::Error;
 
     fn try_from(args: SftpArgs) -> Result<Self, Self::Error> {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .expect("Unable to create tokio runtime"),
-        );
-
-        Ok(SftpFs::russh(
-            build_ssh_opts(
-                &args.hostname,
-                args.port,
-                &args.username,
-                &args.password,
-                &args.ssh_config,
-            )?,
-            rt,
-        ))
+        Ok(RusshSftpFs::new(build_ssh_opts(
+            &args.hostname,
+            args.port,
+            &args.username,
+            &args.password,
+            &args.ssh_config,
+        )?))
     }
 }
 

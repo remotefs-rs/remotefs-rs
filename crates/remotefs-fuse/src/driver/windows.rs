@@ -1,27 +1,23 @@
+#[cfg(feature = "tokio")]
+pub(crate) mod r#async;
+mod common;
 mod entry;
 mod security;
 #[cfg(test)]
 mod test;
 
-use std::hash::{Hash as _, Hasher as _};
-use std::io::{Cursor, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::UNIX_EPOCH;
 
 use dashmap::mapref::one::Ref;
 use dokan::{
-    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataError,
-    FillDataResult, FindData, FindStreamData, OperationInfo, OperationResult, VolumeInfo,
+    CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataResult,
+    FindData, FindStreamData, OperationInfo, OperationResult, VolumeInfo,
 };
-use dokan_sys::win32::{
-    FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_MAXIMUM_DISPOSITION,
-    FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF,
-    FILE_SUPERSEDE,
-};
-use entry::{EntryName, StatHandle};
-use path_slash::PathBufExt;
-use remotefs::fs::{Metadata, UnixPex, WriteStream};
+use dokan_sys::win32::FILE_DELETE_ON_CLOSE;
+use entry::SyncStatHandle;
+use remotefs::fs::{SetMetadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 use widestring::{U16CStr, U16CString, U16Str, U16String};
 use winapi::shared::ntstatus::{
@@ -32,19 +28,12 @@ use winapi::shared::ntstatus::{
 };
 use winapi::um::winnt::{self, ACCESS_MASK, FILE_CASE_PRESERVED_NAMES, FILE_CASE_SENSITIVE_SEARCH};
 
+use self::common::CreatePlan;
 pub use self::entry::Stat;
-use self::security::SecurityDescriptor;
-use super::Driver;
+pub(crate) use super::transfer::PendingWriteState;
+use super::{Driver, transfer};
 
 const ROOT_ID: u64 = 1;
-
-#[derive(Debug)]
-#[allow(dead_code)]
-struct PathInfo {
-    path: PathBuf,
-    file_name: U16CString,
-    parent: PathBuf,
-}
 
 #[derive(Debug)]
 pub struct AltStream {
@@ -61,80 +50,10 @@ impl AltStream {
     }
 }
 
-/// A write staged on a [`StatHandle`](entry::StatHandle) by `write_file`, not yet persisted to
-/// the remote filesystem.
-///
-/// Staging writes lets many `write_file` calls against the same handle share a single remote
-/// write (one streaming upload, or one buffered `create_file` call), rather than each call
-/// re-creating (and so truncating) the remote file on its own.
-pub enum PendingWriteState {
-    /// The remote exposes a streaming writer, opened once and kept alive across writes.
-    /// `next_offset` is the stream's current write cursor, used to seek only when a write isn't
-    /// a simple continuation of the previous one.
-    Stream {
-        stream: WriteStream,
-        next_offset: u64,
-    },
-    /// The remote doesn't support streaming writes; data is staged in memory and uploaded as a
-    /// single write when the handle is flushed.
-    Buffered(Vec<u8>),
-}
-
 impl<T> Driver<T>
 where
     T: RemoteFs + Sync + Send,
 {
-    /// Get the file index as [`u64`] number for a [`Path`]
-    fn file_index(file: &File) -> u64 {
-        if file.path() == Path::new("/") {
-            return ROOT_ID;
-        }
-
-        let mut hasher = seahash::SeaHasher::new();
-        file.path().hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Get file name from a path.
-    fn file_name(path: &Path) -> U16CString {
-        let Some(file_name) = path.file_name() else {
-            return U16CString::default();
-        };
-
-        U16CString::from_str(file_name.to_string_lossy()).unwrap_or_else(|_| U16CString::default())
-    }
-
-    /// Get windows attributes from a file.
-    fn attributes_from_file(file: &File) -> u32 {
-        let mut attributes = 0;
-        if file.metadata().is_dir() {
-            attributes |= winnt::FILE_ATTRIBUTE_DIRECTORY;
-        }
-
-        if file.metadata().is_file() {
-            attributes |= winnt::FILE_ATTRIBUTE_NORMAL;
-        }
-
-        if file.metadata().is_symlink() {
-            attributes |= winnt::FILE_ATTRIBUTE_REPARSE_POINT;
-        }
-
-        if file
-            .metadata
-            .mode
-            .map(|m| (u32::from(m)) & 0o222 == 0)
-            .unwrap_or_default()
-        {
-            attributes |= winnt::FILE_ATTRIBUTE_READONLY;
-        }
-
-        if file.is_hidden() {
-            attributes |= winnt::FILE_ATTRIBUTE_HIDDEN;
-        }
-
-        attributes
-    }
-
     /// Get the Stat object for a given `file_name`.
     fn stat(&self, file_name: &U16CStr) -> RemoteResult<Ref<'_, U16CString, Arc<RwLock<Stat>>>> {
         let key = file_name.to_ucstring();
@@ -142,160 +61,30 @@ where
             return Ok(stat);
         }
 
-        let path_info = Self::path_info(file_name);
+        let path_info = common::path_info(file_name);
 
         let file = self.remote(|remote| remote.stat(&path_info.path))?;
 
         // insert the file into the file handlers
-        self.file_handlers.insert(
-            key.clone(),
-            Arc::new(RwLock::new(Stat::new(
-                file,
-                SecurityDescriptor::new_default()
-                    .map_err(|_| RemoteError::new(remotefs::RemoteErrorType::ProtocolError))?,
-            ))),
-        );
+        self.file_handlers
+            .insert(key.clone(), common::new_stat(file)?);
 
         Ok(self.file_handlers.get(&key).unwrap())
     }
 
-    /// Get the path information for a given `file_name`.
-    fn path_info(file_name: &U16CStr) -> PathInfo {
-        let p = PathBuf::from(file_name.to_string_lossy());
-        let parent = p
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("/"));
-
-        // convert to `/` path
-        let slash_path = PathBuf::from(p.to_slash_lossy().to_string());
-        debug!("PathInfo: '{p:?}' -> '{slash_path:?}'");
-
-        PathInfo {
-            path: slash_path,
-            parent,
-            file_name: file_name.to_ucstring(),
-        }
-    }
-
-    /// Read data from a file.
-    ///
-    /// If possible, this system will use the stream from remotefs directly,
-    /// otherwise it will use a temporary file (*sigh*).
-    /// Note that most of remotefs supports streaming, so this should be rare.
+    /// Read up to `buffer.len()` bytes of `path` at `offset`; see [`transfer::read_at`].
     fn read(&self, path: &Path, buffer: &mut [u8], offset: u64) -> RemoteResult<usize> {
         debug!("Read file: {:?} {} bytes at {offset}", path, buffer.len());
-
-        match self.remote(|remote| remote.open(path)) {
-            Ok(mut reader) => {
-                debug!("Reading file from stream: {:?} at {offset}", path);
-                if offset > 0 {
-                    // skip to offset without allocating a buffer proportional to `offset`
-                    Self::skip_bytes(&mut reader, offset).map_err(|err| {
-                        remotefs::RemoteError::new_ex(
-                            remotefs::RemoteErrorType::IoError,
-                            err.to_string(),
-                        )
-                    })?;
-                }
-
-                // read file
-                let bytes_read = reader.read(buffer).map_err(|err| {
-                    remotefs::RemoteError::new_ex(
-                        remotefs::RemoteErrorType::IoError,
-                        err.to_string(),
-                    )
-                })?;
-                debug!("Read {bytes_read} bytes from stream; closing stream");
-
-                // close file
-                self.remote(|remote| remote.on_read(reader))?;
-
-                Ok(bytes_read)
-            }
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) => self.read_tempfile(path, buffer, offset),
-            Err(err) => Err(err),
-        }
+        self.remote(|remote| transfer::read_at(remote, path, buffer, offset))
     }
 
-    /// Read data from a file using a temporary file.
-    fn read_tempfile(&self, path: &Path, buffer: &mut [u8], offset: u64) -> RemoteResult<usize> {
-        let Ok(tempfile) = tempfile::NamedTempFile::new() else {
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        };
-        let Ok(writer) = std::fs::OpenOptions::new()
-            .write(true)
-            .open(tempfile.path())
-        else {
-            error!("Failed to open temporary file");
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        };
-
-        // transfer to tempfile
-        self.remote(|remote| remote.open_file(path, Box::new(writer)))?;
-
-        let Ok(mut reader) = std::fs::File::open(tempfile.path()) else {
-            error!("Failed to open temporary file");
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        };
-
-        // skip to offset without allocating a buffer proportional to `offset`
-        if offset > 0
-            && let Err(err) = Self::skip_bytes(&mut reader, offset)
-        {
-            error!("Failed to read file: {err}");
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        }
-
-        // read file
-        reader.read_exact(buffer).map_err(|err| {
-            remotefs::RemoteError::new_ex(remotefs::RemoteErrorType::IoError, err.to_string())
-        })?;
-
-        if let Err(err) = tempfile.close() {
-            error!("Failed to close temporary file: {err}");
-        }
-
-        Ok(buffer.len())
-    }
-
-    /// Discard `n` bytes from `reader` without allocating a buffer proportional to `n`.
-    ///
-    /// This is used to skip to a read offset on readers that only implement [`std::io::Read`]
-    /// (not [`std::io::Seek`]), such as remote file streams. A malicious or misbehaving remote
-    /// could otherwise cause an out-of-memory abort by reporting a huge offset.
-    fn skip_bytes(reader: &mut impl std::io::Read, n: u64) -> std::io::Result<()> {
-        let skipped = std::io::copy(&mut reader.by_ref().take(n), &mut std::io::sink())?;
-        if skipped != n {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "offset is beyond the end of the file",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Write `data` at `offset` to the pending write staged on `context`, starting a new one
-    /// (against `file`) if this is the first write to this handle.
-    ///
-    /// The remote write is not finalized here: it stays staged until [`Self::finalize_pending_write`]
-    /// is called. This lets many `write_file` calls in a row share a single remote write (a
-    /// single streaming upload, or a single buffered `create_file` call), instead of each call
-    /// re-creating (and so truncating) the remote file on its own.
+    /// Write `data` at `offset` to the pending write staged on `context`,
+    /// starting a new one (against `file`) if this is the first write to this
+    /// handle. The remote write stays staged until
+    /// [`Self::finalize_pending_write`] runs.
     fn write_to_handle(
         &self,
-        context: &StatHandle,
+        context: &SyncStatHandle,
         file: &File,
         data: &[u8],
         offset: u64,
@@ -303,91 +92,31 @@ where
         let mut pending = context
             .pending_write
             .lock()
-            .map_err(|_| RemoteError::new_ex(RemoteErrorType::IoError, "mutex poisoned"))?;
+            .map_err(|_| RemoteError::with_message(RemoteErrorType::IoError, "mutex poisoned"))?;
 
         if pending.is_none() {
-            let state = match self.remote(|remote| remote.create(file.path(), file.metadata())) {
-                Ok(stream) => PendingWriteState::Stream {
-                    stream,
-                    next_offset: 0,
-                },
-                Err(RemoteError {
-                    kind: RemoteErrorType::UnsupportedFeature,
-                    ..
-                }) => {
-                    debug!(
-                        "remote file system doesn't support streaming writes; buffering {:?} in memory",
-                        file.path()
-                    );
-                    PendingWriteState::Buffered(Vec::new())
-                }
-                Err(err) => {
-                    error!("Failed to open file for writing: {err}");
-                    return Err(err);
-                }
-            };
-            *pending = Some(state);
+            *pending = Some(self.remote(|remote| transfer::start_pending_write(remote, file))?);
         }
 
-        match pending.as_mut().expect("pending write was just inserted") {
-            PendingWriteState::Stream {
-                stream,
-                next_offset,
-            } => {
-                if *next_offset != offset {
-                    stream.seek(std::io::SeekFrom::Start(offset)).map_err(|err| {
-                        error!(
-                            "Failed to seek file: {err}. Note that not all the remote filesystems support seeking"
-                        );
-                        RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
-                    })?;
-                }
-                stream.write_all(data).map_err(|err| {
-                    error!("Failed to write file: {err}");
-                    RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
-                })?;
-                *next_offset = offset + data.len() as u64;
-                Ok(data.len() as u32)
-            }
-            PendingWriteState::Buffered(buffer) => {
-                let end = offset as usize + data.len();
-                if buffer.len() < end {
-                    buffer.resize(end, 0);
-                }
-                buffer[offset as usize..end].copy_from_slice(data);
-                Ok(data.len() as u32)
-            }
-        }
+        transfer::write_to_pending(
+            pending.as_mut().expect("pending write was just inserted"),
+            data,
+            offset,
+        )
     }
 
     /// Create a new, empty remote file in a single call, without staging a pending write.
-    fn create_empty_file(&self, file: &File) -> RemoteResult<()> {
-        match self.remote(|remote| remote.create(file.path(), file.metadata())) {
-            Ok(stream) => self.remote(|remote| remote.on_written(stream)),
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) => self
-                .remote(|remote| {
-                    remote.create_file(
-                        file.path(),
-                        file.metadata(),
-                        Box::new(Cursor::new(Vec::new())),
-                    )
-                })
-                .map(|_| ()),
-            Err(err) => Err(err),
-        }
+    fn create_empty_file(&self, path: &Path) -> RemoteResult<()> {
+        self.remote(|remote| transfer::create_empty_file(remote, path, Some(UnixPex::from(0o644))))
     }
 
     /// Finalize the write staged on `context`, if any, actually persisting it to the remote
     /// filesystem.
-    fn finalize_pending_write(&self, context: &StatHandle, file: &File) -> RemoteResult<()> {
+    fn finalize_pending_write(&self, context: &SyncStatHandle, file: &File) -> RemoteResult<()> {
         let pending = {
-            let mut guard = context
-                .pending_write
-                .lock()
-                .map_err(|_| RemoteError::new_ex(RemoteErrorType::IoError, "mutex poisoned"))?;
+            let mut guard = context.pending_write.lock().map_err(|_| {
+                RemoteError::with_message(RemoteErrorType::IoError, "mutex poisoned")
+            })?;
             guard.take()
         };
 
@@ -395,72 +124,13 @@ where
             return Ok(());
         };
 
-        match pending {
-            PendingWriteState::Stream { stream, .. } => {
-                self.remote(|remote| remote.on_written(stream))
-            }
-            PendingWriteState::Buffered(buffer) => {
-                debug!(
-                    "uploading {} buffered bytes to {:?}",
-                    buffer.len(),
-                    file.path()
-                );
-                self.remote(|remote| {
-                    remote.create_file(file.path(), file.metadata(), Box::new(Cursor::new(buffer)))
-                })
-                .map(|_| ())
-            }
-        }
+        self.remote(|remote| transfer::finalize_pending_write(remote, file, pending))
     }
 
     /// Append data to a file.
     fn append(&self, file: &File, data: &[u8]) -> RemoteResult<u32> {
         debug!("Append to file: {:?} {} bytes", file.path(), data.len());
-        // write data
-
-        let mut reader = Cursor::new(data);
-        let mut writer = match self.remote(|remote| remote.append(file.path(), file.metadata())) {
-            Ok(writer) => writer,
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) => {
-                return self.append_wno_stream(file, data);
-            }
-            Err(err) => {
-                error!("Failed to write file: {err}");
-                return Err(err);
-            }
-        };
-
-        // write
-        let bytes_written = match std::io::copy(&mut reader, &mut writer) {
-            Ok(bytes) => bytes as u32,
-            Err(err) => {
-                error!("Failed to write file: {err}");
-                return Err(RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    err.to_string(),
-                ));
-            }
-        };
-        // on write
-        self.remote(|remote| remote.on_written(writer))
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::IoError, err.to_string()))?;
-
-        Ok(bytes_written)
-    }
-
-    /// Append data to a file without using a stream.
-    fn append_wno_stream(&self, file: &File, data: &[u8]) -> RemoteResult<u32> {
-        debug!(
-            "Append to file without stream: {:?} {} bytes",
-            file.path(),
-            data.len()
-        );
-        let reader = Cursor::new(data.to_vec());
-        self.remote(|remote| remote.append_file(file.path(), file.metadata(), Box::new(reader)))
-            .map(|len| len as u32)
+        self.remote(|remote| transfer::append_data(remote, file, data))
     }
 
     /// Find files at path with the optional pattern.
@@ -487,95 +157,31 @@ where
             }
         };
 
-        // iter children and fill data
-        for child in entries {
-            // push entry
-            let file_name = Self::file_name(child.path());
-            if pattern
-                .map(|pattern| dokan::is_name_in_expression(pattern, &file_name, false))
-                .unwrap_or(true)
-            {
-                (fill)(&Self::find_data(&child, file_name)).or_else(Self::ignore_name_too_long)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn find_data(file: &File, file_name: U16CString) -> FindData {
-        FindData {
-            attributes: Self::attributes_from_file(file),
-            creation_time: file.metadata().created.unwrap_or(UNIX_EPOCH),
-            last_access_time: file.metadata().accessed.unwrap_or(UNIX_EPOCH),
-            last_write_time: file.metadata().modified.unwrap_or(UNIX_EPOCH),
-            file_size: file.metadata().size,
-            file_name,
-        }
-    }
-
-    /// Return the error in case of a [`FillDataError`] for [`FillDataError::NameTooLong`] and [`FillDataError::BufferFull`].
-    fn ignore_name_too_long(err: FillDataError) -> OperationResult<()> {
-        match err {
-            // Normal behavior.
-            FillDataError::BufferFull => Err(STATUS_BUFFER_OVERFLOW),
-            // Silently ignore this error because 1) file names passed to create_file should have been checked
-            // by Windows. 2) We don't want an error on a single file to make the whole directory unreadable.
-            FillDataError::NameTooLong => Ok(()),
-        }
+        common::fill_entries(entries, pattern, fill)
     }
 
     /// Execute a function on the remote filesystem.
     fn remote<F, U>(&self, f: F) -> RemoteResult<U>
     where
+        F: FnOnce(&T) -> RemoteResult<U>,
+    {
+        let remote = self
+            .remote
+            .read()
+            .map_err(|_| RemoteError::with_message(RemoteErrorType::IoError, "mutex poisoned"))?;
+        f(&remote)
+    }
+
+    /// Execute a lifecycle function (`connect` / `disconnect`) under the exclusive write lock.
+    fn remote_mut<F, U>(&self, f: F) -> RemoteResult<U>
+    where
         F: FnOnce(&mut T) -> RemoteResult<U>,
     {
         let mut remote = self
             .remote
-            .lock()
-            .map_err(|_| RemoteError::new_ex(RemoteErrorType::IoError, "mutex poisoned"))?;
+            .write()
+            .map_err(|_| RemoteError::with_message(RemoteErrorType::IoError, "mutex poisoned"))?;
         f(&mut remote)
-    }
-
-    /// Try to execute a function on the alt stream.
-    fn try_alt_stream<F, U>(context: &StatHandle, f: F) -> Option<OperationResult<U>>
-    where
-        F: FnOnce(&mut AltStream) -> OperationResult<U>,
-    {
-        // check if alt stream is requested; must contain ':" in the name
-        let use_alt_stream = match context.stat.read() {
-            Ok(stat) => stat.file.path.to_string_lossy().contains(':'),
-            Err(_) => {
-                error!("mutex poisoned");
-                return Some(Err(STATUS_INVALID_DEVICE_REQUEST));
-            }
-        };
-        if !use_alt_stream {
-            return None;
-        }
-
-        let alt_stream = match context.alt_stream.read() {
-            Err(_) => {
-                error!("mutex poisoned");
-                return Some(Err(STATUS_INVALID_DEVICE_REQUEST));
-            }
-            Ok(stream) => stream.clone(),
-        };
-
-        if let Some(alt_stream) = alt_stream.as_ref() {
-            match alt_stream.write() {
-                Ok(mut stream) => {
-                    let ret = f(&mut stream);
-
-                    Some(ret)
-                }
-                Err(_) => {
-                    error!("mutex poisoned");
-                    Some(Err(STATUS_INVALID_DEVICE_REQUEST))
-                }
-            }
-        } else {
-            None
-        }
     }
 }
 
@@ -585,7 +191,7 @@ where
     T: RemoteFs + Sync + Send + 'h,
 {
     /// Type of the context associated with an open file object.
-    type Context = StatHandle;
+    type Context = SyncStatHandle;
 
     /// Called when Dokan has successfully mounted the volume.
     fn mounted(
@@ -594,7 +200,7 @@ where
         _info: &OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<()> {
         info!("mounted()");
-        match self.remote(|remote| remote.connect()) {
+        match self.remote_mut(|remote| remote.connect()) {
             Ok(_) => Ok(()),
             Err(e) => {
                 error!("connection failed: {e}",);
@@ -606,7 +212,7 @@ where
     /// Called when Dokan is unmounting the volume.
     fn unmounted(&'h self, _info: &OperationInfo<'c, 'h, Self>) -> OperationResult<()> {
         info!("unmounted()");
-        match self.remote(|rem| rem.disconnect()) {
+        match self.remote_mut(|remote| remote.disconnect()) {
             Ok(_) => Ok(()),
             Err(e) => {
                 error!("disconnection failed: {e}",);
@@ -634,264 +240,78 @@ where
         create_options: u32,
         _info: &mut OperationInfo<'c, 'h, Self>,
     ) -> OperationResult<CreateFileInfo<Self::Context>> {
-        let file_name_path = Self::path_info(file_name).path;
+        let path_info = common::path_info(file_name);
         debug!(
-            "create_file({file_name_path:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})"
+            "create_file({:?}, {desired_access:?}, {file_attributes:?}, {share_access:?}, {create_disposition:?}, {create_options:?})",
+            path_info.path
         );
-
-        let stat = self.stat(file_name).ok();
-
-        if create_disposition > FILE_MAXIMUM_DISPOSITION {
-            error!("invalid create disposition: {create_disposition}");
-            return Err(STATUS_INVALID_PARAMETER);
-        }
         let delete_on_close = create_options & FILE_DELETE_ON_CLOSE > 0;
-        if let Some(stat) = stat {
-            let stat = stat.value();
-            let read = match stat.read() {
-                Ok(read) => read,
-                Err(_) => {
-                    error!("mutex poisoned");
-                    return Err(STATUS_INVALID_DEVICE_REQUEST);
-                }
-            };
-
-            let is_readonly = read
-                .file
-                .metadata()
-                .mode
-                .map(|m| (u32::from(m)) & 0o222 == 0)
-                .unwrap_or_default();
-
-            if is_readonly
-                && (desired_access & winnt::FILE_WRITE_DATA > 0
-                    || desired_access & winnt::FILE_APPEND_DATA > 0)
-            {
-                error!("file {file_name:?} is readonly");
-                return Err(STATUS_ACCESS_DENIED);
-            }
-            if read.delete_pending {
-                error!("delete pending: {file_name:?}");
-                return Err(STATUS_DELETE_PENDING);
-            }
-            if is_readonly && delete_on_close {
-                error!("delete on close: {file_name:?}");
-                return Err(STATUS_CANNOT_DELETE);
-            }
-            drop(read);
-
-            let stream_name = EntryName(file_name.to_ustring());
-            let ret = {
-                let mut stat = match stat.write() {
-                    Ok(stat) => stat,
-                    Err(_) => {
-                        error!("mutex poisoned");
-                        return Err(STATUS_INVALID_DEVICE_REQUEST);
-                    }
-                };
-                if let Some(stream) = stat.alt_streams.get(&stream_name).cloned() {
-                    let inner_stream = match stream.read() {
-                        Ok(stream) => stream,
-                        Err(_) => {
-                            error!("mutex poisoned");
-                            return Err(STATUS_INVALID_DEVICE_REQUEST);
-                        }
-                    };
-                    if inner_stream.delete_pending {
-                        error!("delete pending: {file_name:?}");
-                        return Err(STATUS_DELETE_PENDING);
-                    }
-                    drop(inner_stream);
-                    match create_disposition {
-                        FILE_SUPERSEDE | FILE_OVERWRITE | FILE_OVERWRITE_IF => {
-                            if create_disposition != FILE_SUPERSEDE && is_readonly {
-                                error!("file {file_name:?} is readonly");
-                                return Err(STATUS_ACCESS_DENIED);
-                            }
-                        }
-                        FILE_CREATE => {
-                            error!("alt stream already exists: {file_name:?}");
-                            return Err(ntstatus::STATUS_OBJECT_NAME_COLLISION);
-                        }
-                        _ => (),
-                    }
-                    Some((stream, false))
-                } else {
-                    //if create_disposition == FILE_OPEN || create_disposition == FILE_OVERWRITE {
-                    //    error!("alt stream not found: {file_name:?}");
-                    //    return Err(STATUS_OBJECT_NAME_NOT_FOUND);
-                    //}
-                    if is_readonly {
-                        error!("file {file_name:?} is readonly");
-                        return Err(STATUS_ACCESS_DENIED);
-                    }
-                    let stream = Arc::new(RwLock::new(AltStream::new()));
-                    stat.alt_streams.insert(stream_name, Arc::clone(&stream));
-
-                    Some((stream, true))
-                }
-            };
-
-            if let Some((stream, new_file_created)) = ret {
-                let handle = StatHandle {
-                    stat: stat.clone(),
-                    alt_stream: RwLock::new(Some(stream)),
+        let existing = self.stat(file_name).ok().map(|stat| stat.value().clone());
+        match common::plan_create(
+            existing.as_ref(),
+            file_name,
+            desired_access,
+            create_disposition,
+            create_options,
+        )? {
+            CreatePlan::Open {
+                stat,
+                alt_stream,
+                is_dir,
+                new_file_created,
+            } => Ok(CreateFileInfo {
+                context: SyncStatHandle {
+                    stat,
+                    alt_stream: RwLock::new(alt_stream),
                     delete_on_close,
                     pending_write: Mutex::new(None),
-                };
-                return Ok(CreateFileInfo {
-                    context: handle,
-                    is_dir: false,
-                    new_file_created,
-                });
-            }
-            let is_file = stat
-                .read()
-                .ok()
-                .map(|r| r.file.is_file())
-                .unwrap_or_default();
-
-            // check if file or directory
-            match is_file {
-                true => {
-                    if create_options & FILE_DIRECTORY_FILE > 0 {
-                        error!("file is not a directory: {file_name:?}");
-                        return Err(STATUS_NOT_A_DIRECTORY);
-                    }
-                    match create_disposition {
-                        FILE_SUPERSEDE | FILE_OVERWRITE | FILE_OVERWRITE_IF => {
-                            if create_disposition != FILE_SUPERSEDE && is_readonly {
-                                error!("file {file_name:?} is readonly");
-                                return Err(STATUS_ACCESS_DENIED);
-                            }
-                        }
-                        FILE_CREATE => {
-                            error!("file already exists: {file_name:?}");
-                            return Err(STATUS_OBJECT_NAME_COLLISION);
-                        }
-                        _ => (),
-                    }
-                    debug!("open file: {file_name:?}");
-                    let handle = StatHandle {
-                        stat: stat.clone(),
+                },
+                is_dir,
+                new_file_created,
+            }),
+            CreatePlan::CreateFile => {
+                self.create_empty_file(&path_info.path).map_err(|err| {
+                    error!("failed to create empty file: {err}");
+                    ntstatus::STATUS_CONNECTION_DISCONNECTED
+                })?;
+                let stat = self.stat(file_name).map_err(|err| {
+                    error!("stat failed: {err}");
+                    ntstatus::STATUS_CONNECTION_DISCONNECTED
+                })?;
+                Ok(CreateFileInfo {
+                    context: SyncStatHandle {
+                        stat: stat.value().clone(),
                         alt_stream: RwLock::new(None),
                         delete_on_close,
                         pending_write: Mutex::new(None),
-                    };
-                    Ok(CreateFileInfo {
-                        context: handle,
-                        is_dir: false,
-                        new_file_created: false,
-                    })
-                } // end is file
-                false => {
-                    // is directory
-                    if create_options & FILE_NON_DIRECTORY_FILE > 0 {
-                        error!("file is a directory: {file_name:?}");
-                        return Err(STATUS_FILE_IS_A_DIRECTORY);
-                    }
-                    match create_disposition {
-                        FILE_OPEN | FILE_OPEN_IF => {
-                            debug!("open directory: {file_name:?}");
-                            let handle = StatHandle {
-                                stat: stat.clone(),
-                                alt_stream: RwLock::new(None),
-                                delete_on_close,
-                                pending_write: Mutex::new(None),
-                            };
-                            Ok(CreateFileInfo {
-                                context: handle,
-                                is_dir: true,
-                                new_file_created: false,
-                            })
-                        }
-                        FILE_CREATE => {
-                            error!("directory already exists: {file_name:?}");
-                            Err(STATUS_OBJECT_NAME_COLLISION)
-                        }
-                        _ => {
-                            error!("invalid create disposition: {create_disposition}");
-                            Err(STATUS_INVALID_PARAMETER)
-                        }
-                    }
-                }
-            }
-        }
-        // END IF FILE EXISTS
-        else if create_disposition == FILE_CREATE || create_disposition == FILE_OPEN_IF {
-            // FILE DOES NOT EXIST
-            if create_options & FILE_NON_DIRECTORY_FILE > 0 {
-                // create file
-                debug!("create file: {file_name:?}");
-                let path_info = Self::path_info(file_name);
-                if let Err(err) = self.create_empty_file(&File {
-                    path: path_info.path,
-                    metadata: Metadata::default().mode(UnixPex::from(0o644)).size(0),
-                }) {
-                    error!("failed to create empty file: {err}");
-                    return Err(ntstatus::STATUS_CONNECTION_DISCONNECTED);
-                }
-
-                let stat = match self.stat(file_name) {
-                    Ok(stat) => stat,
-                    Err(err) => {
-                        error!("stat failed: {err}");
-                        return Err(ntstatus::STATUS_CONNECTION_DISCONNECTED);
-                    }
-                };
-
-                let handle = StatHandle {
-                    stat: stat.value().clone(),
-                    alt_stream: RwLock::new(None),
-                    delete_on_close,
-                    pending_write: Mutex::new(None),
-                };
-
-                Ok(CreateFileInfo {
-                    context: handle,
+                    },
                     is_dir: false,
                     new_file_created: true,
                 })
-            } else {
-                // create directory
-                let stat = {
-                    let path_info = Self::path_info(file_name);
-                    debug!("create directory: {}", path_info.path.display());
-
-                    if let Err(err) = self
-                        .remote(|remote| remote.create_dir(&path_info.path, UnixPex::from(0o755)))
-                    {
-                        error!("create_dir failed: {err}");
-                        return Err(ntstatus::STATUS_CONNECTION_DISCONNECTED);
-                    }
-
-                    match self.stat(file_name) {
-                        Ok(stat) => stat,
-                        Err(err) => {
-                            error!("stat failed: {err}");
-                            return Err(ntstatus::STATUS_CONNECTION_DISCONNECTED);
-                        }
-                    }
-                };
-
-                let handle = StatHandle {
-                    stat: stat.value().clone(),
-                    alt_stream: RwLock::new(None),
-                    delete_on_close,
-                    pending_write: Mutex::new(None),
-                };
+            }
+            CreatePlan::CreateDirectory => {
+                self.remote(|remote| {
+                    remote.create_dir(&path_info.path, Some(UnixPex::from(0o755)))
+                })
+                .map_err(|err| {
+                    error!("create_dir failed: {err}");
+                    ntstatus::STATUS_CONNECTION_DISCONNECTED
+                })?;
+                let stat = self.stat(file_name).map_err(|err| {
+                    error!("stat failed: {err}");
+                    ntstatus::STATUS_CONNECTION_DISCONNECTED
+                })?;
                 Ok(CreateFileInfo {
-                    context: handle,
+                    context: SyncStatHandle {
+                        stat: stat.value().clone(),
+                        alt_stream: RwLock::new(None),
+                        delete_on_close,
+                        pending_write: Mutex::new(None),
+                    },
                     is_dir: true,
                     new_file_created: true,
                 })
             }
-        } else if create_disposition == FILE_OPEN {
-            error!("tried to open non existing file: {file_name:?}");
-            Err(STATUS_OBJECT_NAME_NOT_FOUND)
-        } else {
-            error!("invalid create disposition: {create_disposition}");
-            Err(STATUS_INVALID_PARAMETER)
         }
     }
 
@@ -927,7 +347,7 @@ where
         };
 
         let alt_stream_delete =
-            Self::try_alt_stream(context, |alt_stream| Ok(alt_stream.delete_pending))
+            common::try_alt_stream(context, |alt_stream| Ok(alt_stream.delete_pending))
                 .transpose()
                 .unwrap_or_default()
                 .unwrap_or_default();
@@ -1025,8 +445,9 @@ where
         };
 
         // check alt stream
-        if let Some(res) = Self::try_alt_stream(context, |alt_stream| {
-            let offset = offset as usize;
+        if let Some(res) = common::try_alt_stream(context, |alt_stream| {
+            let offset = usize::try_from(common::nonnegative_offset(offset)?)
+                .map_err(|_| STATUS_INVALID_PARAMETER)?;
             // reading past the end of the stream yields zero bytes, matching regular file reads
             let Some(available) = alt_stream.data.len().checked_sub(offset) else {
                 return Ok(0);
@@ -1038,7 +459,7 @@ where
             return res;
         }
 
-        self.read(&file.path, buffer, offset as u64)
+        self.read(&file.path, buffer, common::nonnegative_offset(offset)?)
             .map_err(|err| {
                 error!("read failed: {err}");
                 STATUS_INVALID_DEVICE_REQUEST
@@ -1076,12 +497,13 @@ where
         };
 
         // check alt stream
-        if let Some(res) = Self::try_alt_stream(context, |alt_stream| {
+        if let Some(res) = common::try_alt_stream(context, |alt_stream| {
             debug!("write alt stream: {file_name:?}");
             let offset = if info.write_to_eof() {
                 alt_stream.data.len()
             } else {
-                offset as usize
+                usize::try_from(common::nonnegative_offset(offset)?)
+                    .map_err(|_| STATUS_INVALID_PARAMETER)?
             };
             let len = buffer.len();
             if offset + len > alt_stream.data.len() {
@@ -1099,7 +521,7 @@ where
             self.append(&file, buffer)
         } else {
             debug!("write file: {file_name:?}");
-            self.write_to_handle(context, &file, buffer, offset as u64)
+            self.write_to_handle(context, &file, buffer, common::nonnegative_offset(offset)?)
         }
         .map_err(|err| {
             error!("write failed: {err}");
@@ -1156,13 +578,13 @@ where
         };
 
         Ok(FileInfo {
-            attributes: Self::attributes_from_file(&file),
+            attributes: common::attributes_from_file(&file),
             creation_time: file.metadata().created.unwrap_or(UNIX_EPOCH),
             last_access_time: file.metadata().accessed.unwrap_or(UNIX_EPOCH),
             last_write_time: file.metadata().modified.unwrap_or(UNIX_EPOCH),
-            file_size: file.metadata().size,
+            file_size: file.metadata().size.unwrap_or(0),
             number_of_links: 1,
-            file_index: Self::file_index(&file),
+            file_index: common::file_index(&file),
         })
     }
 
@@ -1305,23 +727,24 @@ where
             Ok(stat) => stat.file.clone(),
         };
 
-        let mut metadata = file.metadata().clone();
-
-        // set metadata
-        if let FileTimeOperation::SetTime(time) = creation_time {
-            metadata.created = Some(time);
-        }
-
+        let mut changes = SetMetadata::default();
+        let mut any_change = false;
         if let FileTimeOperation::SetTime(time) = last_access_time {
-            metadata.accessed = Some(time);
+            changes = changes.accessed(time);
+            any_change = true;
         }
-
         if let FileTimeOperation::SetTime(time) = last_write_time {
-            metadata.modified = Some(time);
+            changes = changes.modified(time);
+            any_change = true;
+        }
+        if let FileTimeOperation::SetTime(_) = creation_time {
+            debug!("creation time is not supported by remotefs; ignoring");
         }
 
-        if let Err(err) = self.remote(|remote| remote.setstat(file.path(), metadata)) {
-            error!("setstat failed: {err}");
+        if any_change
+            && let Err(err) = self.remote(|remote| remote.set_metadata(file.path(), &changes))
+        {
+            error!("set_metadata failed: {err}");
             return Err(STATUS_INVALID_DEVICE_REQUEST);
         }
 
@@ -1356,7 +779,7 @@ where
             return Err(STATUS_CANNOT_DELETE);
         }
 
-        if let Some(res) = Self::try_alt_stream(context, |alt_stream| {
+        if let Some(res) = common::try_alt_stream(context, |alt_stream| {
             if alt_stream.delete_pending {
                 error!("delete pending: {file_name:?}");
                 return Err(STATUS_DELETE_PENDING);
@@ -1398,7 +821,7 @@ where
     ) -> OperationResult<()> {
         debug!("delete_directory({file_name:?}, {context:?})");
 
-        if Self::try_alt_stream(context, |_alt_stream| Ok(())).is_some() {
+        if common::try_alt_stream(context, |_alt_stream| Ok(())).is_some() {
             error!("alt stream found: {file_name:?}");
             return Err(STATUS_INVALID_DEVICE_REQUEST);
         }
@@ -1431,7 +854,7 @@ where
         }
 
         // set delete pending
-        if let Some(res) = Self::try_alt_stream(context, |alt_stream| {
+        if let Some(res) = common::try_alt_stream(context, |alt_stream| {
             alt_stream.delete_pending = info.delete_on_close();
             Ok(())
         }) {
@@ -1471,7 +894,7 @@ where
     ) -> OperationResult<()> {
         debug!("move_file({file_name:?}, {new_file_name:?}, {replace_if_existing:?}, {context:?})");
 
-        let dest = Self::path_info(new_file_name);
+        let dest = common::path_info(new_file_name);
         // check if destination exists
         if !replace_if_existing
             && self
@@ -1492,7 +915,7 @@ where
 
         debug!("move file: {file_name:?} -> {new_file_name:?}");
 
-        self.remote(|remote| remote.mov(&file.path, &dest.path))
+        self.remote(|remote| remote.rename(&file.path, &dest.path))
             .map_err(|err| {
                 error!("move failed: {err}");
                 STATUS_ACCESS_DENIED
@@ -1516,14 +939,36 @@ where
     ) -> OperationResult<()> {
         debug!("set_end_of_file({file_name:?}, {offset}, {context:?})");
 
-        Self::try_alt_stream(context, |alt_stream| {
-            alt_stream.data.truncate(offset as usize);
+        if let Some(res) = common::try_alt_stream(context, |alt_stream| {
+            let offset = usize::try_from(common::nonnegative_offset(offset)?)
+                .map_err(|_| STATUS_INVALID_PARAMETER)?;
+            alt_stream.data.truncate(offset);
 
             Ok(())
+        }) {
+            return res;
+        }
+
+        let file = match context.stat.read() {
+            Err(_) => {
+                error!("mutex poisoned");
+                return Err(STATUS_INVALID_DEVICE_REQUEST);
+            }
+            Ok(stat) => stat.file.clone(),
+        };
+
+        // A staged write for this handle supersedes the file on the remote; drop it so the
+        // truncate below is not overwritten on flush.
+        if let Ok(mut pending) = context.pending_write.lock() {
+            pending.take();
+        }
+
+        self.remote(|remote| {
+            transfer::truncate_file(remote, &file, common::nonnegative_offset(offset)?)
         })
-        .unwrap_or({
-            debug!("cant set end of file: not implemented");
-            Ok(())
+        .map_err(|err| {
+            error!("truncate failed: {err}");
+            STATUS_INVALID_DEVICE_REQUEST
         })
     }
 
@@ -1544,8 +989,10 @@ where
     ) -> OperationResult<()> {
         debug!("set_allocation_size({file_name:?}, {alloc_size}, {context:?})");
 
-        Self::try_alt_stream(context, |alt_stream: &mut AltStream| {
-            alt_stream.data = vec![0; alloc_size as usize];
+        common::try_alt_stream(context, |alt_stream: &mut AltStream| {
+            let alloc_size = usize::try_from(common::nonnegative_offset(alloc_size)?)
+                .map_err(|_| STATUS_INVALID_PARAMETER)?;
+            alt_stream.data = vec![0; alloc_size];
 
             Ok(())
         })
@@ -1643,10 +1090,10 @@ where
         };
 
         fill_find_stream_data(&FindStreamData {
-            size: file.metadata().size as i64,
+            size: file.metadata().size.unwrap_or(0) as i64,
             name: U16CString::from_str("::$DATA").unwrap(),
         })
-        .or_else(Self::ignore_name_too_long)?;
+        .or_else(common::ignore_name_too_long)?;
 
         let alt_streams = match context.stat.read() {
             Err(_) => {
@@ -1667,7 +1114,7 @@ where
                     .unwrap_or_default(),
                 name: U16CString::from_ustr(U16Str::from_slice(&name_buf)).unwrap(),
             })
-            .or_else(Self::ignore_name_too_long)?;
+            .or_else(common::ignore_name_too_long)?;
         }
         Ok(())
     }

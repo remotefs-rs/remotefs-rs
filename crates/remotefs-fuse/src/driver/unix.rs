@@ -1,14 +1,15 @@
+#[cfg(feature = "tokio")]
+pub(crate) mod r#async;
 mod file_handle;
 mod inode;
+mod state;
 #[cfg(test)]
 mod test;
 
 use std::ffi::OsStr;
-use std::fs;
-use std::io::{Cursor, Read as _, Seek as _, Write as _};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 use fuser::{
     AccessFlags as FuserAccessFlags, BsdFileFlags, FileAttr, FileHandle as FuserFileHandle,
@@ -17,28 +18,20 @@ use fuser::{
     ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use inode::Inode;
-use libc::{c_int, mode_t};
-use nix::fcntl::OFlag;
+use libc::mode_t;
 use nix::sys::stat::SFlag;
 use nix::unistd::AccessFlags;
 use remotefs::fs::UnixPex;
-use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
+use remotefs::{File, RemoteFs, RemoteResult};
 
-pub use self::file_handle::FileHandlersDb;
-use self::file_handle::{PendingWrite, PendingWriteState};
-pub use self::inode::InodeDb;
-use super::Driver;
+use self::file_handle::PendingWrite;
+use self::state::{BLOCK_SIZE, as_file_kind, convert_file, convert_remote_filetype};
+use super::{Driver, transfer};
 use crate::MountOption;
-
-const BLOCK_SIZE: usize = 512;
-const FMODE_EXEC: c_int = 0x20;
-const ROOT_UID: u32 = 0;
 
 #[derive(Debug)]
 pub(crate) struct DriverInner<T: RemoteFs> {
-    pub(crate) database: InodeDb,
-    pub(crate) file_handlers: FileHandlersDb,
-    pub(crate) options: Vec<MountOption>,
+    pub(crate) state: state::UnixState<PendingWrite>,
     pub(crate) remote: T,
 }
 
@@ -48,9 +41,7 @@ where
 {
     pub(crate) fn new(remote: T, options: Vec<MountOption>) -> Self {
         Self {
-            database: InodeDb::load(),
-            file_handlers: FileHandlersDb::default(),
-            options,
+            state: state::UnixState::new(options),
             remote,
         }
     }
@@ -342,64 +333,6 @@ where
     }
 }
 
-/// Convert a [`remotefs::fs::FileType`] to a [`FileType`] from [`fuser`]
-fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
-    match filetype {
-        remotefs::fs::FileType::Directory => FileType::Directory,
-        remotefs::fs::FileType::File => FileType::RegularFile,
-        remotefs::fs::FileType::Symlink => FileType::Symlink,
-    }
-}
-
-/// Convert a [`File`] from [`remotefs`] to a [`FileAttr`] from [`fuser`], using the given
-/// pre-resolved `inode` number.
-fn convert_file(value: &File, inode: Inode) -> FileAttr {
-    FileAttr {
-        ino: INodeNo(inode),
-        size: value.metadata().size,
-        blocks: value.metadata().size.div_ceil(BLOCK_SIZE as u64),
-        atime: value.metadata().accessed.unwrap_or(UNIX_EPOCH),
-        mtime: value.metadata().modified.unwrap_or(UNIX_EPOCH),
-        ctime: value.metadata().created.unwrap_or(UNIX_EPOCH),
-        crtime: UNIX_EPOCH,
-        kind: convert_remote_filetype(value.metadata().file_type),
-        perm: value
-            .metadata()
-            .mode
-            .map(|mode| (u32::from(mode)) as u16)
-            .unwrap_or(0o777),
-        nlink: 0,
-        uid: value.metadata().uid.unwrap_or(0),
-        gid: value.metadata().gid.unwrap_or(0),
-        rdev: 0,
-        blksize: BLOCK_SIZE as u32,
-        flags: 0,
-    }
-}
-
-/// Convert a [`TimeOrNow`] to a [`SystemTime`]
-fn time_or_now(t: TimeOrNow) -> SystemTime {
-    match t {
-        TimeOrNow::SpecificTime(t) => t,
-        TimeOrNow::Now => SystemTime::now(),
-    }
-}
-
-/// Convert a mode to a [`FileType`] from [`fuser`]
-fn as_file_kind(mut mode: SFlag) -> Option<FileType> {
-    mode &= SFlag::S_IFMT;
-
-    if mode == SFlag::S_IFREG {
-        Some(FileType::RegularFile)
-    } else if mode == SFlag::S_IFLNK {
-        Some(FileType::Symlink)
-    } else if mode == SFlag::S_IFDIR {
-        Some(FileType::Directory)
-    } else {
-        None
-    }
-}
-
 impl<T> DriverInner<T>
 where
     T: RemoteFs,
@@ -408,7 +341,7 @@ where
     ///
     /// If the inode is not in the database, it will be fetched from the remote filesystem.
     fn get_inode_from_path(&mut self, path: &Path) -> RemoteResult<(File, FileAttr)> {
-        let inode = self.database.inode_for(path);
+        let inode = self.state.database.inode_for(path);
         let (file, attrs) = self.remote.stat(path).map(|file| {
             let attrs = convert_file(&file, inode);
             (file, attrs)
@@ -419,33 +352,11 @@ where
 
     /// Get the inode from the [`Inode`] number
     fn get_inode(&mut self, inode: Inode) -> RemoteResult<(File, FileAttr)> {
-        let path = self
-            .database
-            .get(inode)
-            .ok_or_else(|| {
-                remotefs::RemoteError::new(remotefs::RemoteErrorType::NoSuchFileOrDirectory)
-            })?
-            .to_path_buf();
+        let path = self.state.inode_path(inode).ok_or_else(|| {
+            remotefs::RemoteError::new(remotefs::RemoteErrorType::NoSuchFileOrDirectory)
+        })?;
 
         self.get_inode_from_path(&path)
-    }
-
-    /// Look up a name in a directory.
-    ///
-    /// This function is used to resolve a name of a child given the parent [`Inode`] and the name of the child file.
-    fn lookup_name(&mut self, parent: Inode, name: &OsStr) -> Option<PathBuf> {
-        let parent_path = self.database.get(parent)?;
-        let path = parent_path.join(name);
-
-        // Get the inode and save it to the database
-        self.database.inode_for(&path);
-
-        debug!(
-            "lookup_name() called with {:?} {:?} -> {:?}",
-            parent, name, path
-        );
-
-        Some(path)
     }
 
     /// Check whether the user has access to a inode.
@@ -463,185 +374,24 @@ where
             }
         };
 
-        self.check_access(&parent, request.uid(), request.gid(), access_mask)
+        self.state
+            .check_access(&parent, request.uid(), request.gid(), access_mask)
     }
 
-    /// Check whether the user has access to a file.
-    fn check_access(&self, file: &File, uid: u32, gid: u32, mut access_mask: AccessFlags) -> bool {
-        debug!(
-            "Checking access for file: {:?} {:?}; UID: {uid}; GID: {gid} access_mask: {access_mask:?}",
-            file.path(),
-            file.metadata()
-        );
-        if access_mask == AccessFlags::F_OK {
-            return true;
-        }
-
-        let file_mode = file
-            .metadata()
-            .mode
-            .map(u32::from)
-            .unwrap_or_else(|| self.default_mode()) as i32;
-
-        debug!("file mode for {}: {file_mode:o}", file.path().display());
-
-        // root is allowed to read & write anything
-        if uid == ROOT_UID {
-            debug!("Root access to file: {}", file.path().display());
-            // root only allowed to exec if one of the X bits is set
-            access_mask &= AccessFlags::X_OK;
-            let mut access_mask = access_mask.bits();
-            access_mask -= access_mask & (file_mode >> 6);
-            access_mask -= access_mask & (file_mode >> 3);
-            access_mask -= access_mask & file_mode;
-            return access_mask == 0;
-        }
-
-        let mut access_mask = access_mask.bits();
-
-        let file_uid = self
-            .uid()
-            .unwrap_or_else(|| file.metadata().uid.unwrap_or_default());
-        let file_gid = self
-            .gid()
-            .unwrap_or_else(|| file.metadata().gid.unwrap_or_default());
-
-        if uid == file_uid {
-            access_mask -= access_mask & (file_mode >> 6);
-            debug!("UID access to file: {}", file.path().display());
-        } else if gid == file_gid {
-            access_mask -= access_mask & (file_mode >> 3);
-            debug!("GID access to file: {}", file.path().display());
-        } else {
-            debug!("Other access to file: {}", file.path().display());
-            access_mask -= access_mask & file_mode;
-        }
-
-        debug!("Access mask: {access_mask}");
-
-        access_mask == 0
-    }
-
-    /// Read data from a file.
-    ///
-    /// If possible, this system will use the stream from remotefs directly,
-    /// otherwise it will use a temporary file (*sigh*).
-    /// Note that most of remotefs supports streaming, so this should be rare.
+    /// Read up to `buffer.len()` bytes of `path` at `offset`; see [`transfer::read_at`].
     fn read_remote_file(
         &mut self,
         path: &Path,
         buffer: &mut [u8],
         offset: u64,
     ) -> RemoteResult<usize> {
-        match self.remote.open(path) {
-            Ok(mut reader) => {
-                debug!("Reading file from stream: {:?} at {offset}", path);
-                if offset > 0 {
-                    // skip to offset without allocating a buffer proportional to `offset`
-                    Self::skip_bytes(&mut reader, offset).map_err(|err| {
-                        remotefs::RemoteError::new_ex(
-                            remotefs::RemoteErrorType::IoError,
-                            err.to_string(),
-                        )
-                    })?;
-                }
-
-                // read file
-                let bytes_read = reader.read(buffer).map_err(|err| {
-                    remotefs::RemoteError::new_ex(
-                        remotefs::RemoteErrorType::IoError,
-                        err.to_string(),
-                    )
-                })?;
-                debug!("Read {bytes_read} bytes from stream; closing stream");
-
-                // close file
-                self.remote.on_read(reader)?;
-
-                Ok(bytes_read)
-            }
-            Err(RemoteError {
-                kind: RemoteErrorType::UnsupportedFeature,
-                ..
-            }) => self.read_tempfile(path, buffer, offset),
-            Err(err) => Err(err),
-        }
+        transfer::read_at(&self.remote, path, buffer, offset)
     }
 
-    /// Read data from a file using a temporary file.
-    fn read_tempfile(
-        &mut self,
-        path: &Path,
-        buffer: &mut [u8],
-        offset: u64,
-    ) -> RemoteResult<usize> {
-        let Ok(tempfile) = tempfile::NamedTempFile::new() else {
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        };
-        let Ok(writer) = fs::OpenOptions::new().write(true).open(tempfile.path()) else {
-            error!("Failed to open temporary file");
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        };
-
-        // transfer to tempfile
-        self.remote.open_file(path, Box::new(writer))?;
-
-        let Ok(mut reader) = fs::File::open(tempfile.path()) else {
-            error!("Failed to open temporary file");
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        };
-
-        // skip to offset without allocating a buffer proportional to `offset`
-        if offset > 0
-            && let Err(err) = Self::skip_bytes(&mut reader, offset)
-        {
-            error!("Failed to read file: {err}");
-            return Err(remotefs::RemoteError::new(
-                remotefs::RemoteErrorType::IoError,
-            ));
-        }
-
-        // read file
-        reader.read_exact(buffer).map_err(|err| {
-            remotefs::RemoteError::new_ex(remotefs::RemoteErrorType::IoError, err.to_string())
-        })?;
-
-        if let Err(err) = tempfile.close() {
-            error!("Failed to close temporary file: {err}");
-        }
-
-        Ok(buffer.len())
-    }
-
-    /// Discard `n` bytes from `reader` without allocating a buffer proportional to `n`.
-    ///
-    /// This is used to skip to a read offset on readers that only implement [`std::io::Read`]
-    /// (not [`std::io::Seek`]), such as remote file streams. A malicious or misbehaving remote
-    /// could otherwise cause an out-of-memory abort by reporting a huge offset.
-    fn skip_bytes(reader: &mut impl std::io::Read, n: u64) -> std::io::Result<()> {
-        let skipped = std::io::copy(&mut reader.by_ref().take(n), &mut std::io::sink())?;
-        if skipped != n {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "offset is beyond the end of the file",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Write `data` at `offset` to the pending write staged for `(pid, fh)`, starting a new one
-    /// (against `file`) if this is the first write to this handle.
-    ///
-    /// The remote write is not finalized here: it stays staged until [`Self::finalize_pending_write`]
-    /// is called from `flush()`/`release()`. This lets many `write()` calls in a row share a
-    /// single remote write (a single streaming upload, or a single buffered `create_file` call),
-    /// instead of each call re-creating (and so truncating) the remote file on its own.
+    /// Write `data` at `offset` to the pending write staged for `(pid, fh)`,
+    /// starting a new one (against `file`) if this is the first write to this
+    /// handle. The remote write is finalized by [`Self::finalize_pending_write`]
+    /// from `flush()`/`release()`.
     fn write_to_handle(
         &mut self,
         pid: u32,
@@ -650,28 +400,9 @@ where
         data: &[u8],
         offset: u64,
     ) -> RemoteResult<u32> {
-        if self.file_handlers.pending_write(pid, fh).is_none() {
-            let state = match self.remote.create(file.path(), file.metadata()) {
-                Ok(stream) => PendingWriteState::Stream {
-                    stream,
-                    next_offset: 0,
-                },
-                Err(RemoteError {
-                    kind: RemoteErrorType::UnsupportedFeature,
-                    ..
-                }) => {
-                    debug!(
-                        "remote file system doesn't support streaming writes; buffering {:?} in memory",
-                        file.path()
-                    );
-                    PendingWriteState::Buffered(Vec::new())
-                }
-                Err(err) => {
-                    error!("Failed to open file for writing: {err}");
-                    return Err(err);
-                }
-            };
-            self.file_handlers.start_pending_write(
+        if self.state.file_handlers.handle_state(pid, fh).is_none() {
+            let state = transfer::start_pending_write(&self.remote, file)?;
+            self.state.file_handlers.set_handle_state(
                 pid,
                 fh,
                 PendingWrite {
@@ -682,88 +413,16 @@ where
         }
 
         let pending = self
+            .state
             .file_handlers
-            .pending_write(pid, fh)
+            .handle_state(pid, fh)
             .expect("pending write was just inserted");
-
-        match &mut pending.state {
-            PendingWriteState::Stream {
-                stream,
-                next_offset,
-            } => {
-                if *next_offset != offset {
-                    stream.seek(std::io::SeekFrom::Start(offset)).map_err(|err| {
-                        error!(
-                            "Failed to seek file: {err}. Note that not all the remote filesystems support seeking"
-                        );
-                        RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
-                    })?;
-                }
-                stream.write_all(data).map_err(|err| {
-                    error!("Failed to write file: {err}");
-                    RemoteError::new_ex(RemoteErrorType::IoError, err.to_string())
-                })?;
-                *next_offset = offset + data.len() as u64;
-                Ok(data.len() as u32)
-            }
-            PendingWriteState::Buffered(buffer) => {
-                let end = offset as usize + data.len();
-                if buffer.len() < end {
-                    buffer.resize(end, 0);
-                }
-                buffer[offset as usize..end].copy_from_slice(data);
-                Ok(data.len() as u32)
-            }
-        }
+        transfer::write_to_pending(&mut pending.state, data, offset)
     }
 
     /// Finalize a pending write, actually persisting it to the remote filesystem.
     fn finalize_pending_write(&mut self, pending: PendingWrite) -> RemoteResult<()> {
-        match pending.state {
-            PendingWriteState::Stream { stream, .. } => self.remote.on_written(stream),
-            PendingWriteState::Buffered(buffer) => {
-                debug!(
-                    "uploading {} buffered bytes to {:?}",
-                    buffer.len(),
-                    pending.file.path()
-                );
-                self.remote
-                    .create_file(
-                        pending.file.path(),
-                        pending.file.metadata(),
-                        Box::new(Cursor::new(buffer)),
-                    )
-                    .map(|_| ())
-            }
-        }
-    }
-
-    /// Get the specified uid from the mount options.
-    fn uid(&self) -> Option<u32> {
-        self.options.iter().find_map(|opt| match opt {
-            MountOption::Uid(uid) => Some(*uid),
-            _ => None,
-        })
-    }
-
-    /// Get the specified gid from the mount options.
-    fn gid(&self) -> Option<u32> {
-        self.options.iter().find_map(|opt| match opt {
-            MountOption::Gid(gid) => Some(*gid),
-            _ => None,
-        })
-    }
-
-    /// Get the specified default mode from the mount options.
-    /// If not set, the default is 0755.
-    fn default_mode(&self) -> u32 {
-        self.options
-            .iter()
-            .find_map(|opt| match opt {
-                MountOption::DefaultMode(mode) => Some(*mode),
-                _ => None,
-            })
-            .unwrap_or(0o755)
+        transfer::finalize_pending_write(&self.remote, &pending.file, pending.state)
     }
 }
 
@@ -783,12 +442,12 @@ where
 
     #[cfg(test)]
     fn lookup_name(&self, parent: INodeNo, name: &OsStr) -> Option<PathBuf> {
-        self.with_inner(|inner| inner.lookup_name(parent.0, name))
+        self.with_inner(|inner| inner.state.lookup_name(parent.0, name))
     }
 
     #[cfg(test)]
     fn inode_for(&self, path: &Path) -> Inode {
-        self.with_inner(|inner| inner.database.inode_for(path))
+        self.with_inner(|inner| inner.state.database.inode_for(path))
     }
 
     #[cfg(test)]
@@ -798,7 +457,7 @@ where
 
     #[cfg(test)]
     fn check_access(&self, file: &File, uid: u32, gid: u32, access_mask: AccessFlags) -> bool {
-        self.with_inner(|inner| inner.check_access(file, uid, gid, access_mask))
+        self.with_inner(|inner| inner.state.check_access(file, uid, gid, access_mask))
     }
 
     #[cfg(test)]
@@ -817,8 +476,9 @@ where
     fn finalize_write(&self, pid: u32, fh: u64) -> RemoteResult<()> {
         self.with_inner(|inner| {
             let pending = inner
+                .state
                 .file_handlers
-                .take_pending_write(pid, fh)
+                .take_handle_state(pid, fh)
                 .expect("no pending write to finalize");
             inner.finalize_pending_write(pending)
         })
@@ -826,12 +486,12 @@ where
 
     #[cfg(test)]
     fn uid(&self) -> Option<u32> {
-        self.with_inner(|inner| inner.uid())
+        self.with_inner(|inner| inner.state.uid())
     }
 
     #[cfg(test)]
     fn gid(&self) -> Option<u32> {
-        self.with_inner(|inner| inner.gid())
+        self.with_inner(|inner| inner.state.gid())
     }
 }
 
@@ -866,7 +526,7 @@ where
     /// Look up a directory entry by name and get its attributes.
     fn lookup(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         debug!("lookup() called with {:?} {:?}", parent, name);
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -884,7 +544,10 @@ where
             Ok(res) => res,
         };
 
-        if !self.check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK) {
+        if !self
+            .state
+            .check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK)
+        {
             error!("No access to file: {path:?}");
             reply.error(fuser::Errno::EACCES);
             return;
@@ -902,7 +565,7 @@ where
     /// inodes will receive a forget message.
     fn forget(&mut self, _req: &Request, ino: INodeNo, _nlookup: u64) {
         debug!("forget() called with {ino}");
-        self.database.forget(ino.0);
+        self.state.database.forget(ino.0);
     }
 
     /// Get file attributes.
@@ -953,7 +616,7 @@ where
             "setattr() called with mode: {:?}, uid: {:?}, gid: {:?}, size: {:?}, atime: {:?}, mtime: {:?}, ctime: {:?}",
             mode, uid, gid, size, atime, mtime, ctime
         );
-        let (mut file, _) = match self.get_inode(ino.0) {
+        let (file, _) = match self.get_inode(ino.0) {
             Ok(attrs) => attrs,
             Err(err) => {
                 error!("Failed to get file attributes: {err}");
@@ -962,42 +625,38 @@ where
             }
         };
 
-        if !self.check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK) {
+        if !self
+            .state
+            .check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK)
+        {
             error!("No access to file: {}", file.path().display());
             reply.error(fuser::Errno::EACCES);
             return;
         }
 
-        if let Some(mode) = mode {
-            file.metadata.mode = Some(mode.into());
-        }
-        if let Some(uid) = uid {
-            file.metadata.uid = Some(uid);
-        }
-        if let Some(gid) = gid {
-            file.metadata.gid = Some(gid);
-        }
-        if let Some(size) = size {
-            file.metadata.size = size;
-        }
-        if let Some(atime) = atime {
-            file.metadata.accessed = Some(time_or_now(atime));
-        }
-        if let Some(mtime) = mtime {
-            file.metadata.modified = Some(time_or_now(mtime));
-        }
-        if let Some(ctime) = ctime {
-            file.metadata.created = Some(ctime);
+        if let Some(changes) = state::setattr_changes(mode, uid, gid, atime, mtime)
+            && let Err(err) = self.remote.set_metadata(file.path(), &changes)
+        {
+            error!("Failed to set file attributes: {err}");
+            reply.error(fuser::Errno::EIO);
+            return;
         }
 
-        // set attributes
-        match self.remote.setstat(file.path(), file.metadata().clone()) {
-            Ok(_) => {
-                let attrs = convert_file(&file, ino.0);
-                reply.attr(&Duration::new(0, 0), &attrs);
-            }
+        // `SetMetadata` carries no size: a size change is a truncate (or extend),
+        // done by rewriting the file.
+        if let Some(size) = size
+            && let Err(err) = transfer::truncate_file(&self.remote, &file, size)
+        {
+            error!("Failed to truncate file: {err}");
+            reply.error(fuser::Errno::EIO);
+            return;
+        }
+
+        // Re-stat so the reply reflects what the remote actually stored.
+        match self.get_inode_from_path(file.path()) {
+            Ok((_, attrs)) => reply.attr(&Duration::new(0, 0), &attrs),
             Err(err) => {
-                error!("Failed to set file attributes: {err}");
+                error!("Failed to get file attributes: {err}");
                 reply.error(fuser::Errno::EIO);
             }
         }
@@ -1015,24 +674,16 @@ where
             }
         };
 
-        // symlink targets are always short paths; refuse to allocate a buffer sized from a
-        // remote-reported length that couldn't possibly be a real symlink target, which could
-        // otherwise let a misbehaving remote trigger a huge allocation
-        let size = file.metadata().size;
-        if size > libc::PATH_MAX as u64 {
-            error!("symlink target size {size} exceeds PATH_MAX");
-            reply.error(fuser::Errno::EIO);
-            return;
+        match file.metadata().symlink.as_deref() {
+            Some(target) => reply.data(target.as_os_str().as_bytes()),
+            None => {
+                error!(
+                    "{} is not a symlink or has no target",
+                    file.path().display()
+                );
+                reply.error(fuser::Errno::EINVAL);
+            }
         }
-
-        let mut buffer = vec![0; size as usize];
-        if let Err(err) = self.read_remote_file(file.path(), &mut buffer, 0) {
-            error!("Failed to read file: {err}");
-            reply.error(fuser::Errno::EIO);
-            return;
-        }
-
-        reply.data(&buffer);
     }
 
     /// Create file node.
@@ -1073,7 +724,7 @@ where
             return;
         }
 
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -1093,19 +744,12 @@ where
         let res = match as_file_kind(mode) {
             Some(FileType::Directory) => self
                 .remote
-                .create_dir(&path, UnixPex::from(mode.bits() as u32)),
-            Some(FileType::RegularFile) => {
-                let metadata = remotefs::fs::Metadata {
-                    mode: Some(UnixPex::from(mode.bits() as u32)),
-                    gid: Some(req.gid()),
-                    uid: Some(req.uid()),
-                    ..Default::default()
-                };
-                let reader = Cursor::new(Vec::new());
-                self.remote
-                    .create_file(&path, &metadata, Box::new(reader))
-                    .map(|_| ())
-            }
+                .create_dir(&path, Some(UnixPex::from(mode.bits() as u32))),
+            Some(FileType::RegularFile) => transfer::create_empty_file(
+                &self.remote,
+                &path,
+                Some(UnixPex::from(mode.bits() as u32)),
+            ),
             Some(_) | None => {
                 warn!(
                     "mknod() implementation is incomplete. Only supports regular files and directories. Got {:o}",
@@ -1143,7 +787,7 @@ where
         reply: ReplyEntry,
     ) {
         debug!("mkdir() called with {:?} {:?} {:o}", parent, name, mode);
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -1160,7 +804,7 @@ where
         }
 
         let mode = UnixPex::from(mode);
-        if let Err(err) = self.remote.create_dir(&path, mode) {
+        if let Err(err) = self.remote.create_dir(&path, Some(mode)) {
             error!("Failed to create directory: {err}");
             reply.error(fuser::Errno::EIO);
             return;
@@ -1179,7 +823,7 @@ where
     /// Remove a file
     fn unlink(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         debug!("unlink() called with {:?} {:?}", parent, name);
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -1207,7 +851,7 @@ where
     /// Remove a directory
     fn rmdir(&mut self, req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         debug!("rmdir() called with {:?} {:?}", parent, name);
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -1242,7 +886,7 @@ where
         reply: ReplyEntry,
     ) {
         debug!("symlink() called with {:?} {:?} {:?}", parent, name, link);
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -1301,7 +945,7 @@ where
             return;
         }
 
-        let src = match self.lookup_name(parent.0, name) {
+        let src = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {name:?}");
@@ -1317,7 +961,7 @@ where
             return;
         }
 
-        let dest = match self.lookup_name(newparent.0, newname) {
+        let dest = match self.state.lookup_name(newparent.0, newname) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup file: {newname:?}");
@@ -1326,7 +970,7 @@ where
             }
         };
 
-        if let Err(err) = self.remote.mov(&src, &dest) {
+        if let Err(err) = self.remote.rename(&src, &dest) {
             error!("Failed to move file: {err}");
             reply.error(fuser::Errno::EIO);
             return;
@@ -1359,28 +1003,11 @@ where
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         debug!("open() called for {ino}");
-        let flags = OFlag::from_bits_truncate(flags.0);
-        let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
-            OFlag::O_RDONLY => {
-                // Behavior is undefined, but most filesystems return EACCES
-                if flags.intersects(OFlag::O_TRUNC) {
-                    error!("EACCESS due to O_TRUNC flag");
-                    reply.error(fuser::Errno::EACCES);
-                    return;
-                }
-                if flags.intersects(OFlag::from_bits_retain(FMODE_EXEC)) {
-                    // Open is from internal exec syscall
-                    (AccessFlags::X_OK, true, false)
-                } else {
-                    (AccessFlags::R_OK, true, false)
-                }
-            }
-            OFlag::O_WRONLY => (AccessFlags::W_OK, false, true),
-            OFlag::O_RDWR => (AccessFlags::R_OK | AccessFlags::W_OK, true, true),
-            // Exactly one access mode flag must be specified
-            _ => {
+        let mode = match state::parse_open_flags(flags.0) {
+            Ok(mode) => mode,
+            Err(errno) => {
                 error!("Invalid access mode flags: {flags:?}");
-                reply.error(fuser::Errno::EINVAL);
+                reply.error(errno);
                 return;
             }
         };
@@ -1394,14 +1021,20 @@ where
             }
         };
 
-        if !self.check_access(&file, req.uid(), req.gid(), access_mask) {
+        if !self
+            .state
+            .check_access(&file, req.uid(), req.gid(), mode.access_mask)
+        {
             error!("No access to file: {}", file.path().display());
             reply.error(fuser::Errno::EACCES);
             return;
         }
 
         // Set file handle and reply
-        let fh = self.file_handlers.open(req.pid(), ino.0, read, write);
+        let fh = self
+            .state
+            .file_handlers
+            .open(req.pid(), ino.0, mode.read, mode.write);
         reply.opened(FuserFileHandle(fh), FopenFlags::empty());
     }
 
@@ -1430,6 +1063,7 @@ where
         debug!("read() called for {ino} {size} bytes at {offset}");
         // check access
         if !self
+            .state
             .file_handlers
             .get(req.pid(), fh.0)
             .map(|handler| handler.read)
@@ -1448,7 +1082,7 @@ where
             }
         };
 
-        let read_size = (size as u64).min(file.metadata().size.saturating_sub(offset));
+        let read_size = (size as u64).min(file.metadata().size.unwrap_or(0).saturating_sub(offset));
         debug!("Reading {read_size} bytes from at {offset}");
         let mut buffer = vec![0; read_size as usize];
         if let Err(err) = self.read_remote_file(file.path(), &mut buffer, offset) {
@@ -1485,6 +1119,7 @@ where
         debug!("write() called for {ino} {} bytes at {offset}", data.len());
         // check access
         if !self
+            .state
             .file_handlers
             .get(req.pid(), fh.0)
             .map(|handler| handler.write)
@@ -1537,7 +1172,7 @@ where
         debug!("flush() called for {ino}");
 
         // get fh
-        if self.file_handlers.get(req.pid(), fh.0).is_none() {
+        if self.state.file_handlers.get(req.pid(), fh.0).is_none() {
             error!("no file handler found for {fh} and pid {}", req.pid());
             reply.error(fuser::Errno::ENOENT);
             return;
@@ -1546,7 +1181,7 @@ where
         // persist any write staged by write() and surface errors to the caller's close();
         // note this can leave the handle able to stage a new (truncating) write if more writes
         // follow this flush on the same, dup'd, file descriptor
-        if let Some(pending) = self.file_handlers.take_pending_write(req.pid(), fh.0)
+        if let Some(pending) = self.state.file_handlers.take_handle_state(req.pid(), fh.0)
             && let Err(err) = self.finalize_pending_write(pending)
         {
             error!("Failed to flush write: {err}");
@@ -1580,7 +1215,7 @@ where
         reply: ReplyEmpty,
     ) {
         // get fh
-        if self.file_handlers.get(req.pid(), fh.0).is_none() {
+        if self.state.file_handlers.get(req.pid(), fh.0).is_none() {
             error!("no file handler found for {fh} and pid {}", req.pid());
             reply.error(fuser::Errno::ENOENT);
             return;
@@ -1589,14 +1224,14 @@ where
         // defensively finalize any write that flush() never got a chance to (per fuser's docs,
         // flush is not guaranteed to be called); errors here can't be reported back to the
         // process that called close(), so just log them
-        if let Some(pending) = self.file_handlers.take_pending_write(req.pid(), fh.0)
+        if let Some(pending) = self.state.file_handlers.take_handle_state(req.pid(), fh.0)
             && let Err(err) = self.finalize_pending_write(pending)
         {
             error!("Failed to finalize write on release: {err}");
         }
 
         // remove fh and ok
-        self.file_handlers.close(req.pid(), fh.0);
+        self.state.file_handlers.close(req.pid(), fh.0);
         reply.ok();
     }
 
@@ -1623,23 +1258,11 @@ where
     /// between opendir and releasedir.
     fn opendir(&mut self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         debug!("opendir() called on {:?}", ino);
-        let flags = OFlag::from_bits_truncate(flags.0);
-        let (access_mask, read, write) = match flags & OFlag::O_ACCMODE {
-            OFlag::O_RDONLY => {
-                // Behavior is undefined, but most filesystems return EACCES
-                if flags.intersects(OFlag::O_TRUNC) {
-                    error!("EACCES due to O_TRUNC flag");
-                    reply.error(fuser::Errno::EACCES);
-                    return;
-                }
-                (AccessFlags::R_OK, true, false)
-            }
-            OFlag::O_WRONLY => (AccessFlags::W_OK, false, true),
-            OFlag::O_RDWR => (AccessFlags::R_OK | AccessFlags::W_OK, true, true),
-            // Exactly one access mode flag must be specified
-            _ => {
+        let mode = match state::parse_opendir_flags(flags.0) {
+            Ok(mode) => mode,
+            Err(errno) => {
                 error!("Invalid flags: {flags:?}");
-                reply.error(fuser::Errno::EINVAL);
+                reply.error(errno);
                 return;
             }
         };
@@ -1653,8 +1276,14 @@ where
             }
         };
 
-        if self.check_access(&file, req.uid(), req.gid(), access_mask) {
-            let fh = self.file_handlers.open(req.pid(), ino.0, read, write);
+        if self
+            .state
+            .check_access(&file, req.uid(), req.gid(), mode.access_mask)
+        {
+            let fh = self
+                .state
+                .file_handlers
+                .open(req.pid(), ino.0, mode.read, mode.write);
             reply.opened(FuserFileHandle(fh), FopenFlags::empty());
         } else {
             error!("No access to file: {ino}");
@@ -1677,7 +1306,7 @@ where
     ) {
         debug!("readdir() called on {:?}", ino);
         // check fh with read permissions
-        match self.file_handlers.get(req.pid(), fh.0) {
+        match self.state.file_handlers.get(req.pid(), fh.0) {
             Some(handler) if !handler.read => {
                 error!("No read permission for fh {fh} and pid {}", req.pid());
                 reply.error(fuser::Errno::EACCES);
@@ -1713,7 +1342,7 @@ where
         };
 
         for (index, entry) in entries.into_iter().skip(offset as usize).enumerate() {
-            let inode = self.database.inode_for(entry.path());
+            let inode = self.state.database.inode_for(entry.path());
             debug!("Reading entry {inode} {index} {}", entry.path().display());
             let name = match entry.path().file_name() {
                 Some(name) => OsStr::from_bytes(name.as_bytes()),
@@ -1751,7 +1380,7 @@ where
         reply: ReplyEmpty,
     ) {
         // get fh
-        if self.file_handlers.get(req.pid(), fh.0).is_none() {
+        if self.state.file_handlers.get(req.pid(), fh.0).is_none() {
             error!(
                 "Failed to get file handler for {fh} and process {}",
                 req.pid()
@@ -1761,7 +1390,7 @@ where
         }
 
         // remove fh and ok
-        self.file_handlers.close(req.pid(), fh.0);
+        self.state.file_handlers.close(req.pid(), fh.0);
         reply.ok();
     }
 
@@ -1779,7 +1408,7 @@ where
     ) {
         debug!("fsyncdir() called for {ino}");
         // get fh
-        if self.file_handlers.get(req.pid(), fh.0).is_none() {
+        if self.state.file_handlers.get(req.pid(), fh.0).is_none() {
             error!(
                 "Failed to get file handler for {fh} and process {}",
                 req.pid()
@@ -1807,14 +1436,14 @@ where
         debug!("Getting filesystem statistics for {path:?}");
 
         // recursive directory iteration
-        fn iter_dir<T>(remote: &mut T, p: &Path, stats: &mut FsStats) -> RemoteResult<()>
+        fn iter_dir<T>(remote: &T, p: &Path, stats: &mut FsStats) -> RemoteResult<()>
         where
             T: RemoteFs,
         {
             let entries = remote.list_dir(p)?;
             for entry in entries {
                 stats.files += 1;
-                stats.size += entry.metadata().size;
+                stats.size += entry.metadata().size.unwrap_or(0);
                 if entry.metadata().file_type == remotefs::fs::FileType::Directory {
                     iter_dir(remote, entry.path(), stats)?;
                 }
@@ -1823,7 +1452,7 @@ where
         }
 
         let mut stats = FsStats { files: 0, size: 0 };
-        if let Err(err) = iter_dir(&mut self.remote, &path, &mut stats) {
+        if let Err(err) = iter_dir(&self.remote, &path, &mut stats) {
             error!("Failed to get filesystem statistics: {err}");
             reply.error(fuser::Errno::EIO);
             return;
@@ -1910,7 +1539,7 @@ where
             }
         };
 
-        if self.check_access(
+        if self.state.check_access(
             &file,
             req.uid(),
             req.gid(),
@@ -1949,20 +1578,16 @@ where
     ) {
         debug!("create() called with {:?} {:?} {:o}", parent, name, mode);
 
-        let flags = OFlag::from_bits_truncate(flags);
-        let (read, write) = match flags & OFlag::O_ACCMODE {
-            OFlag::O_RDONLY => (true, false),
-            OFlag::O_WRONLY => (false, true),
-            OFlag::O_RDWR => (true, true),
-            // Exactly one access mode flag must be specified
-            _ => {
+        let (read, write) = match state::parse_create_flags(flags) {
+            Ok(mode) => mode,
+            Err(errno) => {
                 error!("Invalid access mode flag: {flags:?}");
-                reply.error(fuser::Errno::EINVAL);
+                reply.error(errno);
                 return;
             }
         };
 
-        let path = match self.lookup_name(parent.0, name) {
+        let path = match self.state.lookup_name(parent.0, name) {
             Some(path) => path,
             None => {
                 error!("Failed to lookup name {name:?}");
@@ -1971,20 +1596,15 @@ where
             }
         };
 
-        let metadata = remotefs::fs::Metadata {
-            mode: Some(mode.into()),
-            gid: Some(req.gid()),
-            uid: Some(req.uid()),
-            ..Default::default()
-        };
-        let reader = Cursor::new(Vec::new());
-        if let Err(err) = self.remote.create_file(&path, &metadata, Box::new(reader)) {
+        if let Err(err) =
+            transfer::create_empty_file(&self.remote, &path, Some(UnixPex::from(mode)))
+        {
             error!("Failed to create file: {err}");
             reply.error(fuser::Errno::EIO);
             return;
         }
 
-        let inode = self.database.inode_for(&path);
+        let inode = self.state.database.inode_for(&path);
 
         // return created
         match self.get_inode(inode) {
@@ -1993,7 +1613,7 @@ where
                 reply.error(fuser::Errno::ENOENT);
             }
             Ok((_, attrs)) => {
-                let fh = self.file_handlers.open(req.pid(), inode, read, write);
+                let fh = self.state.file_handlers.open(req.pid(), inode, read, write);
                 reply.created(
                     &Duration::new(0, 0),
                     &attrs,

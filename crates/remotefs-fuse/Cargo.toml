@@ -21,12 +21,14 @@ default = ["libfuse"]
 integration-tests = []
 libfuse = ["fuser/libfuse"]
 no-log = ["log/max_level_off"]
+tokio = ["dep:futures-util", "dep:tokio", "remotefs/async"]
 
 [dependencies]
+futures-util = { workspace = true, features = ["io", "std"], optional = true }
 log = { workspace = true }
 remotefs = { workspace = true }
 seahash = { workspace = true }
-tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 fuser = { workspace = true }
@@ -42,10 +44,14 @@ widestring = { workspace = true }
 winapi = { workspace = true }
 
 [dev-dependencies]
+async-trait = { workspace = true }
 env_logger = { workspace = true }
 pretty_assertions = { workspace = true }
+remotefs = { workspace = true, features = ["tokio"] }
 remotefs-memory = { workspace = true }
 serial_test = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "time"] }
 
 [target.'cfg(unix)'.dev-dependencies]
 nix = { workspace = true, features = ["user"] }
@@ -55,4 +61,5 @@ name = "remotefs_fuse"
 path = "src/lib.rs"
 
 [package.metadata.docs.rs]
+features = ["tokio"]
 rustdoc-args = ["--cfg", "docsrs"]

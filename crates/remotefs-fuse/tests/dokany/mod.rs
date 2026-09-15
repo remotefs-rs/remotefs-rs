@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use remotefs_fuse::{Mount, Unmount};
+use remotefs_fuse::{Mount, MountOption, Unmount};
 use serial_test::serial;
 
 use crate::driver::mounted_file_path;
@@ -107,6 +107,63 @@ fn test_should_select_unused_drive() {
         !is_drive_mounted(&drive),
         "drive is already in use: {drive:?}"
     );
+}
+
+#[cfg(feature = "tokio")]
+async fn with_mounted_async_drive<F, Fut>(f: F)
+where
+    F: FnOnce(PathBuf) -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    use remotefs::RemoteFs;
+    use remotefs::adapters::r#async::Unblock;
+    use remotefs_fuse::AsyncMount;
+
+    let _ = env_logger::try_init();
+    let mnt = next_driver();
+    let mut remote = crate::driver::setup_driver();
+    remote.disconnect().expect("disconnect");
+    let mut mount = AsyncMount::mount(Unblock::new(remote), &mnt, &[MountOption::RW])
+        .await
+        .expect("failed to mount");
+    let unmount = mount.unmounter();
+    let run = tokio::spawn(mount.run());
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !is_drive_mounted(&mnt) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        is_drive_mounted(&mnt),
+        "timed out waiting for filesystem to mount"
+    );
+
+    f(mnt.clone()).await;
+
+    unmount.unmount().await.expect("Failed to unmount");
+    run.await
+        .expect("event loop task panicked")
+        .expect("failed to run filesystem event loop");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+}
+
+#[cfg(feature = "tokio")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn test_should_mount_async_fs_and_round_trip_a_file() {
+    with_mounted_async_drive(|mnt| async move {
+        let mounted_file = path_to_drive(&mnt, mounted_file_path());
+        assert!(mounted_file.exists());
+        let file_path = path_to_drive(&mnt, Path::new("async.txt"));
+        tokio::fs::write(&file_path, "Hello, async world!")
+            .await
+            .expect("write");
+        assert_eq!(
+            tokio::fs::read_to_string(&file_path).await.expect("read"),
+            "Hello, async world!"
+        );
+    })
+    .await;
 }
 
 fn path_to_drive(mnt: &Path, path: &Path) -> PathBuf {

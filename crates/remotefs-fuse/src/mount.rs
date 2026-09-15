@@ -1,9 +1,15 @@
 mod option;
 
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+mod r#async;
+
 use std::path::Path;
 
 use remotefs::RemoteFs;
 
+#[cfg(feature = "tokio")]
+pub use self::r#async::{AsyncMount, AsyncUnmount};
 pub use self::option::MountOption;
 use crate::driver::Driver;
 
@@ -116,9 +122,9 @@ where
 #[derive(Debug)]
 pub struct Unmount {
     #[cfg(unix)]
-    umount: fuser::SessionUnmounter,
+    pub(super) umount: fuser::SessionUnmounter,
     #[cfg(windows)]
-    mountpoint: widestring::U16CString,
+    pub(super) mountpoint: widestring::U16CString,
 }
 
 impl Unmount {

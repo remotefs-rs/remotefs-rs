@@ -1,7 +1,6 @@
 //! Google cloud storage (GCS) CLI commands.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Context;
 use clap::Args;
@@ -29,16 +28,8 @@ impl TryFrom<GcsArgs> for GoogleCloudStorageFs {
     type Error = anyhow::Error;
 
     fn try_from(args: GcsArgs) -> Result<Self, Self::Error> {
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .expect("Unable to create tokio runtime"),
-        );
-
         let fs = match args.service_account_key {
-            None => GoogleCloudStorageFs::new(args.bucket, &rt),
+            None => GoogleCloudStorageFs::new(args.bucket),
             Some(path) => {
                 let raw = std::fs::read_to_string(&path).with_context(|| {
                     format!(
@@ -52,20 +43,18 @@ impl TryFrom<GcsArgs> for GoogleCloudStorageFs {
                         path = path.display()
                     )
                 })?;
-                let credentials = {
-                    let _guard = rt.enter();
-                    service_account::Builder::new(key).build()
-                }
-                .with_context(|| {
-                    format!(
-                        "Invalid GCS service-account credentials in '{path}'",
-                        path = path.display()
-                    )
-                })?;
+                let credentials =
+                    service_account::Builder::new(key)
+                        .build()
+                        .with_context(|| {
+                            format!(
+                                "Invalid GCS service-account credentials in '{path}'",
+                                path = path.display()
+                            )
+                        })?;
                 GoogleCloudStorageFs::with_credentials(
                     args.bucket,
                     GoogleCloudStorageCredentials::custom(credentials),
-                    &rt,
                 )
             }
         };

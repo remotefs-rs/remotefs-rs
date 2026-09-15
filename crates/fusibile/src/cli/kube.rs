@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use clap::Args;
 use remotefs_kube::{Config, KubeMultiPodFs};
 
@@ -19,14 +17,6 @@ impl From<KubeArgs> for KubeMultiPodFs {
         let mut config = Config::new(args.cluster_url.parse().expect("Invalid cluster URL"));
         config.default_namespace = args.namespace;
 
-        let rt = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .worker_threads(1)
-                .enable_all()
-                .build()
-                .expect("Unable to create tokio runtime"),
-        );
-
-        KubeMultiPodFs::new(&rt).config(config)
+        KubeMultiPodFs::new().config(config)
     }
 }

@@ -29,15 +29,17 @@ impl std::fmt::Debug for WebdavArgs {
     }
 }
 
-impl From<WebdavArgs> for WebDAVFs {
-    fn from(args: WebdavArgs) -> Self {
+impl TryFrom<WebdavArgs> for WebDAVFs {
+    type Error = anyhow::Error;
+
+    fn try_from(args: WebdavArgs) -> Result<Self, Self::Error> {
         let auth = match (&args.username, &args.password, &args.bearer_token) {
             (Some(username), Some(password), None) => Auth::basic(username, password),
             (None, None, Some(token)) => Auth::bearer(token),
             _ => Auth::None,
         };
 
-        WebDAVFs::new(&args.url, auth)
+        WebDAVFs::new(&args.url, auth).map_err(anyhow::Error::from)
     }
 }
 

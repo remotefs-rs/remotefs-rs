@@ -52,6 +52,7 @@
 //! | name                | description                                              | default |
 //! |----------------------|----------------------------------------------------------|---------|
 //! | `libfuse`           | Link against the system `libfuse3` (Unix only). See below. | ✅       |
+//! | `tokio`             | Enable [`AsyncMount`] and [`AsyncUnmount`] to mount a `remotefs::AsyncRemoteFs` with a native async driver on a Tokio runtime. |         |
 //! | `no-log`            | Disable logging. By default, this library logs via the `log` crate. |         |
 //! | `integration-tests` | Enable tests that mount a real filesystem; only meant for this crate's own test suite. |         |
 //!
@@ -102,6 +103,34 @@
 //!
 //! > To mount on a Windows system **specify a drive letter** (e.g. `Z`) instead of a path.
 //!
+//! ## Mounting an async client
+//!
+//! With the `tokio` feature, any `remotefs::AsyncRemoteFs` client can be mounted
+//! through [`AsyncMount`]. The driver awaits the remote natively: on Unix each
+//! FUSE request is a task on your runtime; on Windows each Dokany callback
+//! awaits inside one `block_on`. [`AsyncMount::mount`] connects the client and
+//! [`AsyncMount::run`] disconnects it after the unmount.
+//!
+//! ```rust,no_run,ignore
+//! use remotefs_fuse::AsyncMount;
+//!
+//! #[tokio::main]
+//! async fn main() -> std::io::Result<()> {
+//!     let remote = MyAsyncRemoteFileSystem::new();
+//!     let mut mount = AsyncMount::mount(
+//!         remote,
+//!         std::path::Path::new("/mnt/remote"),
+//!         &[],
+//!     )
+//!     .await?;
+//!     let unmount = mount.unmounter();
+//!     let run = tokio::spawn(mount.run());
+//!     tokio::signal::ctrl_c().await?;
+//!     unmount.unmount().await?;
+//!     run.await.expect("event loop panicked")
+//! }
+//! ```
+//!
 //! ## Project stability
 //!
 //! Please consider this is an early-stage project and I haven't heavily tested it, in particular on Windows systems.
@@ -123,4 +152,7 @@ extern crate log;
 mod driver;
 mod mount;
 
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+pub use self::mount::{AsyncMount, AsyncUnmount};
 pub use self::mount::{Mount, MountOption, Unmount};

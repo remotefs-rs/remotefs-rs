@@ -1,5 +1,5 @@
 use clap::Args;
-use remotefs_ftp::FtpFs;
+use remotefs_ftp::TokioFtpFs;
 
 /// Mount an FTP server filesystem
 #[derive(Args)]
@@ -37,9 +37,9 @@ impl std::fmt::Debug for FtpArgs {
     }
 }
 
-impl From<FtpArgs> for FtpFs {
+impl From<FtpArgs> for TokioFtpFs {
     fn from(args: FtpArgs) -> Self {
-        let mut ftp = FtpFs::new(args.hostname, args.port).username(args.username);
+        let mut ftp = TokioFtpFs::new(args.hostname, args.port).username(args.username);
 
         if let Some(password) = args.password {
             ftp = ftp.password(password);

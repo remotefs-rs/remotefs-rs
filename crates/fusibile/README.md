@@ -86,7 +86,8 @@ cargo install fusibile
 protocol
 
 - `aws-s3`
-- `ftp`
+- `ftp`: FTP and FTPS through the Tokio `remotefs-ftp` client (FTPS uses native-tls, vendored on
+  Linux and macOS)
 - `gcs`
 - `kube`
 - `libfuse`: link against the system `libfuse3` on Unix; see the
@@ -102,6 +103,11 @@ protocol
 
 All the features except `smb-vendored` are enabled by default; so if you want to build it with
 only certain features, pass the `--no-default-features` option.
+
+`fusibile` is a Tokio application: every backend implements `remotefs`'s `AsyncRemoteFs` contract
+and is mounted with `remotefs-fuse`'s `AsyncMount`. The in-memory and SMB clients are adapted with
+`remotefs::adapters::r#async::Unblock`. Ctrl+C, and SIGTERM on Linux and macOS, unmounts and exits
+cleanly.
 
 ## Usage
 

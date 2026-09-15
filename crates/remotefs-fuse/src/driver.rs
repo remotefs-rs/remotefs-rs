@@ -5,7 +5,11 @@ mod unix;
 #[cfg_attr(docsrs, doc(cfg(windows)))]
 mod windows;
 
+mod transfer;
+
 use remotefs::RemoteFs;
+#[cfg(all(unix, feature = "tokio"))]
+pub(crate) use unix::r#async::AsyncDriver;
 
 use crate::MountOption;
 
@@ -24,8 +28,10 @@ pub struct Driver<T: RemoteFs> {
     #[cfg(windows)]
     pub(crate) options: Vec<MountOption>,
     #[cfg(windows)]
-    /// [`RemoteFs`] instance usable as `Sync` in immutable references.
-    remote: std::sync::Arc<std::sync::Mutex<T>>,
+    /// [`RemoteFs`] instance shared by the Dokany worker threads. Operations
+    /// take `&self` and run under the read lock; `connect` / `disconnect` take
+    /// the write lock.
+    remote: std::sync::RwLock<T>,
     #[cfg(windows)]
     /// [`windows::DirEntry`] foor directory
     file_handlers:
@@ -51,7 +57,7 @@ where
             #[cfg(windows)]
             options,
             #[cfg(windows)]
-            remote: std::sync::Arc::new(std::sync::Mutex::new(remote)),
+            remote: std::sync::RwLock::new(remote),
             #[cfg(windows)]
             file_handlers: dashmap::DashMap::new(),
         }
@@ -68,6 +74,6 @@ where
 
     #[cfg(unix)]
     pub(crate) fn options(&self) -> Vec<MountOption> {
-        self.with_inner(|inner| inner.options.clone())
+        self.with_inner(|inner| inner.state.options.clone())
     }
 }

@@ -31,13 +31,12 @@ webdav = ["dep:remotefs-webdav"]
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["color", "derive", "env", "help", "std", "suggestions", "usage"] }
-ctrlc = { workspace = true }
 dirs = { workspace = true }
 env_logger = { workspace = true }
 log = { workspace = true }
-remotefs = { workspace = true }
+remotefs = { workspace = true, features = ["async", "tokio"] }
 remotefs-aws-s3 = { workspace = true, optional = true }
-remotefs-fuse = { workspace = true }
+remotefs-fuse = { workspace = true, features = ["tokio"] }
 remotefs-gcs = { workspace = true, optional = true }
 remotefs-kube = { workspace = true, optional = true }
 remotefs-memory = { workspace = true }
@@ -45,15 +44,14 @@ remotefs-smb = { workspace = true, optional = true, features = ["find", "pavao"]
 remotefs-ssh = { workspace = true, optional = true, features = ["find", "russh"] }
 remotefs-webdav = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "signal"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = ["user"] }
-remotefs-ftp = { workspace = true, features = ["native-tls", "native-tls-vendored"], optional = true }
+remotefs-ftp = { workspace = true, features = ["tokio-native-tls-vendored"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-remotefs-ftp = { workspace = true, features = ["native-tls"], optional = true }
+remotefs-ftp = { workspace = true, features = ["tokio-native-tls"], optional = true }
 
 [[bin]]
 name = "fusibile"

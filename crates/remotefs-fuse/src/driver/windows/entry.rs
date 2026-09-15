@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use remotefs::File;
 use widestring::{U16Str, U16String};
@@ -10,7 +10,7 @@ use super::security::SecurityDescriptor;
 use super::{AltStream, PendingWriteState};
 
 /// The per-open-handle context Dokan associates with a file object.
-pub struct StatHandle {
+pub struct StatHandle<P> {
     /// The shared [`Stat`] of the file this handle was opened against.
     pub stat: Arc<RwLock<Stat>>,
     /// The alternate data stream this handle addresses, if any.
@@ -19,22 +19,22 @@ pub struct StatHandle {
     pub delete_on_close: bool,
     /// A write staged for this handle by `write_file`, not yet persisted to the remote. See
     /// [`PendingWriteState`].
-    pub pending_write: Mutex<Option<PendingWriteState>>,
+    pub pending_write: P,
 }
 
-impl std::fmt::Debug for StatHandle {
+impl<P: std::fmt::Debug> std::fmt::Debug for StatHandle<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StatHandle")
             .field("stat", &self.stat)
             .field("alt_stream", &self.alt_stream)
             .field("delete_on_close", &self.delete_on_close)
-            .field(
-                "pending_write",
-                &self.pending_write.lock().ok().map(|guard| guard.is_some()),
-            )
+            .field("pending_write", &self.pending_write)
             .finish()
     }
 }
+
+/// Synchronous Dokany handle state.
+pub type SyncStatHandle = StatHandle<std::sync::Mutex<Option<PendingWriteState>>>;
 
 /// The state remotefs-fuse tracks for a single remote file, shared by all open handles to it.
 #[derive(Debug)]
