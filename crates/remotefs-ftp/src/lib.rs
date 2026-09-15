@@ -111,6 +111,25 @@
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png"
 )]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
+#[cfg(any(
+    all(feature = "native-tls", feature = "rustls-aws-lc-rs"),
+    all(feature = "native-tls", feature = "rustls-ring"),
+    all(feature = "rustls-aws-lc-rs", feature = "rustls-ring"),
+))]
+compile_error!(
+    "`native-tls`, `rustls-aws-lc-rs` and `rustls-ring` are mutually exclusive; enable one"
+);
+
+#[cfg(any(
+    all(feature = "tokio-native-tls", feature = "tokio-rustls-aws-lc-rs"),
+    all(feature = "tokio-native-tls", feature = "tokio-rustls-ring"),
+    all(feature = "tokio-rustls-aws-lc-rs", feature = "tokio-rustls-ring"),
+))]
+compile_error!(
+    "`tokio-native-tls`, `tokio-rustls-aws-lc-rs` and `tokio-rustls-ring` are mutually exclusive; enable one"
+);
 
 // -- crates
 #[macro_use]
@@ -119,6 +138,7 @@ extern crate log;
 pub mod client;
 #[doc(inline)]
 pub use client::FtpFs;
+// TODO(task 4): re-export TokioFtpFs when its implementation lands.
 
 // -- utils
 pub(crate) mod utils;

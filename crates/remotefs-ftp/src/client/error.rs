@@ -28,7 +28,10 @@ pub(crate) fn ftp_error(err: FtpError) -> RemoteError {
         #[cfg(any(
             feature = "native-tls",
             feature = "rustls-aws-lc-rs",
-            feature = "rustls-ring"
+            feature = "rustls-ring",
+            feature = "tokio-native-tls",
+            feature = "tokio-rustls-aws-lc-rs",
+            feature = "tokio-rustls-ring"
         ))]
         FtpError::SecureError(_) => RemoteErrorType::ConnectionError,
         FtpError::InvalidAddress(_) => RemoteErrorType::BadAddress,
@@ -64,7 +67,10 @@ pub(crate) fn transfer_setup_requires_reconnect(err: &FtpError) -> bool {
         #[cfg(any(
             feature = "native-tls",
             feature = "rustls-aws-lc-rs",
-            feature = "rustls-ring"
+            feature = "rustls-ring",
+            feature = "tokio-native-tls",
+            feature = "tokio-rustls-aws-lc-rs",
+            feature = "tokio-rustls-ring"
         ))]
         FtpError::SecureError(_) => true,
         // A 421 closes the service. Other server replies have been consumed,
