@@ -9,6 +9,14 @@ pub(crate) fn read_scripted_command(control: &mut BufReader<TcpStream>) -> Strin
     line
 }
 
+/// Reads one line, returning the byte count (0 means the peer closed).
+pub(crate) fn read_scripted_command_opt(
+    control: &mut BufReader<TcpStream>,
+    line: &mut String,
+) -> usize {
+    control.read_line(line).unwrap()
+}
+
 pub(crate) fn write_scripted_reply(control: &mut BufReader<TcpStream>, response: &str) {
     control.get_mut().write_all(response.as_bytes()).unwrap();
 }

@@ -15,4 +15,5 @@ mod sync;
 mod tokio;
 
 pub use self::sync::{FtpFs, FtpStream, PassiveStreamBuilder};
-// TODO(task 4): re-export async client types when the implementation lands.
+#[cfg(feature = "tokio")]
+pub use self::tokio::{AsyncFtpStream, TokioFtpFs, TokioPassiveStreamBuilder};

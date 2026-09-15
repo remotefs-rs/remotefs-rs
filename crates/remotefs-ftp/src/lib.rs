@@ -138,6 +138,9 @@ extern crate log;
 pub mod client;
 #[doc(inline)]
 pub use client::FtpFs;
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+pub use client::TokioFtpFs;
 // TODO(task 4): re-export TokioFtpFs when its implementation lands.
 
 // -- utils
