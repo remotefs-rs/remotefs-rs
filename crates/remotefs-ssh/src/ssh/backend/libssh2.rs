@@ -1,13 +1,15 @@
-use std::io::{Read, Seek, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs as _};
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
-use remotefs::fs::{FileType, Metadata, ReadStream, UnixPex, WriteStream};
+use remotefs::fs::{
+    FileType, Metadata, ReadOptions, ReadStream, RemoteRead, RemoteWrite, SetMetadata, UnixPex,
+    WriteStream,
+};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use socket2::{Domain, Protocol, Socket, Type};
 use ssh2::{FileStat, OpenType, RenameFlags};
@@ -20,6 +22,7 @@ use crate::ssh::backend::forward::{
 };
 use crate::ssh::backend::keepalive::ServerKeepalive;
 use crate::ssh::config::Config;
+use crate::ssh::stream::RangedRead;
 use crate::{SshAgentIdentity, SshOpts};
 
 /// An implementation of [`SshSession`] using libssh2 as the backend.
@@ -27,7 +30,13 @@ pub struct LibSsh2Session {
     remote_forward_ports: Vec<u16>,
     remote_forward_worker: Option<ForwardWorker>,
     server_keepalives: Vec<ServerKeepalive>,
-    session: ssh2::Session,
+    session: Mutex<ssh2::Session>,
+}
+
+impl LibSsh2Session {
+    fn session(&self) -> MutexGuard<'_, ssh2::Session> {
+        self.session.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 struct LibSsh2Transport {
@@ -67,7 +76,7 @@ impl SshSession for LibSsh2Session {
             setup_libssh2_remote_forwards(opts, &ssh_config)?;
         let session = transport.session;
         Ok(Self {
-            session,
+            session: Mutex::new(session),
             remote_forward_ports,
             remote_forward_worker,
             server_keepalives,
@@ -75,6 +84,7 @@ impl SshSession for LibSsh2Session {
     }
 
     fn disconnect(&self) -> RemoteResult<()> {
+        let session = self.session();
         if let Some(worker) = &self.remote_forward_worker {
             worker.stop();
         }
@@ -83,12 +93,12 @@ impl SshSession for LibSsh2Session {
             interrupted |= server_keepalive.stop();
         }
         if interrupted {
-            let _ = self.session.disconnect(None, "Mandi!", None);
+            let _ = session.disconnect(None, "Mandi!", None);
             return Ok(());
         }
-        self.session
+        session
             .disconnect(None, "Mandi!", None)
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))
+            .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))
     }
 
     fn remote_forward_ports(&self) -> &[u16] {
@@ -96,18 +106,21 @@ impl SshSession for LibSsh2Session {
     }
 
     fn authenticated(&self) -> RemoteResult<bool> {
-        Ok(self.session.authenticated())
+        Ok(self.session().authenticated())
     }
 
     fn banner(&self) -> RemoteResult<Option<String>> {
-        Ok(self.session.banner().map(String::from))
+        Ok(self.session().banner().map(String::from))
     }
 
-    fn cmd<S>(&mut self, cmd: S) -> RemoteResult<(u32, String)>
+    fn cmd<S>(&self, cmd: S) -> RemoteResult<(u32, String)>
     where
         S: AsRef<str>,
     {
-        let output = perform_shell_cmd(&mut self.session, format!("{}; echo $?", cmd.as_ref()))?;
+        let output = perform_shell_cmd(
+            &self.session(),
+            format!("{cmd}; echo $?", cmd = cmd.as_ref()),
+        )?;
         if let Some(index) = output.trim().rfind('\n') {
             trace!("Read from stdout: '{output}'");
             let actual_output = (output[0..index + 1]).to_string();
@@ -116,7 +129,7 @@ impl SshSession for LibSsh2Session {
             let rc = match u32::from_str(output[index..].trim()).ok() {
                 Some(val) => val,
                 None => {
-                    return Err(RemoteError::new_ex(
+                    return Err(RemoteError::with_message(
                         RemoteErrorType::ProtocolError,
                         "Failed to get command exit code",
                     ));
@@ -127,7 +140,7 @@ impl SshSession for LibSsh2Session {
         } else {
             match u32::from_str(output.trim()).ok() {
                 Some(val) => Ok((val, String::new())),
-                None => Err(RemoteError::new_ex(
+                None => Err(RemoteError::with_message(
                     RemoteErrorType::ProtocolError,
                     "Failed to get command exit code",
                 )),
@@ -135,18 +148,20 @@ impl SshSession for LibSsh2Session {
         }
     }
 
-    fn scp_recv(&self, path: &Path) -> RemoteResult<Box<dyn Read + Send>> {
-        self.session.set_blocking(true);
-
-        self.session
-            .scp_recv(path)
-            .map(|(reader, _stat)| Box::new(reader) as Box<dyn Read + Send>)
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not receive file over SCP: {err}"),
-                )
-            })
+    fn scp_recv(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream> {
+        let session = self.session();
+        session.set_blocking(true);
+        let (channel, stat) = session.scp_recv(path).map_err(|err| {
+            error!("Could not receive file over SCP: {err}");
+            RemoteError::with_source(RemoteErrorType::CouldNotOpenFile, err)
+        })?;
+        drop(session);
+        let reader = LibSsh2ScpReader {
+            channel: Some(channel),
+            remaining: stat.size(),
+        };
+        let reader = RangedRead::skip_and_limit(reader, opts).map_err(RemoteError::from)?;
+        Ok(ReadStream::new(reader))
     }
 
     fn scp_send(
@@ -155,30 +170,28 @@ impl SshSession for LibSsh2Session {
         mode: i32,
         size: u64,
         times: Option<(u64, u64)>,
-    ) -> RemoteResult<Box<dyn Write + Send>> {
-        self.session.set_blocking(true);
-
-        self.session
+    ) -> RemoteResult<WriteStream> {
+        let session = self.session();
+        session.set_blocking(true);
+        let channel = session
             .scp_send(remote_path, mode, size, times)
-            .map(|writer| Box::new(writer) as Box<dyn Write + Send>)
             .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not send file over SCP: {err}"),
-                )
-            })
+                error!("Could not send file over SCP: {err}");
+                RemoteError::with_source(RemoteErrorType::FileCreateDenied, err)
+            })?;
+        Ok(WriteStream::new(LibSsh2ScpWriter {
+            channel: Some(channel),
+        }))
     }
 
     fn sftp(&self) -> RemoteResult<Self::Sftp> {
-        self.session.set_blocking(true);
+        let session = self.session();
+        session.set_blocking(true);
 
         Ok(LibSsh2Sftp {
-            inner: self.session.sftp().map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not create SFTP session: {err}"),
-                )
-            })?,
+            inner: session
+                .sftp()
+                .map_err(|err| RemoteError::with_source(RemoteErrorType::ProtocolError, err))?,
         })
     }
 }
@@ -231,7 +244,7 @@ fn libssh2_server_keepalive(
     let socket = transport
         .socket
         .try_clone()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     let session = transport.session.clone();
     Ok(ServerKeepalive::spawn(
         interval,
@@ -290,7 +303,7 @@ fn setup_libssh2_remote_forwards(
             Some(RemoteForwardDestination::UnixSocket(_))
         )
     }) {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::UnsupportedFeature,
             "Unix socket RemoteForward destinations are unavailable on this platform",
         ));
@@ -301,7 +314,7 @@ fn setup_libssh2_remote_forwards(
         .iter()
         .find(|forward| matches!(forward.listen, RemoteForwardListen::UnixSocket(_)))
     {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::UnsupportedFeature,
             format!(
                 "libssh2 cannot create Unix socket RemoteForward listener {}",
@@ -325,7 +338,7 @@ fn setup_libssh2_remote_forwards(
             .session
             .channel_forward_listen(port, host, None)
             .map_err(|err| {
-                RemoteError::new_ex(
+                RemoteError::with_message(
                     RemoteErrorType::ProtocolError,
                     format!(
                         "Could not configure RemoteForward {}: {err}",
@@ -431,7 +444,7 @@ fn connect_libssh2_direct(opts: &SshOpts, config: &Config) -> RemoteResult<LibSs
     let socket_addresses: Vec<SocketAddr> = config
         .address
         .to_socket_addrs()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::BadAddress, err))?
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::BadAddress, err))?
         .collect();
     let mut stream = None;
     let mut last_connection_error = None;
@@ -464,10 +477,10 @@ fn connect_libssh2_direct(opts: &SshOpts, config: &Config) -> RemoteResult<LibSs
             || "No suitable socket address found; connection timeout".to_string(),
             |err| err.to_string(),
         );
-        RemoteError::new_ex(RemoteErrorType::ConnectionError, message)
+        RemoteError::with_message(RemoteErrorType::ConnectionError, message)
     })?;
     socket::set_keepalive(&stream, config.params.tcp_keep_alive.unwrap_or(true))
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     connect_libssh2_stream(opts, config, stream)
 }
 
@@ -521,15 +534,15 @@ fn connect_libssh2_stream(
 ) -> RemoteResult<LibSsh2Transport> {
     let socket = stream
         .try_clone()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     let mut session = ssh2::Session::new()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     session.set_timeout(config.connection_timeout.as_millis().min(u32::MAX.into()) as u32);
     session.set_tcp_stream(stream);
     set_algo_prefs(&mut session, opts, config)?;
     session.handshake().map_err(|err| {
         error!("SSH handshake failed: {err}");
-        RemoteError::new_ex(RemoteErrorType::ProtocolError, err)
+        RemoteError::with_source(RemoteErrorType::ProtocolError, err)
     })?;
     Ok(LibSsh2Transport { session, socket })
 }
@@ -585,7 +598,7 @@ fn authenticate_libssh2_session(
         }
     }
     Err(last_error.unwrap_or_else(|| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             "no authentication method provided",
         )
@@ -603,18 +616,18 @@ fn libssh2_tunnel_stream(
     let channel = session.channel_direct_tcpip(target_host, target_port, None);
     session.set_blocking(false);
     let channel =
-        channel.map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        channel.map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     let listener = TcpListener::bind(("127.0.0.1", 0))
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     let client = TcpStream::connect(
         listener
             .local_addr()
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?,
+            .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?,
     )
-    .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+    .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     let (relay, _) = listener
         .accept()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let relay_cancelled = Arc::clone(&cancelled);
     let relay = std::thread::spawn(move || {
@@ -696,46 +709,185 @@ fn relay_libssh2_channel(
     }
 }
 
-struct SftpFileReader(ssh2::File);
+/// Closes an SCP channel: EOF, wait for the peer EOF, close, wait for close.
+fn close_scp_channel(mut channel: ssh2::Channel) -> RemoteResult<()> {
+    channel
+        .send_eof()
+        .and_then(|()| channel.wait_eof())
+        .and_then(|()| channel.close())
+        .and_then(|()| channel.wait_close())
+        .map_err(|err| {
+            error!("Failed to close SCP channel: {err}");
+            RemoteError::with_source(RemoteErrorType::ProtocolError, err)
+        })
+}
 
-struct SftpFileWriter(ssh2::File);
+/// SCP download bounded to the size announced by the server.
+struct LibSsh2ScpReader {
+    channel: Option<ssh2::Channel>,
+    remaining: u64,
+}
 
-impl Write for SftpFileWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush()
+impl Read for LibSsh2ScpReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.remaining == 0 || buf.is_empty() {
+            return Ok(0);
+        }
+        let channel = self
+            .channel
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "SCP channel finished"))?;
+        let max = buf
+            .len()
+            .min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
+        let read = channel.read(&mut buf[..max])?;
+        self.remaining -= read as u64;
+        Ok(read)
     }
 }
 
-impl Seek for SftpFileWriter {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.0.seek(pos)
+impl RemoteRead for LibSsh2ScpReader {
+    fn finish(mut self: Box<Self>) -> RemoteResult<()> {
+        let mut discarded = [0_u8; 64 * 1024];
+        while self.remaining > 0 {
+            let count = self.read(&mut discarded).map_err(RemoteError::from)?;
+            if count == 0 {
+                break;
+            }
+        }
+        match self.channel.take() {
+            Some(channel) => close_scp_channel(channel),
+            None => Ok(()),
+        }
     }
 }
 
-impl WriteAndSeek for SftpFileWriter {}
+impl Drop for LibSsh2ScpReader {
+    fn drop(&mut self) {
+        if let Some(channel) = self.channel.take() {
+            debug!("Dropping unfinished SCP recv channel");
+            if let Err(err) = close_scp_channel(channel) {
+                warn!("Failed to clean up abandoned SCP recv channel: {err}");
+            }
+        }
+    }
+}
 
-impl Read for SftpFileReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+/// SCP upload; `finish` sends EOF and waits for the channel to close.
+struct LibSsh2ScpWriter {
+    channel: Option<ssh2::Channel>,
+}
+
+impl Write for LibSsh2ScpWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.channel
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "SCP channel finished"))?
+            .write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.channel
+            .as_mut()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "SCP channel finished"))?
+            .flush()
+    }
+}
+
+impl RemoteWrite for LibSsh2ScpWriter {
+    fn finish(mut self: Box<Self>) -> RemoteResult<()> {
+        match self.channel.take() {
+            Some(mut channel) => {
+                channel.flush().map_err(RemoteError::from)?;
+                close_scp_channel(channel)
+            }
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for LibSsh2ScpWriter {
+    fn drop(&mut self) {
+        if let Some(channel) = self.channel.take() {
+            debug!("Dropping unfinished SCP send channel");
+            if let Err(err) = close_scp_channel(channel) {
+                warn!("Failed to clean up abandoned SCP send channel: {err}");
+            }
+        }
+    }
+}
+
+/// SFTP status codes (`SSH_FXP_STATUS`) surfaced through `ssh2::ErrorCode::SFTP`.
+const SFTP_NO_SUCH_FILE: i32 = 2;
+const SFTP_PERMISSION_DENIED: i32 = 3;
+const SFTP_NO_SUCH_PATH: i32 = 10;
+const SFTP_FILE_ALREADY_EXISTS: i32 = 11;
+const SFTP_DIR_NOT_EMPTY: i32 = 18;
+
+/// Maps an SFTP failure onto a typed remotefs error, keeping `err` as the source.
+fn sftp_error(err: ssh2::Error, fallback: RemoteErrorType) -> RemoteError {
+    let kind = match err.code() {
+        ssh2::ErrorCode::SFTP(SFTP_NO_SUCH_FILE | SFTP_NO_SUCH_PATH) => {
+            RemoteErrorType::NoSuchFileOrDirectory
+        }
+        ssh2::ErrorCode::SFTP(SFTP_PERMISSION_DENIED) => RemoteErrorType::PermissionDenied,
+        ssh2::ErrorCode::SFTP(SFTP_FILE_ALREADY_EXISTS) => RemoteErrorType::AlreadyExists,
+        ssh2::ErrorCode::SFTP(SFTP_DIR_NOT_EMPTY) => RemoteErrorType::DirectoryNotEmpty,
+        _ => fallback,
+    };
+    RemoteError::with_source(kind, err)
+}
+
+/// Seekable SFTP download; the handle closes on drop.
+struct LibSsh2SftpReader(ssh2::File);
+
+impl Read for LibSsh2SftpReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.0.read(buf)
     }
 }
 
-impl Seek for SftpFileReader {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.0.seek(pos)
+impl RemoteRead for LibSsh2SftpReader {
+    fn seekable(&self) -> bool {
+        true
+    }
+
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.0.seek(position)
     }
 }
 
-impl ReadAndSeek for SftpFileReader {}
+/// Seekable SFTP upload; `finish` flushes and closes the handle.
+struct LibSsh2SftpWriter(ssh2::File);
+
+impl Write for LibSsh2SftpWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl RemoteWrite for LibSsh2SftpWriter {
+    fn seekable(&self) -> bool {
+        true
+    }
+
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        self.0.seek(position)
+    }
+
+    fn finish(mut self: Box<Self>) -> RemoteResult<()> {
+        self.0.flush().map_err(RemoteError::from)
+    }
+}
 
 impl Sftp for LibSsh2Sftp {
     fn mkdir(&self, path: &Path, mode: i32) -> RemoteResult<()> {
         self.inner.mkdir(path, mode).map_err(|err| {
-            RemoteError::new_ex(
+            RemoteError::with_message(
                 RemoteErrorType::FileCreateDenied,
                 format!(
                     "Could not create directory '{path}': {err}",
@@ -745,19 +897,21 @@ impl Sftp for LibSsh2Sftp {
         })
     }
 
-    fn open_read(&self, path: &Path) -> RemoteResult<ReadStream> {
-        self.inner
+    fn open_read(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream> {
+        let mut file = self
+            .inner
             .open(path)
-            .map(|file| ReadStream::from(Box::new(SftpFileReader(file)) as Box<dyn ReadAndSeek>))
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!(
-                        "Could not open file at '{path}': {err}",
-                        path = path.display()
-                    ),
-                )
-            })
+            .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotOpenFile))?;
+        if let Some(offset) = opts.offset {
+            file.seek(SeekFrom::Start(offset))
+                .map_err(RemoteError::from)?;
+        }
+        let reader = LibSsh2SftpReader(file);
+        if opts.offset.is_some() || opts.length.is_some() {
+            Ok(ReadStream::new(RangedRead::new(reader, opts.length)))
+        } else {
+            Ok(ReadStream::new(reader))
+        }
     }
 
     fn open_write(
@@ -777,22 +931,11 @@ impl Sftp for LibSsh2Sftp {
 
         self.inner
             .open_mode(path, flags, mode, OpenType::File)
-            .map(|file| WriteStream::from(Box::new(SftpFileWriter(file)) as Box<dyn WriteAndSeek>))
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!(
-                        "Could not open file at '{path}': {err}",
-                        path = path.display()
-                    ),
-                )
-            })
+            .map(|file| WriteStream::new(LibSsh2SftpWriter(file)))
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
     }
 
-    fn readdir<T>(&self, dirname: T) -> RemoteResult<Vec<remotefs::File>>
-    where
-        T: AsRef<Path>,
-    {
+    fn readdir(&self, dirname: &Path) -> RemoteResult<Vec<remotefs::File>> {
         self.inner
             .readdir(dirname)
             .map(|files| {
@@ -801,134 +944,68 @@ impl Sftp for LibSsh2Sftp {
                     .map(|(path, metadata)| self.make_fsentry(path.as_path(), &metadata))
                     .collect()
             })
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not read directory: {err}",),
-                )
-            })
-    }
-
-    fn realpath(&self, path: &Path) -> RemoteResult<PathBuf> {
-        self.inner.realpath(path).map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                format!(
-                    "Could not resolve real path for '{path}': {err}",
-                    path = path.display()
-                ),
-            )
-        })
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
     }
 
     fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
         self.inner
             .rename(src, dest, Some(RenameFlags::OVERWRITE))
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not rename file '{src}': {err}", src = src.display()),
-                )
-            })
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
     }
 
     fn rmdir(&self, path: &Path) -> RemoteResult<()> {
-        self.inner.rmdir(path).map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::CouldNotRemoveFile,
-                format!(
-                    "Could not remove directory '{path}': {err}",
-                    path = path.display()
-                ),
-            )
-        })
+        self.inner
+            .rmdir(path)
+            .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotRemoveFile))
     }
 
-    fn setstat(&self, path: &Path, metadata: Metadata) -> RemoteResult<()> {
+    fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
         self.inner
-            .setstat(path, Self::metadata_to_filestat(metadata))
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!(
-                        "Could not set file attributes for '{path}': {err}",
-                        path = path.display()
-                    ),
-                )
-            })
+            .setstat(path, Self::set_metadata_to_filestat(metadata))
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
     }
 
     fn stat(&self, filename: &Path) -> RemoteResult<File> {
         self.inner
-            .stat(filename)
+            .lstat(filename)
             .map(|metadata| self.make_fsentry(filename, &metadata))
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!(
-                        "Could not get file attributes for '{filename}': {err}",
-                        filename = filename.display()
-                    ),
-                )
-            })
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
     }
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        self.inner.symlink(path, target).map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::FileCreateDenied,
-                format!(
-                    "Could not create symlink '{path}': {err}",
-                    path = path.display()
-                ),
-            )
-        })
+        self.inner
+            .symlink(path, target)
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
     }
 
     fn unlink(&self, path: &Path) -> RemoteResult<()> {
-        self.inner.unlink(path).map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::CouldNotRemoveFile,
-                format!(
-                    "Could not remove file '{path}': {err}",
-                    path = path.display()
-                ),
-            )
-        })
+        self.inner
+            .unlink(path)
+            .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotRemoveFile))
     }
 }
 
 impl LibSsh2Sftp {
-    fn metadata_to_filestat(metadata: Metadata) -> FileStat {
-        let atime = metadata
-            .accessed
-            .and_then(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|x| x.as_secs());
-        let mtime = metadata
-            .modified
-            .and_then(|x| x.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|x| x.as_secs());
+    fn set_metadata_to_filestat(metadata: &SetMetadata) -> FileStat {
+        let epoch = |time: SystemTime| {
+            time.duration_since(SystemTime::UNIX_EPOCH)
+                .ok()
+                .map(|duration| duration.as_secs())
+        };
         FileStat {
-            size: Some(metadata.size),
+            size: None,
             uid: metadata.uid,
             gid: metadata.gid,
             perm: metadata.mode.map(u32::from),
-            atime,
-            mtime,
+            atime: metadata.accessed.and_then(epoch),
+            mtime: metadata.modified.and_then(epoch),
         }
     }
 
     fn make_fsentry(&self, path: &Path, metadata: &FileStat) -> File {
-        let name = match path.file_name() {
-            None => "/".to_string(),
-            Some(name) => name.to_string_lossy().to_string(),
-        };
-        debug!("Found file {name}");
-        // parse metadata
         let uid = metadata.uid;
         let gid = metadata.gid;
         let mode = metadata.perm.map(UnixPex::from);
-        let size = metadata.size.unwrap_or(0);
         let accessed = metadata.atime.map(|x| {
             SystemTime::UNIX_EPOCH
                 .checked_add(Duration::from_secs(x))
@@ -960,32 +1037,43 @@ impl LibSsh2Sftp {
         } else {
             FileType::File
         };
-        let entry_metadata = Metadata {
-            accessed,
-            created: None,
-            file_type,
-            gid,
-            mode,
-            modified,
-            size,
-            symlink,
-            uid,
-        };
-        trace!("Metadata for {}: {:?}", path.display(), entry_metadata);
-        File {
-            path: path.to_path_buf(),
-            metadata: entry_metadata,
+        let mut entry_metadata = Metadata::default().file_type(file_type);
+        if let Some(size) = metadata.size {
+            entry_metadata = entry_metadata.size(size);
         }
+        if let Some(uid) = uid {
+            entry_metadata = entry_metadata.uid(uid);
+        }
+        if let Some(gid) = gid {
+            entry_metadata = entry_metadata.gid(gid);
+        }
+        if let Some(mode) = mode {
+            entry_metadata = entry_metadata.mode(mode);
+        }
+        if let Some(accessed) = accessed {
+            entry_metadata = entry_metadata.accessed(accessed);
+        }
+        if let Some(modified) = modified {
+            entry_metadata = entry_metadata.modified(modified);
+        }
+        if let Some(symlink) = symlink {
+            entry_metadata = entry_metadata.symlink(symlink);
+        }
+        trace!(
+            "Metadata for {path}: {entry_metadata:?}",
+            path = path.display()
+        );
+        File::new(path, entry_metadata)
     }
 }
 
-fn perform_shell_cmd<S: AsRef<str>>(session: &mut ssh2::Session, cmd: S) -> RemoteResult<String> {
+fn perform_shell_cmd<S: AsRef<str>>(session: &ssh2::Session, cmd: S) -> RemoteResult<String> {
     // Create channel
     trace!("Running command: {}", cmd.as_ref());
     let mut channel = match session.channel_session() {
         Ok(ch) => ch,
         Err(err) => {
-            return Err(RemoteError::new_ex(
+            return Err(RemoteError::with_message(
                 RemoteErrorType::ProtocolError,
                 format!("Could not open channel: {err}"),
             ));
@@ -999,7 +1087,7 @@ fn perform_shell_cmd<S: AsRef<str>>(session: &mut ssh2::Session, cmd: S) -> Remo
     // if the remote peer has fish or other non-bash shell as default, commands like
     // "cd /some/dir; somecommand" may fail.
     if let Err(err) = channel.exec(format!("sh -c '{cmd}'").as_str()) {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not execute command \"{cmd}\": {err}"),
         ));
@@ -1013,7 +1101,7 @@ fn perform_shell_cmd<S: AsRef<str>>(session: &mut ssh2::Session, cmd: S) -> Remo
             trace!("Command output: {output}");
             Ok(output)
         }
-        Err(err) => Err(RemoteError::new_ex(
+        Err(err) => Err(RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not read output: {err}"),
         )),
@@ -1099,7 +1187,10 @@ fn set_algo_prefs(
     trace!("Configuring KEX algorithms: {algos}");
     if let Err(err) = session.method_pref(ssh2::MethodType::Kex, algos.as_str()) {
         error!("Could not set KEX algorithms: {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
 
     // HostKey
@@ -1107,7 +1198,10 @@ fn set_algo_prefs(
     trace!("Configuring HostKey algorithms: {algos}");
     if let Err(err) = session.method_pref(ssh2::MethodType::HostKey, algos.as_str()) {
         error!("Could not set host key algorithms: {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
 
     // Public key signature algorithms
@@ -1115,7 +1209,10 @@ fn set_algo_prefs(
     trace!("Configuring public key signature algorithms: {algos}");
     if let Err(err) = session.method_pref(ssh2::MethodType::SignAlgo, algos.as_str()) {
         error!("Could not set public key signature algorithms: {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
 
     // ciphers
@@ -1123,11 +1220,17 @@ fn set_algo_prefs(
     trace!("Configuring Crypt algorithms: {algos}");
     if let Err(err) = session.method_pref(ssh2::MethodType::CryptCs, algos.as_str()) {
         error!("Could not set crypt algorithms (client-server): {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
     if let Err(err) = session.method_pref(ssh2::MethodType::CryptSc, algos.as_str()) {
         error!("Could not set crypt algorithms (server-client): {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
 
     // MAC
@@ -1135,11 +1238,17 @@ fn set_algo_prefs(
     trace!("Configuring MAC algorithms: {algos}");
     if let Err(err) = session.method_pref(ssh2::MethodType::MacCs, algos.as_str()) {
         error!("Could not set MAC algorithms (client-server): {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
     if let Err(err) = session.method_pref(ssh2::MethodType::MacSc, algos.as_str()) {
         error!("Could not set MAC algorithms (server-client): {err}");
-        return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+        return Err(RemoteError::with_source(
+            RemoteErrorType::ProtocolError,
+            err,
+        ));
     }
 
     // -- configure algos from opts
@@ -1148,7 +1257,10 @@ fn set_algo_prefs(
         trace!("Configuring {:?} algorithm: {}", method.method_type, algos);
         if let Err(err) = session.method_pref(method.method_type.into(), algos.as_str()) {
             error!("Could not set {:?} algorithms: {}", method.method_type, err);
-            return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
+            return Err(RemoteError::with_source(
+                RemoteErrorType::ProtocolError,
+                err,
+            ));
         }
     }
     Ok(())
@@ -1182,21 +1294,21 @@ fn session_auth_with_agent(
 ) -> RemoteResult<()> {
     let mut agent = session
         .agent()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
 
     agent
         .connect()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
 
     agent
         .list_identities()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?;
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?;
 
     let mut connection_result = Err(RemoteError::new(RemoteErrorType::AuthenticationFailed));
 
     for identity in agent
         .identities()
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::ConnectionError, err))?
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::ConnectionError, err))?
     {
         if !public_key_blob_is_accepted(identity.blob(), accepted_algorithms) {
             debug!("Skipping SSH agent identity excluded by PubkeyAcceptedAlgorithms");
@@ -1215,7 +1327,7 @@ fn session_auth_with_agent(
             }
             Err(err) => {
                 debug!("SSH agent auth failed: {err}");
-                connection_result = Err(RemoteError::new_ex(
+                connection_result = Err(RemoteError::with_source(
                     RemoteErrorType::AuthenticationFailed,
                     err,
                 ));
@@ -1243,7 +1355,7 @@ fn session_auth_with_rsakey(
         let certificate_algorithm = ssh_key::Certificate::read_file(certificate)
             .map(|certificate| certificate.algorithm().to_certificate_type())
             .map_err(|err| {
-                RemoteError::new_ex(
+                RemoteError::with_message(
                     RemoteErrorType::AuthenticationFailed,
                     format!(
                         "could not inspect certificate at '{}': {err}",
@@ -1252,7 +1364,7 @@ fn session_auth_with_rsakey(
                 )
             })?;
         if !public_key_blob_algorithm_is_accepted(&certificate_algorithm, accepted_algorithms) {
-            return Err(RemoteError::new_ex(
+            return Err(RemoteError::with_message(
                 RemoteErrorType::AuthenticationFailed,
                 format!(
                     "certificate algorithm {certificate_algorithm} is not accepted by SSH config"
@@ -1262,7 +1374,7 @@ fn session_auth_with_rsakey(
     } else {
         let private_key_algorithm = private_key_algorithm(private_key, password)?;
         if !pubkey_algorithm_is_accepted(&private_key_algorithm, accepted_algorithms) {
-            return Err(RemoteError::new_ex(
+            return Err(RemoteError::with_message(
                 RemoteErrorType::AuthenticationFailed,
                 format!(
                     "private key algorithm {private_key_algorithm} is not accepted by SSH config"
@@ -1281,7 +1393,7 @@ fn session_auth_with_rsakey(
         .map(|()| debug!("Authenticated with key at '{}'", private_key.display()))
         .map_err(|err| {
             error!("Authentication failed: {err}");
-            RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err)
+            RemoteError::with_source(RemoteErrorType::AuthenticationFailed, err)
         })
 }
 
@@ -1320,7 +1432,7 @@ fn private_key_algorithm(
     }
 
     let pem = std::fs::read(private_key).map_err(|err| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             format!(
                 "could not read private key at '{}': {err}",
@@ -1334,7 +1446,7 @@ fn private_key_algorithm(
         })
         .or_else(|| openssl::pkey::PKey::private_key_from_pem(&pem).ok())
         .ok_or_else(|| {
-            RemoteError::new_ex(
+            RemoteError::with_message(
                 RemoteErrorType::AuthenticationFailed,
                 format!(
                     "could not inspect private key at '{}' for PubkeyAcceptedAlgorithms",
@@ -1344,7 +1456,7 @@ fn private_key_algorithm(
         })?;
 
     openssl_key_algorithm(&key).ok_or_else(|| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             format!(
                 "private key at '{}' uses an unsupported algorithm",
@@ -1457,7 +1569,7 @@ fn session_auth_with_password(
     debug!("Authenticating with username '{username}' and password");
     if let Err(err) = session.userauth_password(username, password) {
         error!("Authentication failed: {err}");
-        Err(RemoteError::new_ex(
+        Err(RemoteError::with_source(
             RemoteErrorType::AuthenticationFailed,
             err,
         ))
@@ -1730,8 +1842,7 @@ mod test {
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .password("password");
 
-        let mut session =
-            LibSsh2Session::connect(&opts).expect("failed to connect through ProxyJump");
+        let session = LibSsh2Session::connect(&opts).expect("failed to connect through ProxyJump");
         assert!(
             session
                 .authenticated()
@@ -1755,7 +1866,7 @@ mod test {
             .port(port)
             .username("sftp")
             .password("password");
-        let mut session = LibSsh2Session::connect(&opts).unwrap();
+        let session = LibSsh2Session::connect(&opts).unwrap();
         assert!(session.authenticated().unwrap());
         // run commands
         assert!(session.cmd("pwd").is_ok());
@@ -1772,21 +1883,14 @@ mod test {
             .port(port)
             .username("sftp")
             .password("password");
-        let mut session = LibSsh2Session::connect(&opts).unwrap();
+        let session = LibSsh2Session::connect(&opts).unwrap();
         assert!(session.authenticated().unwrap());
         // run commands
         assert_eq!(
-            session.cmd_at("pwd", Path::new("/tmp")).ok().unwrap(),
+            session.cmd("cd \"/tmp\"; pwd").ok().unwrap(),
             (0, String::from("/tmp\n"))
         );
-        assert_eq!(
-            session
-                .cmd_at("pippopluto", Path::new("/tmp"))
-                .ok()
-                .unwrap()
-                .0,
-            127
-        );
+        assert_eq!(session.cmd("cd \"/tmp\"; pippopluto").ok().unwrap().0, 127);
     }
 
     #[test]
@@ -1891,7 +1995,7 @@ mod test {
             let session = LibSsh2Session::connect(&opts).expect("failed to connect");
 
             assert_eq!(
-                crate::ssh::backend::socket::keepalive(&session.session)
+                crate::ssh::backend::socket::keepalive(&*session.session())
                     .expect("failed to read SO_KEEPALIVE"),
                 expected
             );
@@ -1904,7 +2008,7 @@ mod test {
             .password("password");
         let session = LibSsh2Session::connect(&opts).expect("failed to connect");
         assert!(
-            crate::ssh::backend::socket::keepalive(&session.session)
+            crate::ssh::backend::socket::keepalive(&*session.session())
                 .expect("failed to read default SO_KEEPALIVE")
         );
         session.disconnect().expect("failed to disconnect");
@@ -1948,7 +2052,7 @@ mod test {
         let opts = SshOpts::new("forwarded")
             .config_file(config_file.path(), ParseRule::STRICT)
             .password("password");
-        let mut session = LibSsh2Session::connect(&opts).expect("failed to connect");
+        let session = LibSsh2Session::connect(&opts).expect("failed to connect");
         let dynamic_port = *session
             .remote_forward_ports()
             .get(1)
@@ -1991,7 +2095,7 @@ mod test {
         let opts = SshOpts::new("forwarded")
             .config_file(config_file.path(), ParseRule::STRICT)
             .password("password");
-        let mut session = LibSsh2Session::connect(&opts).expect("failed to connect");
+        let session = LibSsh2Session::connect(&opts).expect("failed to connect");
 
         let (status, output) = session
             .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))

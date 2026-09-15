@@ -2,17 +2,19 @@
 
 mod auth;
 mod scp;
+mod stream;
 
 use std::borrow::Cow;
 use std::future::Future as _;
-use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
-use remotefs::fs::{Metadata, ReadStream, WriteStream};
+use remotefs::fs::{
+    AsyncReadStream, AsyncWriteStream, FileType, Metadata, ReadOptions, SetMetadata, UnixPex,
+};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use russh::client::{ChannelOpenHandle, DisconnectReason, Handle, Handler, Msg, Session};
 use russh::keys::{Algorithm, PublicKey, PublicKeyOrCertificate};
@@ -21,12 +23,10 @@ use russh_sftp::client::SftpSession;
 use ssh2_config::{RemoteForwardDestination, RemoteForwardListen};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpSocket, TcpStream};
-use tokio::runtime::Runtime;
 use tokio::time::{Instant, Sleep};
 
-use super::{MAX_FORWARD_CONNECTIONS, SshSession, WriteMode, interface, socket};
+use super::{MAX_FORWARD_CONNECTIONS, WriteMode, interface, socket};
 use crate::SshOpts;
-use crate::ssh::backend::Sftp;
 use crate::ssh::config::Config;
 use crate::ssh::key_method::MethodType;
 
@@ -47,6 +47,23 @@ impl Handler for NoCheckServerKey {
         _server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_limit_concurrent_forwarded_channels() {
+        let state = Arc::new(RemoteForwardState::default());
+        state.active.store(true, Ordering::Release);
+        let permits: Vec<_> = (0..MAX_FORWARD_CONNECTIONS)
+            .map(|_| state.try_acquire_channel().expect("permit"))
+            .collect();
+        assert!(state.try_acquire_channel().is_none());
+        drop(permits);
+        assert!(state.try_acquire_channel().is_some());
     }
 }
 
@@ -828,7 +845,6 @@ pub struct RusshSession<T>
 where
     T: Handler + Default + Send + 'static,
 {
-    runtime: Arc<Runtime>,
     session: Handle<CaSignaturePolicyHandler<T>>,
     forward_agent: bool,
     remote_forward_ports: Vec<u16>,
@@ -842,8 +858,7 @@ enum RegisteredRemoteForward {
 }
 
 /// SFTP handle for russh.
-pub struct RusshSftp {
-    runtime: Arc<Runtime>,
+pub(crate) struct RusshSftp {
     session: Arc<SftpSession>,
 }
 
@@ -932,8 +947,7 @@ struct ConnectionTarget<'a> {
     bind_interface: Option<&'a str>,
 }
 
-fn connect_with_timeout<T>(
-    runtime: &Runtime,
+async fn connect_with_timeout<T>(
     config: Arc<client::Config>,
     handler: T,
     target: ConnectionTarget<'_>,
@@ -955,19 +969,19 @@ where
         )
     };
     let stream = match deadline {
-        Some(deadline) => runtime
-            .block_on(async { tokio::time::timeout_at(deadline, connect()).await })
+        Some(deadline) => tokio::time::timeout_at(deadline, connect())
+            .await
             .map_err(|err| {
                 let msg = format!("SSH connection timed out: {err}");
                 error!("{msg}");
-                RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+                RemoteError::with_message(RemoteErrorType::ConnectionError, msg)
             })?,
-        None => runtime.block_on(connect()),
+        None => connect().await,
     }
     .map_err(|err| {
         let msg = format!("SSH connection failed: {err}");
         error!("{msg}");
-        RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+        RemoteError::with_message(RemoteErrorType::ConnectionError, msg)
     })?;
     if config.nodelay
         && let Err(err) = stream.set_nodelay(true)
@@ -979,20 +993,18 @@ where
         Some(deadline) => {
             let deadline_active = Arc::new(AtomicBool::new(true));
             let connection_deadline_active = deadline_active.clone();
-            let result = runtime.block_on(async {
-                let stream =
-                    ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
-                client::connect_stream(config, stream, handler).await
-            });
+            let stream =
+                ConnectionDeadlineStream::new(stream, deadline, connection_deadline_active);
+            let result = client::connect_stream(config, stream, handler).await;
             deadline_active.store(false, Ordering::Release);
             result
         }
-        None => runtime.block_on(async { client::connect_stream(config, stream, handler).await }),
+        None => client::connect_stream(config, stream, handler).await,
     };
     session_result.map_err(|err| {
         let msg = format!("SSH connection failed: {err:?}");
         error!("{msg}");
-        RemoteError::new_ex(RemoteErrorType::ConnectionError, msg)
+        RemoteError::with_message(RemoteErrorType::ConnectionError, msg)
     })
 }
 
@@ -1064,32 +1076,23 @@ async fn connect_tcp(
     }))
 }
 
-impl<T> SshSession for RusshSession<T>
+impl<T> RusshSession<T>
 where
     T: Handler + Default + Send + 'static,
 {
-    type Sftp = RusshSftp;
-
-    fn connect(opts: &SshOpts) -> RemoteResult<Self> {
-        let runtime = opts.runtime.as_ref().cloned().ok_or_else(|| {
-            RemoteError::new_ex(
-                RemoteErrorType::UnsupportedFeature,
-                "RusshSession requires a Tokio runtime",
-            )
-        })?;
-
+    pub(crate) async fn connect(opts: &SshOpts) -> RemoteResult<Self> {
         let ssh_config = Config::try_from(opts)?;
         debug!("Connecting to '{}'", ssh_config.address);
         let proxy_jumps = ssh_config.proxy_jump_configs(opts)?;
         let remote_forward_state = Arc::new(RemoteForwardState::default());
         let mut session = if let Some(first_jump) = proxy_jumps.first() {
             let mut session = connect_russh_direct::<T>(
-                &runtime,
                 opts,
                 first_jump,
                 Arc::new(RemoteForwardState::default()),
-            )?;
-            auth::authenticate(&mut session, &runtime, opts, first_jump)?;
+            )
+            .await?;
+            auth::authenticate(&mut session, opts, first_jump).await?;
             for next_hop in proxy_jumps
                 .iter()
                 .skip(1)
@@ -1100,19 +1103,18 @@ where
                 } else {
                     Arc::new(RemoteForwardState::default())
                 };
-                session =
-                    connect_russh_through_jump::<T>(&runtime, opts, &session, next_hop, routes)?;
+                session = connect_russh_through_jump::<T>(opts, &session, next_hop, routes).await?;
                 if !std::ptr::eq(next_hop, &ssh_config) {
-                    auth::authenticate(&mut session, &runtime, opts, next_hop)?;
+                    auth::authenticate(&mut session, opts, next_hop).await?;
                 }
             }
             session
         } else {
-            connect_russh_direct::<T>(&runtime, opts, &ssh_config, remote_forward_state.clone())?
+            connect_russh_direct::<T>(opts, &ssh_config, remote_forward_state.clone()).await?
         };
-        auth::authenticate(&mut session, &runtime, opts, &ssh_config)?;
+        auth::authenticate(&mut session, opts, &ssh_config).await?;
         let remote_forwards =
-            setup_russh_remote_forwards(&runtime, &session, &ssh_config, &remote_forward_state)?;
+            setup_russh_remote_forwards(&session, &ssh_config, &remote_forward_state).await?;
         let remote_forward_ports = remote_forwards
             .iter()
             .filter_map(|forward| match forward {
@@ -1125,7 +1127,6 @@ where
             .collect();
 
         Ok(Self {
-            runtime,
             session,
             forward_agent: ssh_config.params.forward_agent.unwrap_or(false),
             remote_forward_ports,
@@ -1134,56 +1135,42 @@ where
         })
     }
 
-    fn disconnect(&self) -> RemoteResult<()> {
+    pub(crate) async fn disconnect(&self) -> RemoteResult<()> {
         self.remote_forward_state
             .active
             .store(false, Ordering::Release);
-        self.runtime
-            .block_on(async {
-                for forward in self.remote_forwards.iter().rev() {
-                    let result = match forward {
-                        RegisteredRemoteForward::Tcp { address, port } => {
-                            self.session.cancel_tcpip_forward(address, *port).await
-                        }
-                        RegisteredRemoteForward::StreamLocal(path) => {
-                            self.session.cancel_streamlocal_forward(path).await
-                        }
-                    };
-                    if let Err(err) = result {
-                        warn!("Failed to cancel RemoteForward: {err}");
-                    }
+        for forward in self.remote_forwards.iter().rev() {
+            let result = match forward {
+                RegisteredRemoteForward::Tcp { address, port } => {
+                    self.session.cancel_tcpip_forward(address, *port).await
                 }
-                self.session
-                    .disconnect(Disconnect::ByApplication, "Closed by user", "en_US")
-                    .await
-            })
+                RegisteredRemoteForward::StreamLocal(path) => {
+                    self.session.cancel_streamlocal_forward(path).await
+                }
+            };
+            if let Err(err) = result {
+                warn!("Failed to cancel RemoteForward: {err}");
+            }
+        }
+        self.session
+            .disconnect(Disconnect::ByApplication, "Closed by user", "en_US")
+            .await
             .map_err(|err| {
                 log::error!("failed to disconnect {err}");
-                RemoteError::new_ex(RemoteErrorType::ConnectionError, err.to_string())
+                RemoteError::with_message(RemoteErrorType::ConnectionError, err.to_string())
             })
     }
 
-    fn remote_forward_ports(&self) -> &[u16] {
+    /// Returns ports assigned to configured TCP `RemoteForward` listeners.
+    pub fn remote_forward_ports(&self) -> &[u16] {
         &self.remote_forward_ports
     }
 
-    fn banner(&self) -> RemoteResult<Option<String>> {
-        // russh delivers the auth banner via the Handler::auth_banner callback
-        // during authentication, but does not expose it from the Handle after the fact.
-        // <https://docs.rs/russh/latest/russh/client/struct.Handle.html>
-        // <https://docs.rs/russh/latest/russh/client/trait.Handler.html#method.auth_banner>
-        Ok(None)
+    pub(crate) fn is_alive(&self) -> bool {
+        !self.session.is_closed()
     }
 
-    fn authenticated(&self) -> RemoteResult<bool> {
-        Ok(!self.session.is_closed())
-    }
-
-    fn cmd<S>(&mut self, cmd: S) -> RemoteResult<(u32, String)>
-    where
-        S: AsRef<str>,
-    {
-        let cmd = cmd.as_ref();
+    pub(crate) async fn cmd(&self, cmd: &str) -> RemoteResult<(u32, String)> {
         trace!("Running command: {cmd}");
 
         // Escape single quotes and wrap in sh -c for consistent shell behavior.
@@ -1192,62 +1179,63 @@ where
         let escaped = cmd.replace('\'', r#"'\''"#);
         let wrapped = format!("sh -c '{escaped}'");
 
-        self.runtime.block_on(async {
-            perform_shell_cmd(&self.session, &wrapped, self.forward_agent).await
-        })
+        perform_shell_cmd(&self.session, &wrapped, self.forward_agent).await
     }
 
-    fn scp_recv(&self, path: &Path) -> RemoteResult<Box<dyn Read + Send>> {
-        self.runtime
-            .block_on(async { scp::recv(&self.session, path, self.forward_agent).await })
+    pub(crate) async fn scp_recv(
+        &self,
+        path: &Path,
+        opts: &ReadOptions,
+    ) -> RemoteResult<AsyncReadStream> {
+        scp::recv(&self.session, path, opts, self.forward_agent).await
     }
 
-    fn scp_send(
+    pub(crate) async fn scp_send(
         &self,
         remote_path: &Path,
-        mode: i32,
+        mode: u32,
         size: u64,
-        _times: Option<(u64, u64)>,
-    ) -> RemoteResult<Box<dyn Write + Send>> {
-        let runtime = self.runtime.clone();
-        self.runtime.block_on(async {
-            scp::send(
-                &self.session,
-                remote_path,
-                mode,
-                size,
-                runtime,
-                self.forward_agent,
-            )
-            .await
-        })
+        modified: Option<std::time::SystemTime>,
+    ) -> RemoteResult<AsyncWriteStream> {
+        scp::send(
+            &self.session,
+            remote_path,
+            mode,
+            size,
+            modified,
+            self.forward_agent,
+        )
+        .await
     }
 
-    fn sftp(&self) -> RemoteResult<Self::Sftp> {
+    pub(crate) async fn sftp(&self) -> RemoteResult<RusshSftp> {
         let channel = self
-            .runtime
-            .block_on(async {
-                let channel = self.session.channel_open_session().await?;
-                if self.forward_agent {
-                    channel.agent_forward(true).await?;
-                }
-                channel.request_subsystem(true, "sftp").await?;
-                Ok(channel)
-            })
+            .session
+            .channel_open_session()
+            .await
             .map_err(|err: russh::Error| {
                 error!("Failed to init SFTP session: {err}");
-                RemoteError::new_ex(RemoteErrorType::ProtocolError, err.to_string())
+                RemoteError::with_message(RemoteErrorType::ProtocolError, err.to_string())
             })?;
-
-        self.runtime
-            .block_on(async { SftpSession::new(channel.into_stream()).await })
+        if self.forward_agent {
+            channel.agent_forward(true).await.map_err(|err| {
+                RemoteError::with_message(RemoteErrorType::ProtocolError, err.to_string())
+            })?;
+        }
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|err| {
+                RemoteError::with_message(RemoteErrorType::ProtocolError, err.to_string())
+            })?;
+        SftpSession::new(channel.into_stream())
+            .await
             .map(|session| RusshSftp {
-                runtime: self.runtime.clone(),
                 session: Arc::new(session),
             })
             .map_err(|err| {
                 error!("Failed to init SFTP session: {err}");
-                RemoteError::new_ex(RemoteErrorType::ProtocolError, err.to_string())
+                RemoteError::with_message(RemoteErrorType::ProtocolError, err.to_string())
             })
     }
 }
@@ -1265,8 +1253,7 @@ fn russh_client_config(opts: &SshOpts, ssh_config: &Config) -> Arc<client::Confi
     Arc::new(config)
 }
 
-fn connect_russh_direct<T>(
-    runtime: &Runtime,
+async fn connect_russh_direct<T>(
     opts: &SshOpts,
     ssh_config: &Config,
     remote_forwards: Arc<RemoteForwardState>,
@@ -1290,7 +1277,6 @@ where
             remote_forwards.clone(),
         );
         match connect_with_timeout(
-            runtime,
             config.clone(),
             handler,
             ConnectionTarget {
@@ -1300,7 +1286,9 @@ where
             },
             ssh_config.params.tcp_keep_alive,
             ssh_config.connection_timeout,
-        ) {
+        )
+        .await
+        {
             Ok(session) => return Ok(session),
             Err(err) if attempt < connection_attempts => {
                 warn!("SSH connection attempt {attempt} failed: {err}");
@@ -1311,8 +1299,7 @@ where
     }
 }
 
-fn connect_russh_through_jump<T>(
-    runtime: &Runtime,
+async fn connect_russh_through_jump<T>(
     opts: &SshOpts,
     jump_session: &Handle<CaSignaturePolicyHandler<T>>,
     target: &Config,
@@ -1343,10 +1330,9 @@ where
             client::connect_stream(config.clone(), channel.into_stream(), handler).await
         };
         let result = if target.connection_timeout.is_zero() {
-            Ok(runtime.block_on(connect))
+            Ok(connect.await)
         } else {
-            runtime
-                .block_on(async { tokio::time::timeout(target.connection_timeout, connect).await })
+            tokio::time::timeout(target.connection_timeout, connect).await
         };
         match result {
             Ok(Ok(session)) => return Ok(session),
@@ -1355,7 +1341,7 @@ where
                 attempt += 1;
             }
             Ok(Err(err)) => {
-                return Err(RemoteError::new_ex(
+                return Err(RemoteError::with_message(
                     RemoteErrorType::ConnectionError,
                     format!("SSH connection through ProxyJump failed: {err:?}"),
                 ));
@@ -1365,7 +1351,7 @@ where
                 attempt += 1;
             }
             Err(err) => {
-                return Err(RemoteError::new_ex(
+                return Err(RemoteError::with_message(
                     RemoteErrorType::ConnectionError,
                     format!("SSH connection through ProxyJump timed out: {err}"),
                 ));
@@ -1374,8 +1360,7 @@ where
     }
 }
 
-fn setup_russh_remote_forwards<T>(
-    runtime: &Runtime,
+async fn setup_russh_remote_forwards<T>(
     session: &Handle<T>,
     config: &Config,
     state: &RemoteForwardState,
@@ -1390,7 +1375,7 @@ where
             Some(RemoteForwardDestination::UnixSocket(_))
         )
     }) {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::UnsupportedFeature,
             "Unix socket RemoteForward destinations are unavailable on this platform",
         ));
@@ -1425,8 +1410,8 @@ where
                         .write()
                         .expect("remote forward routes poisoned")
                         .clear();
-                    cancel_russh_remote_forwards(runtime, session, &registered);
-                    return Err(RemoteError::new_ex(
+                    cancel_russh_remote_forwards(session, &registered).await;
+                    return Err(RemoteError::with_message(
                         RemoteErrorType::ProtocolError,
                         "RemoteForward Unix socket path is not valid UTF-8",
                     ));
@@ -1449,16 +1434,16 @@ where
         };
 
         let result = match &pending_key {
-            RemoteForwardKey::Tcp { address, port } => runtime
-                .block_on(session.tcpip_forward(address, port.unwrap_or(0)))
+            RemoteForwardKey::Tcp { address, port } => session
+                .tcpip_forward(address, port.unwrap_or(0))
+                .await
                 .map(|returned_port| RemoteForwardKey::Tcp {
                     address: address.clone(),
                     port: Some(port.unwrap_or(returned_port)),
                 }),
-            RemoteForwardKey::StreamLocal(path) => runtime
-                .block_on(session.streamlocal_forward(
-                    path.to_str().expect("Unix socket path was validated above"),
-                ))
+            RemoteForwardKey::StreamLocal(path) => session
+                .streamlocal_forward(path.to_str().expect("Unix socket path was validated above"))
+                .await
                 .map(|()| pending_key.clone()),
         };
 
@@ -1490,8 +1475,8 @@ where
                         .write()
                         .expect("remote forward routes poisoned")
                         .clear();
-                    cancel_russh_remote_forwards(runtime, session, &registered);
-                    return Err(RemoteError::new_ex(
+                    cancel_russh_remote_forwards(session, &registered).await;
+                    return Err(RemoteError::with_message(
                         RemoteErrorType::ProtocolError,
                         "SSH server returned an invalid RemoteForward port",
                     ));
@@ -1510,8 +1495,8 @@ where
                     .write()
                     .expect("remote forward routes poisoned")
                     .clear();
-                cancel_russh_remote_forwards(runtime, session, &registered);
-                return Err(RemoteError::new_ex(
+                cancel_russh_remote_forwards(session, &registered).await;
+                return Err(RemoteError::with_message(
                     RemoteErrorType::ProtocolError,
                     format!("Could not configure RemoteForward: {err}"),
                 ));
@@ -1522,288 +1507,191 @@ where
     Ok(registered)
 }
 
-fn cancel_russh_remote_forwards<T>(
-    runtime: &Runtime,
+async fn cancel_russh_remote_forwards<T>(
     session: &Handle<T>,
     registered: &[RegisteredRemoteForward],
 ) where
     T: Handler,
 {
-    runtime.block_on(async {
-        for forward in registered.iter().rev() {
-            let result = match forward {
-                RegisteredRemoteForward::Tcp { address, port } => {
-                    session.cancel_tcpip_forward(address, *port).await
-                }
-                RegisteredRemoteForward::StreamLocal(path) => {
-                    session.cancel_streamlocal_forward(path).await
-                }
-            };
-            if let Err(err) = result {
-                warn!("Failed to roll back RemoteForward: {err}");
+    for forward in registered.iter().rev() {
+        let result = match forward {
+            RegisteredRemoteForward::Tcp { address, port } => {
+                session.cancel_tcpip_forward(address, *port).await
             }
+            RegisteredRemoteForward::StreamLocal(path) => {
+                session.cancel_streamlocal_forward(path).await
+            }
+        };
+        if let Err(err) = result {
+            warn!("Failed to roll back RemoteForward: {err}");
         }
-    });
+    }
 }
 
-impl Sftp for RusshSftp {
-    fn mkdir(&self, path: &Path, mode: i32) -> RemoteResult<()> {
-        let path_str = path.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            self.session.create_dir(&path_str).await.map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::FileCreateDenied,
-                    format!("Could not create directory '{}': {err}", path.display()),
-                )
-            })?;
-            // create_dir does not set permissions; apply them separately
-            let mut attrs = russh_sftp::protocol::FileAttributes::empty();
-            attrs.permissions = Some(mode as u32 & 0o7777);
-            self.session
-                .set_metadata(&path_str, attrs)
+fn sftp_error(err: russh_sftp::client::error::Error, fallback: RemoteErrorType) -> RemoteError {
+    use russh_sftp::protocol::StatusCode;
+
+    let kind = match &err {
+        russh_sftp::client::error::Error::Status(status) => match status.status_code {
+            StatusCode::NoSuchFile => RemoteErrorType::NoSuchFileOrDirectory,
+            StatusCode::PermissionDenied => RemoteErrorType::PermissionDenied,
+            _ => fallback,
+        },
+        _ => fallback,
+    };
+    RemoteError::with_source(kind, err)
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+impl RusshSftp {
+    pub(crate) async fn mkdir(&self, path: &Path, mode: u32) -> RemoteResult<()> {
+        let path_str = path_string(path);
+        self.session
+            .create_dir(&path_str)
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))?;
+        let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+        attrs.permissions = Some(mode & 0o7777);
+        self.session
+            .set_metadata(&path_str, attrs)
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
+    }
+
+    pub(crate) async fn open_read(
+        &self,
+        path: &Path,
+        opts: &ReadOptions,
+    ) -> RemoteResult<AsyncReadStream> {
+        let reader =
+            stream::RusshSftpReader::open(Arc::clone(&self.session), path_string(path), opts)
                 .await
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::ProtocolError,
-                        format!("Could not set permissions on '{}': {err}", path.display()),
-                    )
-                })
-        })
+                .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotOpenFile))?;
+        Ok(AsyncReadStream::new(reader))
     }
 
-    fn open_read(&self, path: &Path) -> RemoteResult<ReadStream> {
-        let path_str = path.to_string_lossy().to_string();
-        let reader = PipelinedSftpReader::new(self.runtime.clone(), self.session.clone(), path_str)
-            .map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not read file at '{}': {err}", path.display()),
-                )
-            })?;
-        Ok(ReadStream::from(Box::new(reader) as Box<dyn Read + Send>))
+    pub(crate) async fn open_write(
+        &self,
+        path: &Path,
+        flags: WriteMode,
+        mode: u32,
+    ) -> RemoteResult<AsyncWriteStream> {
+        use russh_sftp::protocol::OpenFlags;
+
+        let open_flags = match flags {
+            WriteMode::Append => OpenFlags::WRITE | OpenFlags::APPEND | OpenFlags::CREATE,
+            WriteMode::Truncate => OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE,
+        };
+        let mut attrs = russh_sftp::protocol::FileAttributes::empty();
+        attrs.permissions = Some(mode & 0o7777);
+        let file = self
+            .session
+            .open_with_flags_and_attributes(path_string(path), open_flags, attrs)
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))?;
+        Ok(AsyncWriteStream::new(stream::RusshSftpWriter::new(file)))
     }
 
-    fn open_write(&self, path: &Path, flags: WriteMode, mode: i32) -> RemoteResult<WriteStream> {
-        let path_str = path.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            let open_flags = match flags {
-                WriteMode::Append => {
-                    russh_sftp::protocol::OpenFlags::WRITE
-                        | russh_sftp::protocol::OpenFlags::APPEND
-                        | russh_sftp::protocol::OpenFlags::CREATE
-                }
-                WriteMode::Truncate => {
-                    russh_sftp::protocol::OpenFlags::WRITE
-                        | russh_sftp::protocol::OpenFlags::CREATE
-                        | russh_sftp::protocol::OpenFlags::TRUNCATE
-                }
-            };
-
-            let mut attrs = russh_sftp::protocol::FileAttributes::empty();
-            attrs.permissions = Some(mode as u32 & 0o7777);
-
-            let file = self
-                .session
-                .open_with_flags_and_attributes(&path_str, open_flags, attrs)
-                .await
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::ProtocolError,
-                        format!("Could not open file at '{}': {err}", path.display()),
-                    )
-                })?;
-
-            let writer = SftpFileWriter {
-                file,
-                runtime: self.runtime.clone(),
-            };
-            Ok(WriteStream::from(
-                Box::new(writer) as Box<dyn remotefs::fs::stream::WriteAndSeek>
-            ))
-        })
-    }
-
-    fn readdir<T>(&self, dirname: T) -> RemoteResult<Vec<File>>
-    where
-        T: AsRef<Path>,
-    {
-        let dirname = dirname.as_ref();
-        let dir_str = dirname.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            let entries = self.session.read_dir(&dir_str).await.map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not read directory: {err}"),
-                )
-            })?;
-
-            let mut files = Vec::new();
-            for entry in entries {
-                let entry_path = dirname.join(entry.file_name());
-                let symlink = if entry.file_type().is_symlink() {
-                    match self
-                        .session
-                        .read_link(entry_path.to_string_lossy().as_ref())
-                        .await
-                    {
-                        Ok(target) => Some(PathBuf::from(target)),
-                        Err(err) => {
-                            error!(
-                                "Failed to read link of {} (even though it's a symlink): {err}",
-                                entry_path.display()
-                            );
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-                files.push(make_fsentry(&entry_path, &entry.metadata(), symlink));
-            }
-
-            Ok(files)
-        })
-    }
-
-    fn realpath(&self, path: &Path) -> RemoteResult<PathBuf> {
-        let path_str = path.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            self.session
-                .canonicalize(&path_str)
-                .await
-                .map(PathBuf::from)
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::ProtocolError,
-                        format!(
-                            "Could not resolve real path for '{}': {err}",
-                            path.display()
-                        ),
-                    )
-                })
-        })
-    }
-
-    fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        let src_str = src.to_string_lossy().to_string();
-        let dest_str = dest.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            self.session
-                .rename(&src_str, &dest_str)
-                .await
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::ProtocolError,
-                        format!("Could not rename file '{}': {err}", src.display()),
-                    )
-                })
-        })
-    }
-
-    fn rmdir(&self, path: &Path) -> RemoteResult<()> {
-        let path_str = path.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            self.session.remove_dir(&path_str).await.map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::CouldNotRemoveFile,
-                    format!("Could not remove directory '{}': {err}", path.display()),
-                )
-            })
-        })
-    }
-
-    fn setstat(&self, path: &Path, metadata: Metadata) -> RemoteResult<()> {
-        let path_str = path.to_string_lossy().to_string();
-        let attrs = metadata_to_file_attributes(metadata);
-        self.runtime.block_on(async {
-            self.session
-                .set_metadata(&path_str, attrs)
-                .await
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::ProtocolError,
-                        format!(
-                            "Could not set file attributes for '{}': {err}",
-                            path.display()
-                        ),
-                    )
-                })
-        })
-    }
-
-    fn stat(&self, filename: &Path) -> RemoteResult<File> {
-        let path_str = filename.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            let attrs = self.session.metadata(&path_str).await.map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!(
-                        "Could not get file attributes for '{}': {err}",
-                        filename.display()
-                    ),
-                )
-            })?;
-
-            let symlink = if attrs.is_symlink() {
-                match self.session.read_link(&path_str).await {
-                    Ok(target) => Some(PathBuf::from(target)),
-                    Err(err) => {
-                        error!(
-                            "Failed to read link of {} (even though it's a symlink): {err}",
-                            filename.display()
-                        );
-                        None
-                    }
-                }
+    pub(crate) async fn readdir(&self, dirname: &Path) -> RemoteResult<Vec<File>> {
+        let entries = self
+            .session
+            .read_dir(path_string(dirname))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))?;
+        let mut files = Vec::new();
+        for entry in entries {
+            let entry_path = dirname.join(entry.file_name());
+            let symlink = if entry.file_type().is_symlink() {
+                self.read_link(&entry_path).await
             } else {
                 None
             };
-
-            Ok(make_fsentry(filename, &attrs, symlink))
-        })
+            files.push(make_fsentry(&entry_path, &entry.metadata(), symlink));
+        }
+        Ok(files)
     }
 
-    fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        let path_str = path.to_string_lossy().to_string();
-        let target_str = target.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            self.session
-                .symlink(&path_str, &target_str)
-                .await
-                .map_err(|err| {
-                    RemoteError::new_ex(
-                        RemoteErrorType::FileCreateDenied,
-                        format!("Could not create symlink '{}': {err}", path.display()),
-                    )
-                })
-        })
+    async fn read_link(&self, path: &Path) -> Option<PathBuf> {
+        match self.session.read_link(path_string(path)).await {
+            Ok(target) => Some(PathBuf::from(target)),
+            Err(err) => {
+                error!(
+                    "Failed to read link of {path}: {err}",
+                    path = path.display()
+                );
+                None
+            }
+        }
     }
 
-    fn unlink(&self, path: &Path) -> RemoteResult<()> {
-        let path_str = path.to_string_lossy().to_string();
-        self.runtime.block_on(async {
-            self.session.remove_file(&path_str).await.map_err(|err| {
-                RemoteError::new_ex(
-                    RemoteErrorType::CouldNotRemoveFile,
-                    format!("Could not remove file '{}': {err}", path.display()),
-                )
-            })
-        })
+    pub(crate) async fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        self.session
+            .rename(path_string(src), path_string(dest))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
+    }
+
+    pub(crate) async fn rmdir(&self, path: &Path) -> RemoteResult<()> {
+        self.session
+            .remove_dir(path_string(path))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotRemoveFile))
+    }
+
+    pub(crate) async fn set_metadata(
+        &self,
+        path: &Path,
+        metadata: &SetMetadata,
+    ) -> RemoteResult<()> {
+        self.session
+            .set_metadata(path_string(path), set_metadata_to_attributes(metadata))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
+    }
+
+    pub(crate) async fn stat(&self, path: &Path) -> RemoteResult<File> {
+        let attrs = self
+            .session
+            .symlink_metadata(path_string(path))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))?;
+        let symlink = if attrs.is_symlink() {
+            self.read_link(path).await
+        } else {
+            None
+        };
+        Ok(make_fsentry(path, &attrs, symlink))
+    }
+
+    pub(crate) async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+        self.session
+            .symlink(path_string(path), path_string(target))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
+    }
+
+    pub(crate) async fn unlink(&self, path: &Path) -> RemoteResult<()> {
+        self.session
+            .remove_file(path_string(path))
+            .await
+            .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotRemoveFile))
     }
 }
 
-/// Convert `remotefs::fs::Metadata` to `russh_sftp::protocol::FileAttributes`.
-fn metadata_to_file_attributes(metadata: Metadata) -> russh_sftp::protocol::FileAttributes {
+fn set_metadata_to_attributes(metadata: &SetMetadata) -> russh_sftp::protocol::FileAttributes {
     let atime = metadata
         .accessed
-        .and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|x| x.as_secs() as u32);
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|time| time.as_secs() as u32);
     let mtime = metadata
         .modified
-        .and_then(|x| x.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|x| x.as_secs() as u32);
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|time| time.as_secs() as u32);
     russh_sftp::protocol::FileAttributes {
-        size: Some(metadata.size),
+        size: None,
         uid: metadata.uid,
         user: None,
         gid: metadata.gid,
@@ -1814,350 +1702,43 @@ fn metadata_to_file_attributes(metadata: Metadata) -> russh_sftp::protocol::File
     }
 }
 
-/// Build a `remotefs::File` from a path and russh-sftp `FileAttributes`.
 fn make_fsentry(
     path: &Path,
     attrs: &russh_sftp::protocol::FileAttributes,
     symlink: Option<PathBuf>,
 ) -> File {
-    let name = match path.file_name() {
-        None => "/".to_string(),
-        Some(name) => name.to_string_lossy().to_string(),
-    };
-    debug!("Found file {name}");
-
-    let uid = attrs.uid;
-    let gid = attrs.gid;
-    let mode = attrs.permissions.map(remotefs::fs::UnixPex::from);
-    let size = attrs.size.unwrap_or(0);
-    let accessed = attrs.atime.map(|x| {
-        std::time::UNIX_EPOCH
-            .checked_add(std::time::Duration::from_secs(u64::from(x)))
-            .unwrap_or(std::time::UNIX_EPOCH)
-    });
-    let modified = attrs.mtime.map(|x| {
-        std::time::UNIX_EPOCH
-            .checked_add(std::time::Duration::from_secs(u64::from(x)))
-            .unwrap_or(std::time::UNIX_EPOCH)
-    });
-
     let file_type = if symlink.is_some() {
-        remotefs::fs::FileType::Symlink
+        FileType::Symlink
     } else if attrs.is_dir() {
-        remotefs::fs::FileType::Directory
+        FileType::Directory
     } else {
-        remotefs::fs::FileType::File
+        FileType::File
     };
-
-    let entry_metadata = Metadata {
-        accessed,
-        created: None,
-        file_type,
-        gid,
-        mode,
-        modified,
-        size,
-        symlink,
-        uid,
-    };
-    trace!("Metadata for {}: {:?}", path.display(), entry_metadata);
-    File {
-        path: path.to_path_buf(),
-        metadata: entry_metadata,
+    let mut metadata = Metadata::default().file_type(file_type);
+    if let Some(size) = attrs.size {
+        metadata = metadata.size(size);
     }
-}
-
-/// Synchronous writer wrapping a russh-sftp [`russh_sftp::client::fs::File`].
-///
-/// Stores the full `Arc<Runtime>` rather than just a `Handle` so that
-/// `Runtime::block_on` drives IO and background tasks on a current-thread
-/// runtime.
-struct SftpFileWriter {
-    file: russh_sftp::client::fs::File,
-    runtime: Arc<Runtime>,
-}
-
-impl Write for SftpFileWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        use tokio::io::AsyncWriteExt as _;
-        self.runtime.block_on(self.file.write(buf))
+    if let Some(uid) = attrs.uid {
+        metadata = metadata.uid(uid);
     }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        use tokio::io::AsyncWriteExt as _;
-        self.runtime.block_on(self.file.flush())
+    if let Some(gid) = attrs.gid {
+        metadata = metadata.gid(gid);
     }
-}
-
-impl Seek for SftpFileWriter {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        use tokio::io::AsyncSeekExt as _;
-        self.runtime.block_on(self.file.seek(pos))
+    if let Some(mode) = attrs.permissions {
+        metadata = metadata.mode(UnixPex::from(mode));
     }
-}
-
-impl remotefs::fs::stream::WriteAndSeek for SftpFileWriter {}
-
-impl Drop for SftpFileWriter {
-    fn drop(&mut self) {
-        use tokio::io::AsyncWriteExt as _;
-        // Close the handle with an awaited close. russh-sftp's `File::drop`
-        // uses `close_nowait`, which never decrements the client's open-handle
-        // counter and would leak a handle per upload until the negotiated limit
-        // is reached ("Handle limit reached").
-        let _ = self.runtime.block_on(self.file.shutdown());
+    if let Some(atime) = attrs.atime {
+        metadata = metadata
+            .accessed(std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(atime)));
     }
-}
-
-/// Number of concurrent SFTP file handles used per batch in pipelined reads.
-const SFTP_PIPELINE_DEPTH: usize = 4;
-
-/// Size of each chunk read by a single pipeline task (4 MiB).
-const SFTP_CHUNK_SIZE: usize = 4 * 1024 * 1024;
-
-/// Maximum number of completed batches to buffer ahead of the current read
-/// position. Caps memory usage to roughly `(MAX_PREFETCH + 1) * BATCH_SIZE`.
-const MAX_PREFETCH: usize = 2;
-
-/// Batch size: [`SFTP_PIPELINE_DEPTH`] * [`SFTP_CHUNK_SIZE`] = 16 MiB.
-const BATCH_SIZE: usize = SFTP_PIPELINE_DEPTH * SFTP_CHUNK_SIZE;
-
-/// A streaming SFTP reader that pipelines reads in batches.
-///
-/// Each batch spawns [`SFTP_PIPELINE_DEPTH`] concurrent SFTP read tasks of
-/// [`SFTP_CHUNK_SIZE`] bytes. Up to [`MAX_PREFETCH`] batches are fetched ahead
-/// of the current read position so the caller receives data immediately while
-/// keeping memory bounded.
-struct PipelinedSftpReader {
-    runtime: Arc<Runtime>,
-    session: Arc<SftpSession>,
-    path: String,
-    file_size: usize,
-    /// Next byte offset to start fetching from the remote file.
-    fetch_offset: usize,
-    /// Completed batches ready for consumption, front = current.
-    batches: std::collections::VecDeque<Vec<u8>>,
-    /// Read cursor within `batches[0]`.
-    buf_cursor: usize,
-    /// Background pre-fetch task, if any.
-    pending: Option<PrefetchTask>,
-}
-
-/// In-flight background batch fetch.
-struct PrefetchTask {
-    /// The byte offset this batch starts at — used to roll back
-    /// `fetch_offset` on failure.
-    batch_offset: usize,
-    handle: tokio::task::JoinHandle<Result<Vec<u8>, std::io::Error>>,
-}
-
-impl PipelinedSftpReader {
-    /// Creates a new streaming reader.
-    ///
-    /// Eagerly fetches the first batch and starts a background pre-fetch for
-    /// the second batch so the caller can start reading immediately.
-    fn new(
-        runtime: Arc<Runtime>,
-        session: Arc<SftpSession>,
-        path: String,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let metadata = runtime.block_on(session.metadata(&path))?;
-        let file_size = metadata.size.unwrap_or(0) as usize;
-
-        let mut reader = Self {
-            runtime,
-            session,
-            path,
-            file_size,
-            fetch_offset: 0,
-            batches: std::collections::VecDeque::new(),
-            buf_cursor: 0,
-            pending: None,
-        };
-
-        if file_size == 0 {
-            return Ok(reader);
-        }
-
-        // Eagerly fetch the first batch so data is available immediately.
-        let first_batch = reader.fetch_batch_blocking()?;
-        reader.batches.push_back(first_batch);
-
-        // Start background pre-fetch for the next batch.
-        reader.maybe_start_prefetch();
-
-        Ok(reader)
+    if let Some(mtime) = attrs.mtime {
+        metadata = metadata
+            .modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(u64::from(mtime)));
     }
-
-    /// Fetches the next batch synchronously by blocking on the runtime.
-    fn fetch_batch_blocking(
-        &mut self,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let remaining = self.file_size.saturating_sub(self.fetch_offset);
-        if remaining == 0 {
-            return Ok(Vec::new());
-        }
-
-        let batch_len = remaining.min(BATCH_SIZE);
-        let offset = self.fetch_offset;
-        let batch = self
-            .runtime
-            .block_on(Self::fetch_batch(
-                self.session.clone(),
-                self.path.clone(),
-                offset,
-                batch_len,
-            ))
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-        self.fetch_offset += batch_len;
-        Ok(batch)
+    if let Some(symlink) = symlink {
+        metadata = metadata.symlink(symlink);
     }
-
-    /// Spawns a background batch fetch if there is more data and the prefetch
-    /// queue is not full.
-    fn maybe_start_prefetch(&mut self) {
-        if self.pending.is_some() {
-            return;
-        }
-        if self.batches.len() > MAX_PREFETCH {
-            return;
-        }
-        let remaining = self.file_size.saturating_sub(self.fetch_offset);
-        if remaining == 0 {
-            return;
-        }
-
-        let batch_len = remaining.min(BATCH_SIZE);
-        let session = self.session.clone();
-        let path = self.path.clone();
-        let offset = self.fetch_offset;
-        // Speculatively advance; rolled back in collect_pending on failure.
-        self.fetch_offset += batch_len;
-
-        let handle = self
-            .runtime
-            .spawn(async move { Self::fetch_batch(session, path, offset, batch_len).await });
-
-        self.pending = Some(PrefetchTask {
-            batch_offset: offset,
-            handle,
-        });
-    }
-
-    /// Collects the result of a pending pre-fetch task.
-    ///
-    /// On failure, rolls back `fetch_offset` so the batch can be retried.
-    fn collect_pending(&mut self) -> std::io::Result<Option<Vec<u8>>> {
-        let task = match self.pending.take() {
-            Some(t) => t,
-            None => return Ok(None),
-        };
-
-        match self
-            .runtime
-            .block_on(task.handle)
-            .map_err(std::io::Error::other)?
-        {
-            Ok(batch) if batch.is_empty() => Ok(None),
-            Ok(batch) => Ok(Some(batch)),
-            Err(err) => {
-                // Roll back so the caller (or a retry) can re-fetch this range.
-                self.fetch_offset = task.batch_offset;
-                Err(std::io::Error::other(err))
-            }
-        }
-    }
-
-    /// Fetches a single batch: spawns [`SFTP_PIPELINE_DEPTH`] concurrent reads
-    /// and assembles the result into a contiguous buffer.
-    async fn fetch_batch(
-        session: Arc<SftpSession>,
-        path: String,
-        batch_offset: usize,
-        batch_len: usize,
-    ) -> Result<Vec<u8>, std::io::Error> {
-        use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
-
-        let chunk_count = batch_len.div_ceil(SFTP_CHUNK_SIZE);
-        let mut tasks = Vec::with_capacity(chunk_count);
-
-        for i in 0..chunk_count {
-            let chunk_offset = i * SFTP_CHUNK_SIZE;
-            let len = SFTP_CHUNK_SIZE.min(batch_len - chunk_offset);
-            let abs_offset = batch_offset + chunk_offset;
-            let session = Arc::clone(&session);
-            let path = path.clone();
-
-            tasks.push(tokio::spawn(async move {
-                let mut file = session.open(&path).await.map_err(std::io::Error::other)?;
-                file.seek(std::io::SeekFrom::Start(abs_offset as u64))
-                    .await?;
-                let mut buf = vec![0_u8; len];
-                let read_res = file.read_exact(&mut buf).await;
-                // Explicitly close the handle with an awaited close. russh-sftp's
-                // `File::drop` uses `close_nowait`, which frees the handle
-                // server-side but never decrements the client's open-handle
-                // counter. Relying on it leaks handles until the negotiated
-                // limit is hit ("Handle limit reached") after many opens.
-                let _ = file.shutdown().await;
-                read_res?;
-                Ok::<(usize, Vec<u8>), std::io::Error>((chunk_offset, buf))
-            }));
-        }
-
-        let mut result = vec![0_u8; batch_len];
-        for task in tasks {
-            let (chunk_offset, chunk) = task
-                .await
-                .map_err(std::io::Error::other)?
-                .map_err(std::io::Error::other)?;
-            result[chunk_offset..chunk_offset + chunk.len()].copy_from_slice(&chunk);
-        }
-
-        Ok(result)
-    }
-}
-
-impl Read for PipelinedSftpReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            // Try to serve from the current front batch.
-            if let Some(front) = self.batches.front() {
-                let available = &front[self.buf_cursor..];
-                if !available.is_empty() {
-                    let to_copy = available.len().min(buf.len());
-                    buf[..to_copy].copy_from_slice(&available[..to_copy]);
-                    self.buf_cursor += to_copy;
-                    return Ok(to_copy);
-                }
-
-                // Current batch fully consumed — pop it.
-                self.batches.pop_front();
-                self.buf_cursor = 0;
-
-                // Collect the pending pre-fetch if any.
-                if let Some(batch) = self.collect_pending()? {
-                    self.batches.push_back(batch);
-                }
-
-                // Kick off next pre-fetch.
-                self.maybe_start_prefetch();
-
-                continue;
-            }
-
-            // No batches buffered — try to collect pending.
-            if let Some(batch) = self.collect_pending()? {
-                self.batches.push_back(batch);
-                self.maybe_start_prefetch();
-                continue;
-            }
-
-            // Nothing left — EOF.
-            return Ok(0);
-        }
-    }
+    File::new(path.to_path_buf(), metadata)
 }
 
 /// Apply algorithm preferences from SSH config to the russh [`client::Config`].
@@ -2339,7 +1920,7 @@ where
     let mut channel = open_channel(session, forward_agent).await?;
 
     channel.exec(true, cmd).await.map_err(|err| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not execute command \"{cmd}\": {err}"),
         )
@@ -2382,912 +1963,18 @@ where
     T: Handler,
 {
     let channel = session.channel_open_session().await.map_err(|err| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not open channel: {err}"),
         )
     })?;
     if forward_agent {
         channel.agent_forward(true).await.map_err(|err| {
-            RemoteError::new_ex(
+            RemoteError::with_message(
                 RemoteErrorType::ProtocolError,
                 format!("Could not request SSH agent forwarding: {err}"),
             )
         })?;
     }
     Ok(channel)
-}
-
-#[cfg(test)]
-mod test {
-
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
-
-    use ssh2_config::ParseRule;
-    use tempfile::NamedTempFile;
-
-    use super::*;
-    use crate::KeyMethod;
-    use crate::mock::ssh as ssh_mock;
-
-    fn test_runtime() -> Arc<Runtime> {
-        Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        )
-    }
-
-    #[test]
-    fn should_limit_concurrent_forwarded_channels() {
-        let state = Arc::new(RemoteForwardState::default());
-        let mut permits = (0..MAX_FORWARD_CONNECTIONS)
-            .map(|_| {
-                state
-                    .try_acquire_channel()
-                    .expect("forwarded channel should remain within the limit")
-            })
-            .collect::<Vec<_>>();
-
-        assert!(state.try_acquire_channel().is_none());
-        permits.pop();
-        assert!(state.try_acquire_channel().is_some());
-    }
-
-    #[test]
-    fn should_apply_ca_signature_algorithms_to_host_certificates() {
-        let certificate = russh::keys::Certificate::from_openssh(ssh_mock::MOCK_USER_CERTIFICATE)
-            .expect("failed to parse test certificate");
-        let server_key = PublicKeyOrCertificate::Certificate(certificate);
-        let runtime = test_runtime();
-
-        let mut rejected = CaSignaturePolicyHandler::new(
-            NoCheckServerKey,
-            vec!["rsa-sha2-256".to_string()],
-            false,
-            Arc::new(RemoteForwardState::default()),
-        );
-        assert!(
-            !runtime
-                .block_on(rejected.check_server_key(&server_key))
-                .expect("failed to check rejected certificate")
-        );
-
-        let mut accepted = CaSignaturePolicyHandler::new(
-            NoCheckServerKey,
-            vec!["ssh-ed25519".to_string()],
-            false,
-            Arc::new(RemoteForwardState::default()),
-        );
-        assert!(
-            runtime
-                .block_on(accepted.check_server_key(&server_key))
-                .expect("failed to check accepted certificate")
-        );
-    }
-
-    #[test]
-    fn should_apply_configured_compression() {
-        for (configured, expected) in [
-            (Some(true), vec!["zlib@openssh.com", "zlib", "none"]),
-            (Some(false), vec!["none"]),
-            (None, vec!["none"]),
-        ] {
-            let mut ssh_config =
-                Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
-            ssh_config.params.compression = configured;
-            let mut config = client::Config::default();
-
-            apply_config_algo_prefs(&mut config, &ssh_config);
-
-            let actual = config
-                .preferred
-                .compression
-                .iter()
-                .map(AsRef::as_ref)
-                .collect::<Vec<_>>();
-            assert_eq!(actual, expected);
-        }
-    }
-
-    #[test]
-    fn should_apply_configured_host_key_certificates() {
-        let mut ssh_config =
-            Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
-        ssh_config.params.host_key_algorithms = ssh2_config::Algorithms::new([
-            "ssh-ed25519-cert-v01@openssh.com",
-            "rsa-sha2-512-cert-v01@openssh.com",
-            "ecdsa-sha2-nistp256",
-        ]);
-        let mut config = client::Config::default();
-
-        apply_config_algo_prefs(&mut config, &ssh_config);
-
-        let certificates = config
-            .preferred
-            .host_key_certificates
-            .iter()
-            .map(Algorithm::to_certificate_type)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            certificates,
-            [
-                "ssh-ed25519-cert-v01@openssh.com",
-                "rsa-sha2-512-cert-v01@openssh.com"
-            ]
-        );
-        let plain_keys = config
-            .preferred
-            .key
-            .iter()
-            .map(AsRef::as_ref)
-            .collect::<Vec<_>>();
-        assert_eq!(plain_keys, ["ecdsa-sha2-nistp256"]);
-    }
-
-    #[test]
-    fn should_override_configured_host_key_certificates_with_options() {
-        let mut ssh_config =
-            Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
-        ssh_config.params.host_key_algorithms =
-            ssh2_config::Algorithms::new(["ssh-ed25519-cert-v01@openssh.com", "ssh-ed25519"]);
-        let opts = SshOpts::new("localhost").method(KeyMethod::new(
-            MethodType::HostKey,
-            &["ecdsa-sha2-nistp256".to_string()],
-        ));
-        let mut config = client::Config::default();
-
-        apply_config_algo_prefs(&mut config, &ssh_config);
-        apply_opts_algo_prefs(&mut config, &opts);
-
-        assert!(config.preferred.host_key_certificates.is_empty());
-        let plain_keys = config
-            .preferred
-            .key
-            .iter()
-            .map(AsRef::as_ref)
-            .collect::<Vec<_>>();
-        assert_eq!(plain_keys, ["ecdsa-sha2-nistp256"]);
-    }
-
-    #[test]
-    fn should_preserve_host_key_preferences_for_empty_options() {
-        let mut ssh_config =
-            Config::try_from(&SshOpts::new("localhost")).expect("failed to create config");
-        ssh_config.params.host_key_algorithms =
-            ssh2_config::Algorithms::new(["ssh-ed25519-cert-v01@openssh.com", "ssh-ed25519"]);
-        let opts = SshOpts::new("localhost").method(KeyMethod::new(MethodType::HostKey, &[]));
-        let mut config = client::Config::default();
-
-        apply_config_algo_prefs(&mut config, &ssh_config);
-        apply_opts_algo_prefs(&mut config, &opts);
-
-        assert_eq!(config.preferred.host_key_certificates.len(), 1);
-        assert_eq!(config.preferred.key.len(), 1);
-    }
-
-    #[test]
-    fn should_connect_to_ssh_server_auth_user_password() {
-        use crate::ssh::container::OpensshServer;
-
-        let container = OpensshServer::start();
-        let port = container.port();
-
-        crate::mock::logger();
-        let runtime = test_runtime();
-        let config_file = ssh_mock::create_ssh_config(port);
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .password("password")
-            .runtime(runtime);
-
-        if let Err(err) = RusshSession::<NoCheckServerKey>::connect(&opts) {
-            panic!("Could not connect to server: {err}");
-        }
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
-        assert!(session.authenticated().unwrap());
-
-        drop(container);
-    }
-
-    #[test]
-    fn should_connect_to_ssh_server_auth_key() {
-        use crate::ssh::container::OpensshServer;
-
-        let container = OpensshServer::start();
-        let port = container.port();
-
-        crate::mock::logger();
-        let runtime = test_runtime();
-        let config_file = ssh_mock::create_ssh_config(port);
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
-            .runtime(runtime);
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
-        assert!(session.authenticated().unwrap());
-    }
-
-    #[test]
-    fn should_connect_to_ssh_server_auth_key_from_ssh_config() {
-        use crate::ssh::container::OpensshServer;
-
-        let container = OpensshServer::start();
-        let port = container.port();
-
-        crate::mock::logger();
-        let runtime = test_runtime();
-        // Authenticate purely via the `IdentityFile` directive of the ssh config,
-        // with no key storage configured.
-        let key_file = ssh_mock::create_key_file();
-        let config_file = ssh_mock::create_ssh_config_with_identity(port, key_file.path());
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .runtime(runtime);
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
-        assert!(session.authenticated().unwrap());
-    }
-
-    #[test]
-    fn should_connect_through_proxy_jump() {
-        use crate::ssh::container::ProxyJumpServers;
-
-        let servers = ProxyJumpServers::start();
-        let config_file = ssh_mock::create_ssh_config_with_proxy_jump(
-            &servers.target_host,
-            2222,
-            servers.first_jump.port(),
-            &servers.second_jump_host,
-        );
-        let opts = SshOpts::new("target")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .password("password")
-            .runtime(test_runtime());
-
-        let mut session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("failed to connect through ProxyJump");
-        assert!(
-            session
-                .authenticated()
-                .expect("failed to query session state")
-        );
-        assert_eq!(
-            session.cmd("pwd").expect("command through proxy failed").0,
-            0
-        );
-    }
-
-    #[test]
-    fn should_disable_proxy_jump_timeout_when_zero() {
-        use crate::ssh::container::ProxyJumpServers;
-
-        let servers = ProxyJumpServers::start();
-        let config_file = ssh_mock::create_ssh_config_with_proxy_jump(
-            &servers.target_host,
-            2222,
-            servers.first_jump.port(),
-            &servers.second_jump_host,
-        );
-        let opts = SshOpts::new("target")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .connection_timeout(Duration::ZERO)
-            .password("password")
-            .runtime(test_runtime());
-
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("zero connection timeout should allow ProxyJump handshakes to complete");
-        session.disconnect().expect("failed to disconnect");
-    }
-
-    #[test]
-    fn should_disable_public_key_authentication_from_ssh_config() {
-        use crate::ssh::container::OpensshServer;
-
-        let container = OpensshServer::start();
-        let runtime = test_runtime();
-        let key_file = ssh_mock::create_key_file();
-        let config_file = ssh_mock::create_ssh_config_with_identity_and_pubkey_authentication(
-            container.port(),
-            key_file.path(),
-            false,
-        );
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .runtime(runtime);
-
-        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
-
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .password("password")
-            .runtime(test_runtime());
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("password authentication should remain enabled");
-        assert!(
-            session
-                .authenticated()
-                .expect("failed to query session state")
-        );
-    }
-
-    #[test]
-    fn should_connect_with_certificate_file_from_ssh_config() {
-        use crate::ssh::container::OpensshServer;
-
-        let (key_file, certificate_file) = ssh_mock::create_certificate_key_files();
-        let container = OpensshServer::start_with_public_key(ssh_mock::MOCK_CERTIFICATE_AUTHORITY);
-        let config_file = ssh_mock::create_ssh_config_with_certificate(
-            container.port(),
-            key_file.path(),
-            certificate_file.path(),
-        );
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .runtime(test_runtime());
-
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("failed to authenticate with CertificateFile from SSH config");
-        assert!(
-            session
-                .authenticated()
-                .expect("failed to query session state")
-        );
-    }
-
-    #[test]
-    fn should_apply_pubkey_accepted_algorithms_from_ssh_config() {
-        use crate::ssh::container::OpensshServer;
-
-        let container = OpensshServer::start();
-        let key_file = ssh_mock::create_key_file();
-        let legacy_config = ssh_mock::create_ssh_config_with_identity_and_pubkey_algorithms(
-            container.port(),
-            key_file.path(),
-            "ssh-rsa",
-        );
-        let opts = SshOpts::new("sftp")
-            .config_file(legacy_config.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .runtime(test_runtime());
-        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
-
-        let modern_config = ssh_mock::create_ssh_config_with_identity_and_pubkey_algorithms(
-            container.port(),
-            key_file.path(),
-            "rsa-sha2-256",
-        );
-        let opts = SshOpts::new("sftp")
-            .config_file(modern_config.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .runtime(test_runtime());
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("failed to authenticate with the accepted RSA SHA-2 algorithm");
-        assert!(
-            session
-                .authenticated()
-                .expect("failed to query session state")
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn should_connect_to_ssh_server_auth_ssh_agent() {
-        use crate::SshAgentIdentity;
-        use crate::ssh::container::OpensshServer;
-
-        crate::mock::logger();
-        let agent = ssh_mock::TestSshAgent::start();
-
-        let key_file = ssh_mock::create_key_file();
-        // ssh-add refuses keys with loose permissions.
-        agent.add_key(key_file.path());
-
-        // Point the russh agent client at our agent. No key storage, no password:
-        // authentication must succeed through the agent alone.
-        let container = OpensshServer::start();
-        let port = container.port();
-        let runtime = test_runtime();
-        let config_file = ssh_mock::create_ssh_config(port);
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .ssh_agent_identity(Some(SshAgentIdentity::All))
-            .runtime(runtime);
-
-        let result = RusshSession::<NoCheckServerKey>::connect(&opts);
-        let session = result.expect("could not authenticate via ssh agent");
-        assert!(session.authenticated().unwrap());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn should_add_identity_file_to_ssh_agent_from_config() {
-        use std::io::Write as _;
-
-        use crate::ssh::container::OpensshServer;
-
-        let agent = ssh_mock::TestSshAgent::start();
-        let container = OpensshServer::start();
-        // This Ed25519 key is not authorized by the server. OpenSSH still adds a
-        // file key to the agent when it is loaded, before password fallback.
-        let (key_file, _certificate_file) = ssh_mock::create_certificate_key_files();
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host sftp\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    IdentityFile {identity}\n    AddKeysToAgent yes",
-            port = container.port(),
-            identity = key_file.path().display(),
-        )
-        .expect("failed to write SSH config");
-        let runtime = test_runtime();
-        let opts = SshOpts::new("sftp")
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .password("password")
-            .runtime(runtime.clone());
-
-        RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("failed to authenticate using IdentityFile");
-
-        let identities = runtime
-            .block_on(async {
-                let mut client =
-                    russh::keys::agent::client::AgentClient::connect_uds(agent.auth_sock()).await?;
-                client.request_identities().await
-            })
-            .expect("failed to list agent identities");
-        let expected_key = russh::keys::load_secret_key(key_file.path(), None)
-            .expect("failed to load expected private key")
-            .public_key()
-            .fingerprint(russh::keys::HashAlg::Sha256);
-
-        assert!(identities.iter().any(|identity| {
-            identity
-                .public_key()
-                .fingerprint(russh::keys::HashAlg::Sha256)
-                == expected_key
-        }));
-    }
-
-    #[test]
-    fn should_perform_shell_command_on_server() {
-        crate::mock::logger();
-        let container = crate::ssh::container::OpensshServer::start();
-        let port = container.port();
-
-        let runtime = test_runtime();
-        let opts = SshOpts::new("127.0.0.1")
-            .port(port)
-            .username("sftp")
-            .password("password")
-            .runtime(runtime);
-        let mut session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
-        assert!(session.authenticated().unwrap());
-        assert!(session.cmd("pwd").is_ok());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn should_forward_configured_ssh_agent() {
-        let agent = ssh_mock::TestSshAgent::start();
-        let key_file = ssh_mock::create_key_file();
-        agent.add_key(key_file.path());
-        let container = crate::ssh::container::OpensshServer::start();
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ForwardAgent yes",
-            port = container.port(),
-        )
-        .expect("failed to write SSH config");
-        let runtime = test_runtime();
-        let opts = SshOpts::new("forwarded")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(runtime);
-        let mut session =
-            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
-
-        let (status, output) = session
-            .cmd("ssh-add -L")
-            .expect("failed to query remote agent");
-        assert_eq!(status, 0, "remote ssh-add failed: {output}");
-        assert!(output.contains("ssh-rsa"));
-    }
-
-    #[test]
-    fn should_perform_shell_command_on_server_and_return_exit_code() {
-        crate::mock::logger();
-        let container = crate::ssh::container::OpensshServer::start();
-        let port = container.port();
-
-        let runtime = test_runtime();
-        let opts = SshOpts::new("127.0.0.1")
-            .port(port)
-            .username("sftp")
-            .password("password")
-            .runtime(runtime);
-        let mut session = RusshSession::<NoCheckServerKey>::connect(&opts).unwrap();
-        assert!(session.authenticated().unwrap());
-        assert_eq!(
-            session.cmd_at("pwd", Path::new("/tmp")).ok().unwrap(),
-            (0, String::from("/tmp\n"))
-        );
-        assert_eq!(
-            session
-                .cmd_at("pippopluto", Path::new("/tmp"))
-                .ok()
-                .unwrap()
-                .0,
-            127
-        );
-    }
-
-    #[test]
-    fn should_fail_authentication() {
-        crate::mock::logger();
-        let container = crate::ssh::container::OpensshServer::start();
-        let port = container.port();
-
-        let runtime = test_runtime();
-        let opts = SshOpts::new("127.0.0.1")
-            .port(port)
-            .username("sftp")
-            .password("ippopotamo")
-            .runtime(runtime);
-        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
-    }
-
-    #[test]
-    fn should_apply_configured_tcp_keep_alive() {
-        for (configured, expected) in [(Some(true), true), (Some(false), false), (None, true)] {
-            let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-                .expect("failed to bind test listener");
-            let address = listener
-                .local_addr()
-                .expect("failed to read test listener address");
-            let server = std::thread::spawn(move || {
-                let (_stream, _peer) = listener.accept().expect("failed to accept connection");
-            });
-            let runtime = test_runtime();
-            let stream = runtime
-                .block_on(connect_tcp(&address.to_string(), None, None, configured))
-                .expect("failed to connect test socket");
-
-            assert_eq!(
-                crate::ssh::backend::socket::keepalive(&stream)
-                    .expect("failed to read SO_KEEPALIVE"),
-                expected
-            );
-            drop(stream);
-            server.join().expect("test server panicked");
-        }
-
-        let listener =
-            std::net::TcpListener::bind(("127.0.0.1", 0)).expect("failed to bind test listener");
-        let address = listener
-            .local_addr()
-            .expect("failed to read test listener address");
-        let server = std::thread::spawn(move || {
-            let (_stream, _peer) = listener.accept().expect("failed to accept connection");
-        });
-        let runtime = test_runtime();
-        let stream = runtime
-            .block_on(connect_tcp(
-                &address.to_string(),
-                Some("127.0.0.1"),
-                None,
-                Some(true),
-            ))
-            .expect("failed to connect bound test socket");
-        assert!(
-            crate::ssh::backend::socket::keepalive(&stream)
-                .expect("failed to read bound SO_KEEPALIVE")
-        );
-        drop(stream);
-        server.join().expect("test server panicked");
-    }
-
-    #[test]
-    fn should_apply_configured_server_alive_interval() {
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(config_file, "Host keepalive\n    ServerAliveInterval 17")
-            .expect("failed to write SSH config");
-        let opts = SshOpts::new("keepalive")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .runtime(test_runtime());
-        let ssh_config = Config::try_from(&opts).expect("failed to parse SSH config");
-
-        assert_eq!(
-            russh_client_config(&opts, &ssh_config).keepalive_interval,
-            Some(Duration::from_secs(17))
-        );
-
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(config_file, "Host keepalive\n    ServerAliveInterval 0")
-            .expect("failed to write SSH config");
-        let opts = SshOpts::new("keepalive")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .runtime(test_runtime());
-        let ssh_config = Config::try_from(&opts).expect("failed to parse SSH config");
-        assert_eq!(
-            russh_client_config(&opts, &ssh_config).keepalive_interval,
-            None
-        );
-    }
-
-    #[test]
-    fn should_apply_connection_timeout_to_handshake() {
-        let (port, server) = ssh_mock::start_unresponsive_server(Duration::from_secs(2));
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host unresponsive\n    HostName 127.0.0.1\n    Port {port}\n    ConnectTimeout 5"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("unresponsive")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .connection_timeout(Duration::from_millis(100))
-            .runtime(test_runtime());
-
-        let started = Instant::now();
-        let result = RusshSession::<NoCheckServerKey>::connect(&opts);
-        let elapsed = started.elapsed();
-        let server_elapsed = server.join().expect("test server panicked");
-
-        assert!(result.is_err());
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "connection exceeded explicit timeout: {elapsed:?}"
-        );
-        assert!(
-            server_elapsed < Duration::from_secs(1),
-            "connection remained open after timeout: {server_elapsed:?}"
-        );
-    }
-
-    #[test]
-    fn should_disable_connection_timeout_when_zero() {
-        let container = crate::ssh::container::OpensshServer::start();
-        let opts = SshOpts::new("127.0.0.1")
-            .port(container.port())
-            .username("sftp")
-            .password("password")
-            .connection_timeout(Duration::ZERO)
-            .runtime(test_runtime());
-
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("zero connection timeout should allow the connection to complete");
-        session.disconnect().expect("failed to disconnect");
-    }
-
-    #[test]
-    fn should_retry_connection_using_configured_attempts() {
-        let container = crate::ssh::container::OpensshServer::start();
-        let (port, _proxy) = ssh_mock::start_flaky_proxy(container.port(), 1);
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host flaky\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    ConnectionAttempts 2"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("flaky")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("connection should succeed on the configured retry");
-        session.disconnect().expect("failed to disconnect");
-        drop(session);
-    }
-
-    #[test]
-    fn should_apply_configured_bind_address() {
-        let container = crate::ssh::container::OpensshServer::start();
-        let port = container.port();
-        let mut valid_config = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            valid_config,
-            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 127.0.0.1"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("bound")
-            .config_file(valid_config.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("failed to connect with an available bind address");
-        session.disconnect().expect("failed to disconnect");
-
-        let mut invalid_config = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            invalid_config,
-            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 192.0.2.1"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("bound")
-            .config_file(invalid_config.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
-
-        let mut precedence_config = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            precedence_config,
-            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindAddress 127.0.0.1\n    BindInterface remotefs-ssh-missing-interface"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("bound")
-            .config_file(precedence_config.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("BindAddress should take precedence over BindInterface");
-        session.disconnect().expect("failed to disconnect");
-    }
-
-    #[test]
-    fn should_apply_configured_bind_interface() {
-        let container = crate::ssh::container::OpensshServer::start();
-        let port = container.port();
-        let interface = ssh_mock::ipv4_loopback_interface();
-        let mut valid_config = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            valid_config,
-            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindInterface {interface}"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("bound")
-            .config_file(valid_config.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        let session = RusshSession::<NoCheckServerKey>::connect(&opts)
-            .expect("failed to connect through the configured interface");
-        session.disconnect().expect("failed to disconnect");
-
-        let mut invalid_config = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            invalid_config,
-            "Host bound\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    BindInterface remotefs-ssh-missing-interface"
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("bound")
-            .config_file(invalid_config.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
-    }
-
-    #[test]
-    fn should_apply_configured_remote_forward() {
-        let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
-        let (destination_port, destination) = ssh_mock::start_tcp_echo_server();
-        let (dynamic_destination_port, dynamic_destination) = ssh_mock::start_tcp_echo_server();
-        let remote_port = 43003;
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} 127.0.0.1:{destination_port}\n    RemoteForward 0",
-            port = container.port(),
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("forwarded")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        let mut session =
-            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
-        let dynamic_port = *session
-            .remote_forward_ports()
-            .get(1)
-            .expect("dynamic RemoteForward did not report its assigned port");
-
-        let (status, output) = session
-            .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))
-            .expect("failed to use configured remote forward");
-        assert_eq!(status, 0, "remote forwarding command failed: {output}");
-        assert_eq!(output, "pong\n");
-        destination.join().expect("TCP echo server panicked");
-
-        let (status, output) = session
-            .cmd(ssh_mock::socks5_test_command(
-                dynamic_port,
-                dynamic_destination_port,
-            ))
-            .expect("failed to use dynamic RemoteForward");
-        assert_eq!(status, 0, "dynamic forwarding command failed: {output}");
-        assert_eq!(output, "pong\n");
-        dynamic_destination
-            .join()
-            .expect("dynamic TCP echo server panicked");
-    }
-
-    #[test]
-    fn should_close_remote_forward_when_destination_connect_fails() {
-        let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
-        let destination = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .expect("failed to reserve closed destination port")
-            .local_addr()
-            .expect("failed to inspect closed destination port")
-            .port();
-        let remote_port = 43303;
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} 127.0.0.1:{destination}",
-            port = container.port(),
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("forwarded")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        let mut session =
-            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
-
-        let started = std::time::Instant::now();
-        let (status, output) = session
-            .cmd(format!(
-                "nc -w 10 127.0.0.1 {remote_port} </dev/null; printf closed"
-            ))
-            .expect("failed to exercise rejected RemoteForward destination");
-        assert_eq!(status, 0, "remote forwarding command failed: {output}");
-        assert_eq!(output, "closed");
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "failed RemoteForward channel was not closed promptly"
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn should_apply_remote_forward_with_unix_sockets() {
-        let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
-        let (_tcp_directory, tcp_destination_path, tcp_destination) =
-            ssh_mock::start_unix_echo_server();
-        let (_unix_directory, unix_destination_path, unix_destination) =
-            ssh_mock::start_unix_echo_server();
-        let remote_port = 43203;
-        let remote_socket = format!("/tmp/remotefs-ssh-{}.sock", std::process::id());
-        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
-        writeln!(
-            config_file,
-            "Host forwarded\n    HostName 127.0.0.1\n    Port {port}\n    User sftp\n    RemoteForward 127.0.0.1:{remote_port} {tcp_destination}\n    RemoteForward {remote_socket} {unix_destination}",
-            port = container.port(),
-            tcp_destination = tcp_destination_path.display(),
-            unix_destination = unix_destination_path.display(),
-        )
-        .expect("failed to write SSH config");
-        let opts = SshOpts::new("forwarded")
-            .config_file(config_file.path(), ParseRule::STRICT)
-            .password("password")
-            .runtime(test_runtime());
-        let mut session =
-            RusshSession::<NoCheckServerKey>::connect(&opts).expect("failed to connect");
-
-        let (status, output) = session
-            .cmd(format!("printf ping | nc -w 5 127.0.0.1 {remote_port}"))
-            .expect("failed to use Unix destination RemoteForward");
-        assert_eq!(status, 0, "remote forwarding command failed: {output}");
-        assert_eq!(output, "pong\n");
-        tcp_destination.join().expect("Unix echo server panicked");
-
-        let (status, output) = session
-            .cmd(format!("printf ping | nc -w 5 -U {remote_socket}"))
-            .expect("failed to use Unix listener RemoteForward");
-        assert_eq!(status, 0, "Unix listener command failed: {output}");
-        assert_eq!(output, "pong\n");
-        unix_destination.join().expect("Unix echo server panicked");
-    }
-
-    #[test]
-    fn test_filetransfer_sftp_bad_server() {
-        crate::mock::logger();
-        let runtime = test_runtime();
-        let opts = SshOpts::new("myverybad.verybad.server")
-            .port(10022)
-            .username("sftp")
-            .password("ippopotamo")
-            .runtime(runtime);
-        assert!(RusshSession::<NoCheckServerKey>::connect(&opts).is_err());
-    }
 }

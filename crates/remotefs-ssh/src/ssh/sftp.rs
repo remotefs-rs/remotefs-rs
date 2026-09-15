@@ -1,29 +1,74 @@
 //! ## SFTP
 //!
-//! Sftp remote fs implementation
+//! Blocking SFTP client implementing [`RemoteFs`].
 
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Write as _};
+use std::path::Path;
 
 use remotefs::File;
 use remotefs::fs::{
-    Metadata, ReadStream, RemoteError, RemoteErrorType, RemoteFs, RemoteResult, UnixPex, Welcome,
-    WriteStream,
+    Capabilities, ExecOutput, ReadOptions, ReadStream, RemoteError, RemoteErrorType, RemoteFs,
+    RemoteResult, SetMetadata, UnixPex, WriteOptions, WriteStream,
 };
+use remotefs::path::ensure_absolute;
 
 use super::SshOpts;
 use crate::SshSession;
 use crate::ssh::backend::{Sftp as _, WriteMode};
-use crate::utils::path as path_utils;
 
-/// Sftp "filesystem" client
+/// Mode applied to directories created without an explicit mode.
+const DEFAULT_DIR_MODE: i32 = 0o755;
+/// Mode applied to files created without an explicit mode.
+const DEFAULT_FILE_MODE: i32 = 0o644;
+
+/// Operations the SFTP client performs natively.
+pub const SFTP_CAPABILITIES: Capabilities = Capabilities::STREAM_READ
+    .union(Capabilities::STREAM_WRITE)
+    .union(Capabilities::APPEND)
+    .union(Capabilities::RANGE_READ)
+    .union(Capabilities::SEEK_READ)
+    .union(Capabilities::SEEK_WRITE)
+    .union(Capabilities::COPY)
+    .union(Capabilities::SYMLINK)
+    .union(Capabilities::SET_METADATA)
+    .union(Capabilities::POSIX_MODE)
+    .union(Capabilities::EXEC);
+
+/// Blocking SFTP filesystem client.
+///
+/// The client is generic over the SSH backend ([`crate::LibSsh2Session`] or
+/// [`crate::LibSshSession`]). Every path must be absolute.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # #[cfg(feature = "libssh2")]
+/// use std::path::Path;
+///
+/// # #[cfg(feature = "libssh2")]
+/// use remotefs::RemoteFs;
+/// # #[cfg(feature = "libssh2")]
+/// use remotefs::fs::ReadOptions;
+/// # #[cfg(feature = "libssh2")]
+/// use remotefs_ssh::{SftpFs, SshOpts};
+///
+/// # #[cfg(feature = "libssh2")]
+/// # fn main() -> remotefs::RemoteResult<()> {
+/// let mut client = SftpFs::libssh2(SshOpts::new("127.0.0.1").username("user").password("pw"));
+/// client.connect()?;
+/// let mut output = Vec::new();
+/// client.read_file(Path::new("/etc/hostname"), &ReadOptions::default(), &mut output)?;
+/// client.disconnect()
+/// # }
+/// # #[cfg(not(feature = "libssh2"))]
+/// # fn main() {}
+/// ```
 pub struct SftpFs<S>
 where
     S: SshSession,
 {
     session: Option<S>,
     sftp: Option<S::Sftp>,
-    wrkdir: PathBuf,
     opts: SshOpts,
 }
 
@@ -32,12 +77,7 @@ where
 impl SftpFs<super::backend::LibSsh2Session> {
     /// Constructs a new [`SftpFs`] instance with the `libssh2` backend.
     pub fn libssh2(opts: SshOpts) -> Self {
-        Self {
-            session: None,
-            sftp: None,
-            wrkdir: PathBuf::from("/"),
-            opts,
-        }
+        Self::new(opts)
     }
 }
 
@@ -46,30 +86,7 @@ impl SftpFs<super::backend::LibSsh2Session> {
 impl SftpFs<super::backend::LibSshSession> {
     /// Constructs a new [`SftpFs`] instance with the `libssh` backend.
     pub fn libssh(opts: SshOpts) -> Self {
-        Self {
-            session: None,
-            sftp: None,
-            wrkdir: PathBuf::from("/"),
-            opts,
-        }
-    }
-}
-
-#[cfg(feature = "russh")]
-#[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
-impl<T> SftpFs<super::backend::RusshSession<T>>
-where
-    T: russh::client::Handler + Default + Send + 'static,
-{
-    /// Constructs a new [`SftpFs`] instance with the `russh` backend.
-    pub fn russh(opts: SshOpts, runtime: std::sync::Arc<tokio::runtime::Runtime>) -> Self {
-        let opts = opts.runtime(runtime);
-        Self {
-            session: None,
-            sftp: None,
-            wrkdir: PathBuf::from("/"),
-            opts,
-        }
+        Self::new(opts)
     }
 }
 
@@ -77,118 +94,80 @@ impl<S> SftpFs<S>
 where
     S: SshSession,
 {
-    /// Get a reference to current `session` value.
-    pub fn session(&mut self) -> Option<&mut S> {
-        self.session.as_mut()
-    }
-
-    /// Get a reference to current `sftp` value.
-    pub fn sftp(&mut self) -> Option<&mut S::Sftp> {
-        self.sftp.as_mut()
-    }
-
-    // -- private
-
-    /// Recursively removes a directory and all its contents using only SFTP operations.
-    fn remove_dir_all_recursive(sftp: &S::Sftp, path: &Path) -> RemoteResult<()> {
-        let entries = sftp.readdir(path).map_err(|e| {
-            error!("Failed to list directory {}: {e}", path.display());
-            RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
-        })?;
-        for entry in &entries {
-            let entry_path = entry.path();
-            if entry.is_dir() {
-                Self::remove_dir_all_recursive(sftp, entry_path)?;
-            } else {
-                sftp.unlink(entry_path).map_err(|e| {
-                    error!("Failed to remove file {}: {e}", entry_path.display());
-                    RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
-                })?;
-            }
+    fn new(opts: SshOpts) -> Self {
+        Self {
+            session: None,
+            sftp: None,
+            opts,
         }
-        sftp.rmdir(path).map_err(|e| {
-            error!("Failed to remove directory {}: {e}", path.display());
-            RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
-        })
+    }
+
+    /// Returns the ports assigned to configured TCP `RemoteForward` listeners.
+    ///
+    /// Empty when disconnected.
+    pub fn remote_forward_ports(&self) -> Vec<u16> {
+        self.session
+            .as_ref()
+            .map(|session| session.remote_forward_ports().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Returns the server banner, when the backend exposes one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RemoteErrorType::NotConnected`] when disconnected.
+    pub fn banner(&self) -> RemoteResult<Option<String>> {
+        self.session()?.banner()
+    }
+
+    fn session(&self) -> RemoteResult<&S> {
+        self.session
+            .as_ref()
+            .ok_or_else(|| RemoteError::new(RemoteErrorType::NotConnected))
+    }
+
+    fn sftp(&self) -> RemoteResult<&S::Sftp> {
+        self.sftp
+            .as_ref()
+            .ok_or_else(|| RemoteError::new(RemoteErrorType::NotConnected))
+    }
+
+    fn mode(mode: Option<UnixPex>, default: i32) -> i32 {
+        mode.map(|mode| u32::from(mode) as i32).unwrap_or(default)
     }
 
     /// Recursively copies a file or directory using only SFTP operations.
     fn copy_recursive(sftp: &S::Sftp, src: &Path, dest: &Path) -> RemoteResult<()> {
-        let src_file = sftp.stat(src).map_err(|e| {
-            error!("Failed to stat {}: {e}", src.display());
-            RemoteError::new_ex(RemoteErrorType::NoSuchFileOrDirectory, e)
-        })?;
-
+        let src_file = sftp.stat(src)?;
         if src_file.is_dir() {
-            // Create destination directory with same mode
-            let mode = src_file
-                .metadata()
-                .mode
-                .map(|m| u32::from(m) as i32)
-                .unwrap_or(0o755);
-            sftp.mkdir(dest, mode).map_err(|e| {
-                error!("Failed to create directory {}: {e}", dest.display());
-                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-            })?;
-            // Recurse into children
-            let entries = sftp.readdir(src).map_err(|e| {
-                error!("Failed to list directory {}: {e}", src.display());
-                RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
-            })?;
-            for entry in &entries {
+            sftp.mkdir(dest, Self::mode(src_file.metadata().mode, DEFAULT_DIR_MODE))?;
+            for entry in sftp.readdir(src)? {
                 let name = entry.path().file_name().ok_or_else(|| {
-                    RemoteError::new_ex(
+                    RemoteError::with_message(
                         RemoteErrorType::BadFile,
-                        format!("entry has no file name: {}", entry.path().display()),
+                        format!(
+                            "entry has no file name: {path}",
+                            path = entry.path().display()
+                        ),
                     )
                 })?;
-                let child_dest = dest.join(name);
-                Self::copy_recursive(sftp, entry.path(), &child_dest)?;
+                Self::copy_recursive(sftp, entry.path(), &dest.join(name))?;
             }
-        } else {
-            // Copy file contents
-            let mode = src_file
-                .metadata()
-                .mode
-                .map(|m| u32::from(m) as i32)
-                .unwrap_or(0o644);
-            let mut reader = sftp.open_read(src).map_err(|e| {
-                error!("Failed to open {} for reading: {e}", src.display());
-                RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
-            })?;
-            let mut writer = sftp
-                .open_write(dest, WriteMode::Truncate, mode)
-                .map_err(|e| {
-                    error!("Failed to open {} for writing: {e}", dest.display());
-                    RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-                })?;
-            let mut buffer = [0u8; 65535];
-            loop {
-                let bytes_read = reader
-                    .read(&mut buffer)
-                    .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
-                if bytes_read == 0 {
-                    break;
-                }
-                writer
-                    .write_all(&buffer[..bytes_read])
-                    .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
-            }
-            writer
-                .flush()
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
+            return Ok(());
         }
-
-        Ok(())
-    }
-
-    /// Check connection status
-    fn check_connection(&mut self) -> RemoteResult<()> {
-        if self.is_connected() {
-            Ok(())
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
+        let mut reader = sftp.open_read(src, &ReadOptions::default())?;
+        let mut writer = sftp.open_write(
+            dest,
+            WriteMode::Truncate,
+            Self::mode(src_file.metadata().mode, DEFAULT_FILE_MODE),
+        )?;
+        let copied = io::copy(&mut reader, &mut writer)
+            .and_then(|_| writer.flush())
+            .map_err(RemoteError::from);
+        let finished_read = reader.finish();
+        let finished_write = writer.finish();
+        copied.and(finished_read).and(finished_write)
     }
 }
 
@@ -196,409 +175,165 @@ impl<S> RemoteFs for SftpFs<S>
 where
     S: SshSession,
 {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
+    fn connect(&mut self) -> RemoteResult<()> {
+        if self.session.is_some() {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyConnected));
+        }
         debug!("Initializing SFTP connection...");
         let session = S::connect(&self.opts)?;
-        // Get SFTP client first so we can resolve the working directory without shell commands
         debug!("Getting SFTP client...");
-        let sftp = match session.sftp() {
-            Ok(s) => s,
-            Err(err) => {
-                error!("Could not get sftp client: {err}");
-                return Err(RemoteError::new_ex(RemoteErrorType::ProtocolError, err));
-            }
-        };
-        // Resolve working directory via SFTP realpath instead of shell `pwd`
-        debug!("Getting working directory...");
-        self.wrkdir = sftp.realpath(Path::new(".")).map_err(|err| {
-            error!("Could not resolve working directory: {err}");
-            RemoteError::new_ex(RemoteErrorType::ProtocolError, err)
+        let sftp = session.sftp().map_err(|err| {
+            error!("Could not get sftp client: {err}");
+            err
         })?;
+        info!("Connection established");
         self.session = Some(session);
         self.sftp = Some(sftp);
-        let banner = self.session.as_ref().unwrap().banner()?;
-        debug!(
-            "Connection established: '{}'; working directory {}",
-            banner.as_deref().unwrap_or(""),
-            self.wrkdir.display()
-        );
-        Ok(Welcome::default().banner(banner))
+        Ok(())
     }
 
     fn disconnect(&mut self) -> RemoteResult<()> {
         debug!("Disconnecting from remote...");
-        if let Some(session) = self.session.as_ref() {
-            // First free sftp
-            self.sftp = None;
-            // Disconnect (greet server with 'Mandi' as they do in Friuli)
-            match session.disconnect() {
-                Ok(_) => {
-                    // Set session and sftp to none
-                    self.session = None;
-                    Ok(())
-                }
-                Err(err) => Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, err)),
-            }
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
+        let session = self
+            .session
+            .take()
+            .ok_or_else(|| RemoteError::new(RemoteErrorType::NotConnected))?;
+        self.sftp = None;
+        session.disconnect()
     }
 
-    fn is_connected(&mut self) -> bool {
+    fn is_connected(&self) -> bool {
         self.session
             .as_ref()
-            .map(|x| x.authenticated().unwrap_or_default())
-            .unwrap_or_default()
+            .is_some_and(|session| session.authenticated().unwrap_or(false))
     }
 
-    fn pwd(&mut self) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        Ok(self.wrkdir.clone())
+    fn capabilities(&self) -> Capabilities {
+        SFTP_CAPABILITIES
     }
 
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        let dir = path_utils::absolutize(self.wrkdir.as_path(), dir);
-        // Stat path to check if it exists. If it is a file, return error
-        match self.stat(dir.as_path()) {
-            Err(err) => Err(err),
-            Ok(file) if file.is_dir() => {
-                self.wrkdir = dir;
-                debug!("Changed working directory to {}", self.wrkdir.display());
-                Ok(self.wrkdir.clone())
-            }
-            Ok(_) => Err(RemoteError::new_ex(
-                RemoteErrorType::BadFile,
-                "expected directory, got file",
-            )),
-        }
+    fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
+        ensure_absolute(path)?;
+        debug!("Reading directory content of {path}", path = path.display());
+        self.sftp()?.readdir(path)
     }
 
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Reading directory content of {}", path.display());
-            match sftp.readdir(path.as_path()) {
-                Err(err) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, err)),
-                Ok(files) => Ok(files),
-            }
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
+    fn stat(&self, path: &Path) -> RemoteResult<File> {
+        ensure_absolute(path)?;
+        debug!("Collecting metadata for {path}", path = path.display());
+        self.sftp()?.stat(path)
     }
 
-    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Collecting metadata for {}", path.display());
-            sftp.stat(path.as_path()).map_err(|e| {
-                error!("Stat failed: {e}");
-                RemoteError::new_ex(RemoteErrorType::NoSuchFileOrDirectory, e)
-            })
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Setting metadata for {}", path.display());
-            sftp.setstat(path.as_path(), metadata)
-                .map(|_| ())
-                .map_err(|e| {
-                    error!("Setstat failed: {e}");
-                    RemoteError::new_ex(RemoteErrorType::StatFailed, e)
-                })
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
+    fn exists(&self, path: &Path) -> RemoteResult<bool> {
         match self.stat(path) {
             Ok(_) => Ok(true),
-            Err(RemoteError {
-                kind: RemoteErrorType::NoSuchFileOrDirectory,
-                ..
-            }) => Ok(false),
+            Err(err) if err.kind() == RemoteErrorType::NoSuchFileOrDirectory => Ok(false),
             Err(err) => Err(err),
         }
     }
 
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Remove file {}", path.display());
-            sftp.unlink(path.as_path()).map_err(|e| {
-                error!("Remove failed: {e}");
-                RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
-            })
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
+    fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
+        ensure_absolute(path)?;
+        debug!("Setting metadata for {path}", path = path.display());
+        self.sftp()?.set_metadata(path, metadata)
     }
 
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Remove dir {}", path.display());
-            sftp.rmdir(path.as_path()).map_err(|e| {
-                error!("Remove failed: {e}");
-                RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e)
-            })
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
+    fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
+        ensure_absolute(path)?;
+        let sftp = self.sftp()?;
+        if self.exists(path)? {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
-    }
-
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        debug!("Removing directory {} recursively", path.display());
-        let sftp = self.sftp.as_ref().unwrap();
-        Self::remove_dir_all_recursive(sftp, &path)
-    }
-
-    fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        // Check if already exists
+        let mode = Self::mode(mode, DEFAULT_DIR_MODE);
         debug!(
-            "Creating directory {} (mode: {:o})",
-            path.display(),
-            u32::from(mode)
+            "Creating directory {path} (mode: {mode:o})",
+            path = path.display()
         );
-        if self.exists(path.as_path())? {
-            error!("directory {} already exists", path.display());
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
-        }
-        self.sftp
-            .as_ref()
-            .unwrap()
-            .mkdir(path.as_path(), u32::from(mode) as i32)
-            .map_err(|e| {
-                error!("Create dir failed: {e}");
-                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-            })
+        sftp.mkdir(path, mode)
     }
 
-    fn symlink(&mut self, path: &Path, target: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        // Check if already exists
+    fn remove_file(&self, path: &Path) -> RemoteResult<()> {
+        ensure_absolute(path)?;
+        debug!("Removing file {path}", path = path.display());
+        self.sftp()?.unlink(path)
+    }
+
+    fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
+        ensure_absolute(path)?;
+        debug!("Removing directory {path}", path = path.display());
+        self.sftp()?.rmdir(path)
+    }
+
+    fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        ensure_absolute(src)?;
+        ensure_absolute(dest)?;
         debug!(
-            "Creating symlink at {} pointing to {}",
-            path.display(),
-            target.display()
+            "Renaming {src} to {dest}",
+            src = src.display(),
+            dest = dest.display()
+        );
+        self.sftp()?.rename(src, dest)
+    }
+
+    fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        ensure_absolute(src)?;
+        ensure_absolute(dest)?;
+        debug!(
+            "Copying {src} to {dest}",
+            src = src.display(),
+            dest = dest.display()
+        );
+        Self::copy_recursive(self.sftp()?, src, dest)
+    }
+
+    fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+        ensure_absolute(path)?;
+        ensure_absolute(target)?;
+        let sftp = self.sftp()?;
+        debug!(
+            "Creating symlink at {path} pointing to {target}",
+            path = path.display(),
+            target = target.display()
         );
         if !self.exists(target)? {
-            error!("target {} doesn't exist", target.display());
             return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
         }
-        self.sftp
-            .as_ref()
-            .unwrap()
-            .symlink(target, path.as_path())
-            .map_err(|e| {
-                error!("Symlink failed: {e}");
-                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-            })
+        sftp.symlink(target, path)
     }
 
-    fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = path_utils::absolutize(self.wrkdir.as_path(), src);
-        if !self.exists(src.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
-        debug!("Copying {} to {}", src.display(), dest.display());
-        let sftp = self.sftp.as_ref().unwrap();
-        Self::copy_recursive(sftp, &src, &dest)
+    fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream> {
+        ensure_absolute(path)?;
+        debug!("Opening file at {path} ({opts:?})", path = path.display());
+        self.sftp()?.open_read(path, opts)
     }
 
-    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = path_utils::absolutize(self.wrkdir.as_path(), src);
-        // check if file exists
-        if !self.exists(src.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        let dest = path_utils::absolutize(self.wrkdir.as_path(), dest);
-        debug!("Moving {} to {}", src.display(), dest.display());
-        self.sftp
-            .as_ref()
-            .unwrap()
-            .rename(src.as_path(), dest.as_path())
-            .map_err(|e| {
-                error!("Move failed: {e}",);
-                RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-            })
+    fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
+        ensure_absolute(path)?;
+        debug!("Creating file at {path}", path = path.display());
+        self.sftp()?.open_write(
+            path,
+            WriteMode::Truncate,
+            Self::mode(opts.mode, DEFAULT_FILE_MODE),
+        )
     }
 
-    fn exec(&mut self, cmd: &str) -> RemoteResult<(u32, String)> {
-        self.check_connection()?;
+    fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
+        ensure_absolute(path)?;
+        debug!(
+            "Opening file at {path} for appending",
+            path = path.display()
+        );
+        self.sftp()?.open_write(
+            path,
+            WriteMode::Append,
+            Self::mode(opts.mode, DEFAULT_FILE_MODE),
+        )
+    }
+
+    fn exec(&self, cmd: &str) -> RemoteResult<ExecOutput> {
         debug!(r#"Executing command "{cmd}""#);
-
-        self.session
-            .as_mut()
-            .unwrap()
-            .cmd_at(cmd, self.wrkdir.as_path())
-    }
-
-    fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Opening file at {} for appending", path.display());
-            let mode = metadata.mode.map(|x| u32::from(x) as i32).unwrap_or(0o644);
-            sftp.open_write(path.as_path(), WriteMode::Append, mode)
-                .map_err(|e| {
-                    error!("Append failed: {e}",);
-                    RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
-                })
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream> {
-        if let Some(sftp) = self.sftp.as_ref() {
-            let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-            debug!("Creating file at {}", path.display());
-            let mode = metadata.mode.map(|x| u32::from(x) as i32).unwrap_or(0o644);
-            sftp.open_write(path.as_path(), WriteMode::Truncate, mode)
-                .map_err(|e| {
-                    error!("Create failed: {e}",);
-                    RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e)
-                })
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    fn open(&mut self, path: &Path) -> RemoteResult<ReadStream> {
-        self.check_connection()?;
-        let path = path_utils::absolutize(self.wrkdir.as_path(), path);
-        // check if file exists
-        if !self.exists(path.as_path()).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        debug!("Opening file at {}", path.display());
-        self.sftp
-            .as_ref()
-            .unwrap()
-            .open_read(path.as_path())
-            .map_err(|e| {
-                error!("Open failed: {e}",);
-                RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e)
-            })
-    }
-
-    // -- override (std::io::copy is VERY slow on SFTP <https://github.com/remotefs-rs/remotefs-rs/issues/6>)
-
-    fn append_file(
-        &mut self,
-        path: &Path,
-        metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
-    ) -> RemoteResult<u64> {
-        if self.is_connected() {
-            let mut stream = self.append(path, metadata)?;
-            trace!("Opened remote file");
-            let mut bytes: usize = 0;
-            let transfer_size = metadata.size as usize;
-            let mut buffer: [u8; 65535] = [0; 65535];
-            while bytes < transfer_size {
-                let bytes_read = reader.read(&mut buffer).map_err(|e| {
-                    error!("Failed to read from file: {e}",);
-                    RemoteError::new_ex(RemoteErrorType::IoError, e)
-                })?;
-                let mut delta = 0;
-                while delta < bytes_read {
-                    delta += stream.write(&buffer[delta..bytes_read]).map_err(|e| {
-                        error!("Failed to write to stream: {e}",);
-                        RemoteError::new_ex(RemoteErrorType::IoError, e)
-                    })?;
-                }
-                bytes += bytes_read;
-            }
-            self.on_written(stream)?;
-            trace!("Written {bytes} bytes to destination",);
-            Ok(bytes as u64)
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    fn create_file(
-        &mut self,
-        path: &Path,
-        metadata: &Metadata,
-        mut reader: Box<dyn std::io::Read + Send>,
-    ) -> RemoteResult<u64> {
-        if self.is_connected() {
-            let mut stream = self.create(path, metadata)?;
-            trace!("Opened remote file");
-            let mut bytes: usize = 0;
-            let transfer_size = metadata.size as usize;
-            let mut buffer: [u8; 65535] = [0; 65535];
-            while bytes < transfer_size {
-                let bytes_read = reader.read(&mut buffer).map_err(|e| {
-                    error!("Failed to read from file: {e}",);
-                    RemoteError::new_ex(RemoteErrorType::IoError, e)
-                })?;
-                let mut delta = 0;
-                while delta < bytes_read {
-                    delta += stream.write(&buffer[delta..bytes_read]).map_err(|e| {
-                        error!("Failed to write to stream: {e}",);
-                        RemoteError::new_ex(RemoteErrorType::IoError, e)
-                    })?;
-                }
-                bytes += bytes_read;
-            }
-            stream.flush().map_err(|e| {
-                error!("Failed to flush stream: {e}");
-                RemoteError::new_ex(RemoteErrorType::IoError, e)
-            })?;
-            self.on_written(stream)?;
-            trace!("Written {bytes} bytes to destination",);
-            Ok(bytes as u64)
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    fn open_file(&mut self, src: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
-        if self.is_connected() {
-            let transfer_size = self.stat(src)?.metadata().size as usize;
-            let mut stream = self.open(src)?;
-            trace!("File opened");
-            let mut bytes: usize = 0;
-            let mut buffer: [u8; 65535] = [0; 65535];
-            while bytes < transfer_size {
-                let bytes_read = stream.read(&mut buffer).map_err(|e| {
-                    error!("Failed to read from stream: {e}");
-                    RemoteError::new_ex(RemoteErrorType::IoError, e)
-                })?;
-                let mut delta = 0;
-                while delta < bytes_read {
-                    delta += dest.write(&buffer[delta..bytes_read]).map_err(|e| {
-                        error!("Failed to write to file: {e}",);
-                        RemoteError::new_ex(RemoteErrorType::IoError, e)
-                    })?;
-                }
-                bytes += bytes_read;
-            }
-            self.on_read(stream)?;
-            trace!("Copied {bytes} bytes to destination",);
-            Ok(bytes as u64)
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
+        let (exit_code, stdout) = self.session()?.cmd(cmd)?;
+        Ok(ExecOutput::new(exit_code, stdout))
     }
 }
 

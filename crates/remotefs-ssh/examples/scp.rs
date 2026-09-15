@@ -3,7 +3,7 @@ use std::path::Path;
 
 use log::info;
 use remotefs::RemoteFs as _;
-use remotefs::fs::Metadata;
+use remotefs::fs::{ReadOptions, WriteOptions};
 use remotefs_ssh::{ScpFs, SshOpts};
 
 const FILE_SIZE: usize = 2 * 1024 * 1024;
@@ -53,19 +53,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // upload file to temp
     let remote_file = Path::new("/tmp/remote_test_file.bin");
-    let mut writer = scp_fs.create(remote_file, &Metadata::default().size(FILE_SIZE as u64))?;
-    let mut bytes = 0;
     const CHUNK_SIZE: usize = 64 * 1024;
     let chunk = vec![0x01; CHUNK_SIZE];
+    let mut writer = scp_fs.create(
+        remote_file,
+        &WriteOptions::default().size_hint(FILE_SIZE as u64),
+    )?;
+    let mut bytes = 0;
     while bytes < FILE_SIZE {
         let chunk_size = std::cmp::min(CHUNK_SIZE, FILE_SIZE - bytes);
-        writer.write_all(&chunk)?;
+        writer.write_all(&chunk[..chunk_size])?;
         bytes += chunk_size;
     }
-    info!("Uploaded file to {:?}", remote_file);
+    writer.flush()?;
+    writer.finish()?;
+    info!("Uploaded file to {remote_file:?}");
 
     // download file
-    let mut reader = scp_fs.open(remote_file)?;
+    let mut reader = scp_fs.open(remote_file, &ReadOptions::default())?;
     let mut bytes = 0;
     let mut buffer = vec![0u8; CHUNK_SIZE];
     while bytes < FILE_SIZE {
@@ -73,7 +78,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reader.read_exact(&mut buffer[..chunk_size])?;
         bytes += chunk_size;
     }
-    info!("Downloaded file from {:?}", remote_file);
+    reader.finish()?;
+    info!("Downloaded file from {remote_file:?}");
 
     // remove file
     scp_fs.remove_file(remote_file)?;

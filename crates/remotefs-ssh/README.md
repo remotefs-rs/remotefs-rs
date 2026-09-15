@@ -25,8 +25,8 @@ for the SFTP/SCP protocol.
 First of all, add `remotefs-ssh` to your project dependencies:
 
 ```toml
-remotefs = "0.3"
-remotefs-ssh = "0.8"
+remotefs = "1"
+remotefs-ssh = "1"
 ```
 
 > [!NOTE]
@@ -51,9 +51,6 @@ Each C backend can be built with the vendored version, using the vendored featur
 If the vendored feature is **NOT** provided, you will need to have the corresponding system libraries installed on your
 machine.
 
-> [!NOTE]
-> If you need SftpFs to be `Sync` YOU MUST use `libssh2` or `russh`. The `libssh` backend does not support `Sync`.
-
 ### Other features
 
 these features are supported:
@@ -63,103 +60,131 @@ these features are supported:
 
 ## Ssh client
 
-Here is a basic usage example, with the `Sftp` client, which is very similiar to the `Scp` client.
-
-The `SftpFs` and `ScpFs` constructors vary depending on the enabled backend:
-`SftpFs::libssh2`, `SftpFs::libssh`, or `SftpFs::russh` (and likewise for `ScpFs`).
+The blocking `SftpFs` and `ScpFs` clients use the `libssh2` or `libssh` backends.
+The `russh` backend provides native asynchronous `RusshSftpFs` and `RusshScpFs`
+clients, plus blocking wrappers for applications that need the `RemoteFs` trait.
+Every path passed to a client must be absolute.
 
 ### libssh2 / libssh example
 
 ```rust,ignore
-use remotefs::RemoteFs;
-use remotefs_ssh::{SshConfigParseRule, SftpFs, SshOpts};
+use std::io::Cursor;
 use std::path::Path;
+
+use remotefs::RemoteFs;
+use remotefs::fs::{ReadOptions, WriteOptions};
+use remotefs_ssh::{SftpFs, SshConfigParseRule, SshOpts};
 
 let opts = SshOpts::new("127.0.0.1")
     .port(22)
     .username("test")
     .password("password")
-    .config_file(Path::new("/home/cvisintin/.ssh/config"), ParseRule::STRICT);
+    .config_file(Path::new("/home/cvisintin/.ssh/config"), SshConfigParseRule::STRICT);
 
 let mut client = SftpFs::libssh2(opts);
-
-// connect
-assert!(client.connect().is_ok());
-// get working directory
-println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-// change working directory
-assert!(client.change_dir(Path::new("/tmp")).is_ok());
-// disconnect
-assert!(client.disconnect().is_ok());
+client.connect()?;
+let data = b"hello";
+client.write_file(
+    Path::new("/tmp/hello.txt"),
+    &WriteOptions::default().size_hint(data.len() as u64),
+    &mut Cursor::new(data),
+)?;
+let mut output = Vec::new();
+client.read_file(Path::new("/tmp/hello.txt"), &ReadOptions::default(), &mut output)?;
+assert_eq!(output, data);
+client.disconnect()?;
+# Ok::<(), remotefs::RemoteError>(())
 ```
 
-### russh example
+### russh (async)
 
-The `russh` backend requires a Tokio runtime and a type implementing `russh::client::Handler`
-for server key verification. `NoCheckServerKey` is provided as a convenience handler that
-accepts all host keys.
+The `russh` backend runs on the Tokio runtime that drives its futures. A type
+implementing `russh::client::Handler` controls server key verification;
+`NoCheckServerKey` accepts every host key.
+
+```rust,ignore
+use std::path::Path;
+
+use remotefs::AsyncRemoteFs;
+use remotefs_ssh::{NoCheckServerKey, RusshSftpFs, SshOpts};
+
+#[tokio::main]
+async fn main() -> remotefs::RemoteResult<()> {
+    let mut client: RusshSftpFs<NoCheckServerKey> = RusshSftpFs::new(
+        SshOpts::new("127.0.0.1")
+            .username("test")
+            .password("password"),
+    );
+    client.connect().await?;
+    for entry in client.list_dir(Path::new("/tmp")).await? {
+        println!("{name}", name = entry.name());
+    }
+    client.disconnect().await
+}
+```
+
+### russh (blocking wrapper)
 
 ```rust,ignore
 use remotefs::RemoteFs;
-use remotefs_ssh::{NoCheckServerKey, SftpFs, SshOpts};
-use std::path::Path;
-use std::sync::Arc;
+use remotefs_ssh::{NoCheckServerKey, RusshSftpFs, SshOpts};
 
-let runtime = Arc::new(
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap(),
-);
-
-let opts = SshOpts::new("127.0.0.1")
-    .port(22)
-    .username("test")
-    .password("password");
-
-let mut client: SftpFs<remotefs_ssh::RusshSession<NoCheckServerKey>> =
-    SftpFs::russh(opts, runtime);
-
-// connect
-assert!(client.connect().is_ok());
-// get working directory
-println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-// change working directory
-assert!(client.change_dir(Path::new("/tmp")).is_ok());
-// disconnect
-assert!(client.disconnect().is_ok());
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let mut client: Box<dyn RemoteFs> = Box::new(
+        RusshSftpFs::<NoCheckServerKey>::new(SshOpts::new("127.0.0.1"))
+            .into_blocking(runtime.handle().clone()),
+    );
+    client.connect()?;
+    client.disconnect()?;
+    Ok(())
+}
 ```
 
 ---
 
-### Client compatibility table ✔️
+### Client compatibility table
 
-The following table states the compatibility for the client client and the remote file system trait method.
+The following table states the compatibility for each client and the remote
+file system trait method. `connect()`, `disconnect()`, and `is_connected()` are
+always supported and are omitted.
 
-Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
+| Client/Method  | Scp                    | Sftp |
+| -------------- | ---------------------- | ---- |
+| append_file    | No                     | Yes  |
+| append         | No                     | Yes  |
+| copy           | Yes                    | Yes  |
+| create_dir     | Yes                    | Yes  |
+| create         | Yes (size hint needed) | Yes  |
+| exec           | Yes                    | Yes  |
+| exists         | Yes                    | Yes  |
+| list_dir       | Yes                    | Yes  |
+| open           | Yes (no seek/range)    | Yes  |
+| read_file      | Yes                    | Yes  |
+| remove_dir_all | Yes                    | Yes  |
+| remove_dir     | Yes                    | Yes  |
+| remove_file    | Yes                    | Yes  |
+| rename         | Yes                    | Yes  |
+| set_metadata   | Yes                    | Yes  |
+| stat           | Yes                    | Yes  |
+| symlink        | Yes                    | Yes  |
+| write_file     | Yes                    | Yes  |
 
-| Client/Method  | Scp | Sftp |
-| -------------- | --- | ---- |
-| append_file    | No  | Yes  |
-| append         | No  | Yes  |
-| change_dir     | Yes | Yes  |
-| copy           | Yes | Yes  |
-| create_dir     | Yes | Yes  |
-| create_file    | Yes | Yes  |
-| create         | Yes | Yes  |
-| exec           | Yes | Yes  |
-| exists         | Yes | Yes  |
-| list_dir       | Yes | Yes  |
-| mov            | Yes | Yes  |
-| open_file      | Yes | Yes  |
-| open           | Yes | Yes  |
-| pwd            | Yes | Yes  |
-| remove_dir_all | Yes | Yes  |
-| remove_dir     | Yes | Yes  |
-| remove_file    | Yes | Yes  |
-| setstat        | Yes | Yes  |
-| stat           | Yes | Yes  |
-| symlink        | Yes | Yes  |
+`capabilities()` reports the same information at runtime
+(`SFTP_CAPABILITIES`, `SCP_CAPABILITIES`).
+
+## Migrating from 0.9
+
+- Paths are absolute only.
+- `pwd` and `change_dir` were removed.
+- `connect` returns `()`; the server banner is available through `SftpFs::banner` and `ScpFs::banner` for the `libssh2` and `libssh` backends.
+- `open_file` and `create_file` became `read_file` and `write_file`, using `ReadOptions` and `WriteOptions`.
+- SCP `create` requires `WriteOptions::size_hint`.
+- Streams must be explicitly finished with `finish`.
+- `mov` became `rename`.
+- `setstat` became `set_metadata`.
+- `SftpFs::russh(opts, runtime)` became `RusshSftpFs::new(opts)` for async use, or `RusshSftpFs::new(opts).into_blocking(handle)` for blocking use.
+- See the [canonical migration guide](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md).
 
 ---
 

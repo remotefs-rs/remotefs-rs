@@ -7,5 +7,4 @@ mod libssh2;
 #[cfg(feature = "russh")]
 mod russh;
 
-use super::super::backend::*;
 use super::*;

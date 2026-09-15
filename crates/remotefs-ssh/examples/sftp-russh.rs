@@ -1,15 +1,15 @@
-use std::io::{Read as _, Write as _};
 use std::path::Path;
-use std::sync::Arc;
 
 use log::info;
-use remotefs::RemoteFs as _;
-use remotefs::fs::Metadata;
-use remotefs_ssh::{NoCheckServerKey, RusshSession, SftpFs, SshOpts};
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::{ReadOptions, WriteOptions};
+use remotefs_ssh::{NoCheckServerKey, RusshSftpFs, SshOpts};
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 const FILE_SIZE: usize = 2 * 1024 * 1024;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
         .format_source_path(true)
@@ -19,7 +19,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = std::env::args()
         .nth(1)
         .expect("Please provide the SSH host as the first argument. Syntax is user@hostname:port");
-
     let username = host
         .split('@')
         .next()
@@ -27,65 +26,58 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hostname = host
         .split('@')
         .nth(1)
-        .and_then(|h| h.split(':').next())
+        .and_then(|host| host.split(':').next())
         .expect("Failed to parse hostname from host argument");
     let port = host
         .split(':')
         .nth(1)
-        .and_then(|p| p.parse::<u16>().ok())
+        .and_then(|port| port.parse::<u16>().ok())
         .unwrap_or(22);
-
     let password = rpassword::prompt_password("Password: ")?;
 
-    let runtime = Arc::new(
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?,
-    );
-
-    let mut sftp_fs: SftpFs<RusshSession<NoCheckServerKey>> = SftpFs::russh(
+    let mut client: RusshSftpFs<NoCheckServerKey> = RusshSftpFs::new(
         SshOpts::new(hostname)
             .port(port)
             .username(username)
             .password(password),
-        runtime,
     );
-    sftp_fs.connect()?;
+    client.connect().await?;
 
-    // list files
-    let files = sftp_fs.list_dir(Path::new("/tmp"))?;
-    for file in files {
-        info!("Found file: {:?}", file);
+    for file in client.list_dir(Path::new("/tmp")).await? {
+        info!("Found file: {file:?}");
     }
 
-    // upload file to temp
     let remote_file = Path::new("/tmp/remote_test_file.bin");
-    let mut writer = sftp_fs.create(remote_file, &Metadata::default().size(FILE_SIZE as u64))?;
-    let mut bytes = 0;
-    const CHUNK_SIZE: usize = 64 * 1024;
-    let chunk = vec![0x01; CHUNK_SIZE];
-    while bytes < FILE_SIZE {
-        let chunk_size = std::cmp::min(CHUNK_SIZE, FILE_SIZE - bytes);
-        writer.write_all(&chunk[..chunk_size])?;
-        bytes += chunk_size;
+    let mut writer = client
+        .create(
+            remote_file,
+            &WriteOptions::default().size_hint(FILE_SIZE as u64),
+        )
+        .await?
+        .into_tokio();
+    let chunk = vec![0x01; 64 * 1024];
+    let mut written = 0;
+    while written < FILE_SIZE {
+        let length = (FILE_SIZE - written).min(chunk.len());
+        writer.write_all(&chunk[..length]).await?;
+        written += length;
     }
-    info!("Uploaded file to {:?}", remote_file);
+    writer.flush().await?;
+    writer.into_inner().finish().await?;
 
-    // download file
-    let mut reader = sftp_fs.open(remote_file)?;
-    let mut bytes = 0;
-    let mut buffer = vec![0u8; CHUNK_SIZE];
-    while bytes < FILE_SIZE {
-        let chunk_size = std::cmp::min(CHUNK_SIZE, FILE_SIZE - bytes);
-        reader.read_exact(&mut buffer[..chunk_size])?;
-        bytes += chunk_size;
+    let mut reader = client
+        .open(remote_file, &ReadOptions::default())
+        .await?
+        .into_tokio();
+    let mut buffer = vec![0_u8; 64 * 1024];
+    let mut remaining = FILE_SIZE;
+    while remaining > 0 {
+        let length = remaining.min(buffer.len());
+        reader.read_exact(&mut buffer[..length]).await?;
+        remaining -= length;
     }
-    info!("Downloaded file from {:?}", remote_file);
-
-    // remove file
-    sftp_fs.remove_file(remote_file)?;
-
-    sftp_fs.disconnect()?;
-
+    reader.into_inner().finish().await?;
+    client.remove_file(remote_file).await?;
+    client.disconnect().await?;
     Ok(())
 }

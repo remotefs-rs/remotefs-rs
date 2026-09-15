@@ -4,116 +4,128 @@
 
 //! # remotefs-ssh
 //!
-//! remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SCP/SFTP protocols.
+//! remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs),
+//! providing support for the SCP/SFTP protocols on top of remotefs 1.
 //!
 //! ## Get started
 //!
-//! First of all you need to add **remotefs** and the client to your project dependencies:
-//!
 //! ```toml
-//! remotefs = "^0.3"
-//! remotefs-ssh = "^0.8"
+//! remotefs = "1"
+//! remotefs-ssh = "1"
 //! ```
 //!
-//! > The library supports multiple ssh backends.
-//! > Currently `libssh2`, `libssh`, and `russh` are supported.
-//! >
-//! > By default the library is using `libssh2`.
+//! > The library supports multiple ssh backends: `libssh2` (default), `libssh`, and `russh`.
 //!
 //! ### Available backends
 //!
-//! Each backend can be set as a feature in your `Cargo.toml`. Multiple backends can be enabled at the same time.
+//! - `libssh2`: the default backend, using the `libssh2` C library. Blocking [`SftpFs`] / [`ScpFs`].
+//! - `libssh`: alternative backend using the `libssh` C library. Blocking [`SftpFs`] / [`ScpFs`].
+//! - `russh`: pure-Rust backend. Native asynchronous [`RusshSftpFs`] / [`RusshScpFs`]
+//!   implementing [`remotefs::AsyncRemoteFs`], plus blocking wrappers via `into_blocking`.
 //!
-//! - `libssh2`: The default backend, using the `libssh2` library for SSH connections.
-//! - `libssh`: An alternative backend, using the `libssh` library for SSH connections.
-//! - `russh`: A pure-Rust backend, using the `russh` library for SSH connections. Does not require any system C libraries.
+//! Each C backend can be built with the vendored version of the library:
+//! `libssh-vendored` and `libssh2-vendored`. Without them the corresponding
+//! system libraries must be installed.
 //!
-//! Each C backend can be built with the vendored version, using the vendored feature instead:
-//!
-//! - `libssh-vendored`: Build the `libssh` backend with the vendored version of the library.
-//! - `libssh2-vendored`: Build the `libssh2` backend with the vendored version of the library.
-//!
-//! If the vendored feature is **NOT** provided, you will need to have the corresponding system libraries installed on your machine.
-//!
-//! > If you need SftpFs to be `Sync` YOU MUST use `libssh2` or `russh`. The `libssh` backend does not support `Sync`.
+//! Every client is `Send + Sync`; operations take `&self` and every path must be absolute.
 //!
 //! ### Other features
 //!
-//! these features are supported:
-//!
-//! - `find`: enable `find()` method on client (*enabled by default*)
-//! - `no-log`: disable logging. By default, this library will log via the `log` crate.
+//! - `find`: enable [`remotefs::find`] / [`remotefs::find_async`] (*enabled by default*)
+//! - `no-log`: disable logging.
 //!
 //! ## Examples
 //!
-//! Here is a basic usage example, with the `Sftp` client, which is very similiar to the `Scp` client.
+//! ### libssh2 / libssh (blocking)
 //!
-//! The [`SftpFs`] and [`ScpFs`] constructors vary depending on the enabled backend:
-//! [`SftpFs::libssh2`], [`SftpFs::libssh`], or [`SftpFs::russh`] (and likewise for [`ScpFs`]).
-//!
-//! ### libssh2 / libssh
-//!
-//! ```rust,ignore
-//! use remotefs::RemoteFs;
-//! use remotefs_ssh::{SshConfigParseRule, SftpFs, SshOpts};
+//! ```rust,no_run
+//! # #[cfg(feature = "libssh2")]
+//! use std::io::Cursor;
+//! # #[cfg(feature = "libssh2")]
 //! use std::path::Path;
 //!
+//! # #[cfg(feature = "libssh2")]
+//! use remotefs::RemoteFs;
+//! # #[cfg(feature = "libssh2")]
+//! use remotefs::fs::{ReadOptions, WriteOptions};
+//! # #[cfg(feature = "libssh2")]
+//! use remotefs_ssh::{SftpFs, SshConfigParseRule, SshOpts};
+//!
+//! # #[cfg(feature = "libssh2")]
+//! # fn main() -> remotefs::RemoteResult<()> {
 //! let opts = SshOpts::new("127.0.0.1")
 //!     .port(22)
 //!     .username("test")
 //!     .password("password")
-//!     .config_file(Path::new("/home/cvisintin/.ssh/config"), ParseRule::STRICT);
+//!     .config_file(Path::new("/home/cvisintin/.ssh/config"), SshConfigParseRule::STRICT);
 //!
 //! let mut client = SftpFs::libssh2(opts);
-//!
-//! // connect
-//! assert!(client.connect().is_ok());
-//! // get working directory
-//! println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-//! // change working directory
-//! assert!(client.change_dir(Path::new("/tmp")).is_ok());
-//! // disconnect
-//! assert!(client.disconnect().is_ok());
+//! client.connect()?;
+//! let data = b"hello";
+//! client.write_file(
+//!     Path::new("/tmp/hello.txt"),
+//!     &WriteOptions::default().size_hint(data.len() as u64),
+//!     &mut Cursor::new(data),
+//! )?;
+//! let mut output = Vec::new();
+//! client.read_file(Path::new("/tmp/hello.txt"), &ReadOptions::default(), &mut output)?;
+//! assert_eq!(output, data);
+//! client.disconnect()
+//! # }
+//! # #[cfg(not(feature = "libssh2"))]
+//! # fn main() {}
 //! ```
 //!
-//! ### russh
+//! ### russh (async)
 //!
-//! The `russh` backend requires a Tokio runtime and a type implementing `russh::client::Handler`
-//! for server key verification. [`NoCheckServerKey`] is provided as a convenience handler that
-//! accepts all host keys.
+//! The `russh` backend needs a Tokio runtime driving its futures and a type
+//! implementing `russh::client::Handler` for server key verification.
+//! [`NoCheckServerKey`] accepts every host key.
 //!
-//! ```rust,ignore
-//! use remotefs::RemoteFs;
-//! use remotefs_ssh::{NoCheckServerKey, SftpFs, SshOpts};
+//! ```rust,no_run
+//! # #[cfg(feature = "russh")]
 //! use std::path::Path;
-//! use std::sync::Arc;
 //!
-//! let runtime = Arc::new(
-//!     tokio::runtime::Builder::new_current_thread()
-//!         .enable_all()
-//!         .build()
-//!         .unwrap(),
-//! );
+//! # #[cfg(feature = "russh")]
+//! use remotefs::AsyncRemoteFs;
+//! # #[cfg(feature = "russh")]
+//! use remotefs_ssh::{NoCheckServerKey, RusshSftpFs, SshOpts};
 //!
-//! let opts = SshOpts::new("127.0.0.1")
-//!     .port(22)
-//!     .username("test")
-//!     .password("password");
-//!
-//! let mut client: SftpFs<remotefs_ssh::RusshSession<NoCheckServerKey>> =
-//!     SftpFs::russh(opts, runtime);
-//!
-//! // connect
-//! assert!(client.connect().is_ok());
-//! // get working directory
-//! println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-//! // change working directory
-//! assert!(client.change_dir(Path::new("/tmp")).is_ok());
-//! // disconnect
-//! assert!(client.disconnect().is_ok());
+//! # #[cfg(feature = "russh")]
+//! # async fn example() -> remotefs::RemoteResult<()> {
+//! let mut client: RusshSftpFs<NoCheckServerKey> =
+//!     RusshSftpFs::new(SshOpts::new("127.0.0.1").port(22).username("test").password("password"));
+//! client.connect().await?;
+//! for entry in client.list_dir(Path::new("/tmp")).await? {
+//!     println!("{name}", name = entry.name());
+//! }
+//! client.disconnect().await
+//! # }
 //! ```
 //!
-
+//! ### russh (blocking wrapper)
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "russh")]
+//! use remotefs::RemoteFs;
+//! # #[cfg(feature = "russh")]
+//! use remotefs_ssh::{NoCheckServerKey, RusshSftpFs, SshOpts};
+//!
+//! # #[cfg(feature = "russh")]
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let runtime = tokio::runtime::Runtime::new()?;
+//! let mut client: Box<dyn RemoteFs> = Box::new(
+//!     RusshSftpFs::<NoCheckServerKey>::new(SshOpts::new("127.0.0.1"))
+//!         .into_blocking(runtime.handle().clone()),
+//! );
+//! client.connect()?;
+//! client.disconnect()?;
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "russh"))]
+//! # fn main() {}
+//! ```
+//!
 #![doc(html_playground_url = "https://play.rust-lang.org")]
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo-128.png"
@@ -136,8 +148,8 @@ compile_error!(
 
 mod ssh;
 pub use ssh::{
-    KeyMethod, MethodType, ParseRule as SshConfigParseRule, ScpFs, SftpFs, SshAgentIdentity,
-    SshKeyStorage, SshOpts, SshSession,
+    KeyMethod, MethodType, ParseRule as SshConfigParseRule, SCP_CAPABILITIES, SFTP_CAPABILITIES,
+    ScpFs, SftpFs, SshAgentIdentity, SshKeyStorage, SshOpts, SshSession,
 };
 
 #[cfg(feature = "libssh2")]
@@ -148,7 +160,10 @@ pub use self::ssh::LibSsh2Session;
 pub use self::ssh::LibSshSession;
 #[cfg(feature = "russh")]
 #[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
-pub use self::ssh::{NoCheckServerKey, RusshSession};
+pub use self::ssh::{
+    BlockingRusshScpFs, BlockingRusshSftpFs, NoCheckServerKey, RusshScpFs, RusshSession,
+    RusshSftpFs,
+};
 
 // -- utils
 pub(crate) mod utils;

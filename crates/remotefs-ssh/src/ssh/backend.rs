@@ -21,10 +21,9 @@ mod libssh2;
 #[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
 mod russh;
 
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use remotefs::fs::{Metadata, ReadStream, WriteStream};
+use remotefs::fs::{ReadOptions, ReadStream, SetMetadata, WriteStream};
 use remotefs::{File, RemoteResult};
 
 #[cfg(feature = "libssh")]
@@ -34,6 +33,8 @@ pub use self::libssh::LibSshSession;
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh2")))]
 pub use self::libssh2::LibSsh2Session;
 #[cfg(feature = "russh")]
+pub(crate) use self::russh::RusshSftp;
+#[cfg(feature = "russh")]
 #[cfg_attr(docsrs, doc(cfg(feature = "russh")))]
 pub use self::russh::{NoCheckServerKey, RusshSession};
 use crate::SshOpts;
@@ -41,10 +42,30 @@ use crate::SshOpts;
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 const MAX_FORWARD_CONNECTIONS: usize = 64;
 
-/// SSH session trait.
+/// SSH session trait for the blocking backends.
 ///
-/// Provides SSH channel functions
-pub trait SshSession: Sized {
+/// Every method takes `&self`: a session is shared by the client and by the
+/// streams it hands out, so backends guard their protocol handle with a
+/// `Mutex` where the underlying library is not `Sync`.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # #[cfg(feature = "libssh2")]
+/// use remotefs_ssh::{LibSsh2Session, SshOpts, SshSession};
+///
+/// # #[cfg(feature = "libssh2")]
+/// # fn main() -> remotefs::RemoteResult<()> {
+/// let session = LibSsh2Session::connect(&SshOpts::new("127.0.0.1").username("user").password("pw"))?;
+/// let (exit_code, stdout) = session.cmd("echo hello")?;
+/// assert_eq!(exit_code, 0);
+/// assert_eq!(stdout.trim(), "hello");
+/// session.disconnect()
+/// # }
+/// # #[cfg(not(feature = "libssh2"))]
+/// # fn main() {}
+/// ```
+pub trait SshSession: Send + Sync + Sized {
     type Sftp: Sftp;
 
     /// Connects to the SSH server and establishes a new [`SshSession`]
@@ -62,63 +83,46 @@ pub trait SshSession: Sized {
         &[]
     }
 
-    /// Get the SSH server banner.
+    /// Returns the SSH server banner, when the backend exposes one.
     fn banner(&self) -> RemoteResult<Option<String>>;
 
-    /// Check if the session is authenticated.
+    /// Returns whether the session is authenticated and alive.
     fn authenticated(&self) -> RemoteResult<bool>;
 
-    /// Executes a command on the SSH server and returns the exit code and the output.
-    fn cmd<S>(&mut self, cmd: S) -> RemoteResult<(u32, String)>
+    /// Executes a command on the server and returns its exit code and standard output.
+    fn cmd<S>(&self, cmd: S) -> RemoteResult<(u32, String)>
     where
         S: AsRef<str>;
 
-    /// Executes a command on the SSH server at a specific path and returns the exit code and the output.
-    fn cmd_at<S>(&mut self, cmd: S, path: &Path) -> RemoteResult<(u32, String)>
-    where
-        S: AsRef<str>,
-    {
-        self.cmd(format!("cd \"{}\"; {}", path.display(), cmd.as_ref()))
-    }
+    /// Receives a file over SCP as an owned stream honoring `opts`.
+    fn scp_recv(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream>;
 
-    /// Receives a file over SCP.
-    ///
-    /// Returns a channel can be read from server.
-    fn scp_recv(&self, path: &Path) -> RemoteResult<Box<dyn Read + Send>>;
-
-    /// Send a file over SCP.
-    ///
-    /// Returns a channel which can be written to send data
+    /// Sends a file of exactly `size` bytes over SCP.
     fn scp_send(
         &self,
         remote_path: &Path,
         mode: i32,
         size: u64,
         times: Option<(u64, u64)>,
-    ) -> RemoteResult<Box<dyn Write + Send>>;
+    ) -> RemoteResult<WriteStream>;
 
     /// Returns a SFTP client
     fn sftp(&self) -> RemoteResult<Self::Sftp>;
 }
 
-/// Sftp provider for a [`SshSession`] implementation via the [`SshSession::sftp`] method.
-pub trait Sftp {
-    /// Creates a new directory at the specified `path` with the given `mode`.
+/// SFTP provider for a [`SshSession`] implementation via the [`SshSession::sftp`] method.
+pub trait Sftp: Send + Sync {
+    /// Creates a new directory at `path` with the given `mode`.
     fn mkdir(&self, path: &Path, mode: i32) -> RemoteResult<()>;
 
-    /// Opens a file for reading at the specified `path`.
-    fn open_read(&self, path: &Path) -> RemoteResult<ReadStream>;
+    /// Opens `path` for reading, honoring `opts.offset` and `opts.length`.
+    fn open_read(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream>;
 
     /// Open a file for write at the specified `path` with the given `flags`. If the file is created, set the mode.
     fn open_write(&self, path: &Path, flags: WriteMode, mode: i32) -> RemoteResult<WriteStream>;
 
-    /// Lists the contents of a directory at `dirname` and returns the listed [`File`] for it.
-    fn readdir<T>(&self, dirname: T) -> RemoteResult<Vec<File>>
-    where
-        T: AsRef<Path>;
-
-    /// Resolve the real path for `path`.
-    fn realpath(&self, path: &Path) -> RemoteResult<PathBuf>;
+    /// Lists the entries of `dirname` (without `.` and `..`).
+    fn readdir(&self, dirname: &Path) -> RemoteResult<Vec<File>>;
 
     /// Renames a file from `src` to `dest`.
     fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()>;
@@ -126,22 +130,24 @@ pub trait Sftp {
     /// Removes a directory at `path`.
     fn rmdir(&self, path: &Path) -> RemoteResult<()>;
 
-    /// Set the [`Metadata`] for a file at `path`.
-    fn setstat(&self, path: &Path, metadata: Metadata) -> RemoteResult<()>;
+    /// Applies the requested metadata changes to `path`.
+    fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()>;
 
-    /// Get the [`File`] metadata for a file.
-    fn stat(&self, filename: &Path) -> RemoteResult<File>;
+    /// Returns the entry at `path` without following a final symlink.
+    fn stat(&self, path: &Path) -> RemoteResult<File>;
 
     /// Creates a symlink at `path` pointing to `target`.
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()>;
 
-    /// Deletes a file at `path`.
+    /// Deletes the file or symlink at `path`.
     fn unlink(&self, path: &Path) -> RemoteResult<()>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Open modes for reading and writing files.
 pub enum WriteMode {
+    /// Open or create and position at the end.
     Append,
+    /// Create or truncate.
     Truncate,
 }

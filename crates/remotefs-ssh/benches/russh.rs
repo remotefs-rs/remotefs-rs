@@ -1,14 +1,14 @@
 use std::borrow::Cow;
-use std::io::{Sink, Write as _};
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::io::{Read as _, Sink, Write as _, repeat};
+use std::path::Path;
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use remotefs::RemoteFs as _;
-use remotefs::fs::{Metadata, UnixPex};
+use remotefs::fs::{ReadOptions, WriteOptions};
 use remotefs_ssh::{
-    NoCheckServerKey, RusshSession, ScpFs, SftpFs, SshAgentIdentity, SshKeyStorage, SshOpts,
+    BlockingRusshScpFs, BlockingRusshSftpFs, NoCheckServerKey, RusshScpFs, RusshSftpFs,
+    SshAgentIdentity, SshKeyStorage, SshOpts,
 };
 use ssh2_config::ParseRule;
 use tempfile::NamedTempFile;
@@ -22,12 +22,11 @@ fn benchmark_scp_read(c: &mut Criterion) {
     c.bench_function("scp_read", |b| {
         b.iter_batched(
             BenchmarkCtx::new,
-            |mut ctx| {
-                let reader = Sink::default();
-
+            |ctx| {
+                let mut sink = Sink::default();
                 let sz = ctx
                     .scp
-                    .open_file(&PathBuf::from(P), Box::new(reader))
+                    .read_file(Path::new(P), &ReadOptions::default(), &mut sink)
                     .expect("Failed to open file for reading");
                 assert_eq!(sz, WRITE_SIZE, "File size mismatch");
             },
@@ -40,12 +39,11 @@ fn benchmark_sftp_read(c: &mut Criterion) {
     c.bench_function("sftp_read", |b| {
         b.iter_batched(
             BenchmarkCtx::new,
-            |mut ctx| {
-                let reader = Sink::default();
-
+            |ctx| {
+                let mut sink = Sink::default();
                 let sz = ctx
                     .sftp
-                    .open_file(&PathBuf::from(P), Box::new(reader))
+                    .read_file(Path::new(P), &ReadOptions::default(), &mut sink)
                     .expect("Failed to open file for reading");
                 assert_eq!(sz, WRITE_SIZE, "File size mismatch");
             },
@@ -54,13 +52,11 @@ fn benchmark_sftp_read(c: &mut Criterion) {
     });
 }
 
-type RusshScp = ScpFs<RusshSession<NoCheckServerKey>>;
-type RusshSftp = SftpFs<RusshSession<NoCheckServerKey>>;
-
 struct BenchmarkCtx {
     _container: OpensshServer,
-    scp: RusshScp,
-    sftp: RusshSftp,
+    scp: BlockingRusshScpFs<NoCheckServerKey>,
+    sftp: BlockingRusshSftpFs<NoCheckServerKey>,
+    _runtime: tokio::runtime::Runtime,
 }
 
 impl BenchmarkCtx {
@@ -68,87 +64,50 @@ impl BenchmarkCtx {
         let container = OpensshServer::start();
         let port = container.port();
 
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap(),
-        );
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
 
         let config_file = create_ssh_config(port);
         let scp_client = {
-            let mut client = ScpFs::russh(
+            let mut client = RusshScpFs::new(
                 SshOpts::new("scp")
                     .key_storage(Box::new(MockSshKeyStorage::default()))
                     .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
                     .ssh_agent_identity(Some(SshAgentIdentity::All)),
-                runtime.clone(),
-            );
+            )
+            .into_blocking(runtime.handle().clone());
             assert!(client.connect().is_ok());
-            // Create wrkdir
-            let tempdir = PathBuf::from(generate_tempdir());
-            assert!(
-                client
-                    .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-                    .is_ok()
-            );
-            // Change directory
-            assert!(client.change_dir(tempdir.as_path()).is_ok());
-
-            // write a file to transfer of 2MB.
-            let file_to_transfer = PathBuf::from(P);
-            // open file
-            let mut writer = client
-                .create(&file_to_transfer, &Metadata::default().size(WRITE_SIZE))
+            let mut reader = repeat(0x01).take(WRITE_SIZE);
+            client
+                .write_file(
+                    Path::new(P),
+                    &WriteOptions::default().size_hint(WRITE_SIZE),
+                    &mut reader,
+                )
                 .unwrap();
-            let mut written = 0;
-            let buf = [0; 1024 * 1024];
-            loop {
-                let to_write = buf.len().min(WRITE_SIZE as usize - written);
-                if to_write == 0 {
-                    break;
-                }
-                writer.write_all(&buf[..to_write]).unwrap();
-                written += to_write;
-            }
 
             client
         };
         let sftp_client = {
-            let mut client = SftpFs::russh(
+            let mut client = RusshSftpFs::new(
                 SshOpts::new("sftp")
                     .key_storage(Box::new(MockSshKeyStorage::default()))
                     .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
                     .ssh_agent_identity(Some(SshAgentIdentity::All)),
-                runtime,
-            );
+            )
+            .into_blocking(runtime.handle().clone());
             assert!(client.connect().is_ok());
-            // Create wrkdir
-            let tempdir = PathBuf::from(generate_tempdir());
-            assert!(
-                client
-                    .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-                    .is_ok()
-            );
-            // Change directory
-            assert!(client.change_dir(tempdir.as_path()).is_ok());
-
-            // write a file to transfer of 2MB.
-            let file_to_transfer = PathBuf::from(P);
-            // open file
-            let mut writer = client
-                .create(&file_to_transfer, &Metadata::default().size(WRITE_SIZE))
+            let mut reader = repeat(0x01).take(WRITE_SIZE);
+            client
+                .write_file(
+                    Path::new(P),
+                    &WriteOptions::default().size_hint(WRITE_SIZE),
+                    &mut reader,
+                )
                 .unwrap();
-            let mut written = 0;
-            let buf = [0; 1024 * 1024];
-            loop {
-                let to_write = buf.len().min(WRITE_SIZE as usize - written);
-                if to_write == 0 {
-                    break;
-                }
-                writer.write_all(&buf[..to_write]).unwrap();
-                written += to_write;
-            }
 
             client
         };
@@ -157,6 +116,7 @@ impl BenchmarkCtx {
             _container: container,
             scp: scp_client,
             sftp: sftp_client,
+            _runtime: runtime,
         }
     }
 }
@@ -302,18 +262,6 @@ impl SshKeyStorage for MockSshKeyStorage {
             _ => None,
         }
     }
-}
-
-fn generate_tempdir() -> String {
-    use rand::distr::Alphanumeric;
-    use rand::{RngExt, rng};
-    let mut rng = rng();
-    let name: String = std::iter::repeat(())
-        .map(|()| rng.sample(Alphanumeric))
-        .map(char::from)
-        .take(8)
-        .collect();
-    format!("/tmp/temp_{name}")
 }
 
 fn configure_criterion() -> Criterion {

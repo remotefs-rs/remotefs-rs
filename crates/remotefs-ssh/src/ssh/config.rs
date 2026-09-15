@@ -50,7 +50,7 @@ impl Config {
     fn parse(p: &Path, host: &str, rules: ParseRule) -> RemoteResult<HostParams> {
         trace!("Parsing configuration at {}", p.display());
         let mut reader = BufReader::new(File::open(p).map_err(|e| {
-            RemoteError::new_ex(
+            RemoteError::with_message(
                 RemoteErrorType::IoError,
                 format!("Could not open configuration file: {e}"),
             )
@@ -58,7 +58,7 @@ impl Config {
         SshConfig::default()
             .parse(&mut reader, rules)
             .map_err(|e| {
-                RemoteError::new_ex(
+                RemoteError::with_message(
                     RemoteErrorType::IoError,
                     format!("Could not parse configuration file: {e}"),
                 )
@@ -226,7 +226,7 @@ impl ProxyJumpSpec {
     }
 
     fn invalid(value: &str) -> RemoteError {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::BadAddress,
             format!("invalid ProxyJump destination '{value}'"),
         )

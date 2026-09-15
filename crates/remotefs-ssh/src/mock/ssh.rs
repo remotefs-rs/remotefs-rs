@@ -120,10 +120,6 @@ impl TestSshAgent {
         }
     }
 
-    pub fn auth_sock(&self) -> &str {
-        &self.auth_sock
-    }
-
     pub fn add_key(&self, key: &std::path::Path) {
         std::process::Command::new("chmod")
             .args(["600", &key.display().to_string()])

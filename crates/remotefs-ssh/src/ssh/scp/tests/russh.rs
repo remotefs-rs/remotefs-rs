@@ -1,773 +1,110 @@
-use std::io::Cursor;
-use std::sync::Arc;
-use std::time::SystemTime;
+use std::io::{ErrorKind, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
 
 use pretty_assertions::assert_eq;
-use remotefs::fs::FileType;
+use remotefs::fs::{AsyncRemoteFs, Capabilities, ReadOptions, UnixPex, WriteOptions};
+use remotefs::{RemoteErrorType, RemoteFs};
 use ssh2_config::ParseRule;
+use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 
 use super::*;
 use crate::mock::ssh as ssh_mock;
 use crate::ssh::backend::NoCheckServerKey;
 use crate::ssh::container::OpensshServer;
+use crate::ssh::russh_scp::{BlockingRusshScpFs, RusshScpFs};
 
-fn test_runtime() -> Arc<tokio::runtime::Runtime> {
-    Arc::new(
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap(),
-    )
-}
-
-#[test]
-fn should_not_append_to_file() {
-    crate::mock::logger();
-
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "Hello, world!\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_change_directory() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let pwd = client.pwd().ok().unwrap();
-    assert!(client.change_dir(Path::new("/tmp")).is_ok());
-    assert!(client.change_dir(pwd.as_path()).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_change_directory() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(
-        client
-            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_copy_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    assert!(client.copy(p, Path::new("b.txt")).is_ok());
-    assert!(client.stat(p).is_ok());
-    assert!(client.stat(Path::new("b.txt")).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_copy_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_create_directory() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(
-        client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok()
-    );
-    let p = PathBuf::from(format!("{}/mydir", client.pwd().unwrap().display()));
-    assert!(client.exists(&p).unwrap());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_create_directory_cause_already_exists() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(
-        client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok()
-    );
-    assert_eq!(
-        client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .err()
-            .unwrap()
-            .kind,
-        RemoteErrorType::DirectoryAlreadyExists
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_create_directory() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(
-        client
-            .create_dir(
-                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                UnixPex::from(0o755)
-            )
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_create_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert_eq!(
-        client
-            .create_file(p, &metadata, Box::new(reader))
-            .ok()
-            .unwrap(),
-        10
-    );
-    assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-    finalize_client(client);
-}
-
-#[test]
-fn should_create_big_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    let reader = Cursor::new(file_data);
-    assert_eq!(
-        client
-            .create_file(p, &metadata, Box::new(reader))
-            .ok()
-            .unwrap(),
-        2 * 1024 * 1024
-    );
-    assert_eq!(
-        client.stat(p).ok().unwrap().metadata().size,
-        2 * 1024 * 1024
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_read_big_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = vec![1; 2 * 1024 * 1024]; // 2MB
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    let reader = Cursor::new(file_data);
-    assert_eq!(
-        client
-            .create_file(p, &metadata, Box::new(reader))
-            .ok()
-            .unwrap(),
-        2 * 1024 * 1024
-    );
-    assert_eq!(
-        client.stat(p).ok().unwrap().metadata().size,
-        2 * 1024 * 1024
-    );
-    let dest = std::io::sink();
-    assert_eq!(
-        client
-            .open_file(p, Box::new(dest))
-            .expect("Cannot read file"),
-        2 * 1024 * 1024
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_create_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_exec_command() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert_eq!(
-        client.exec("echo 5").ok().unwrap(),
-        (0, String::from("5\n"))
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_tell_whether_file_exists() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    assert_eq!(client.exists(p).ok().unwrap(), true);
-    assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
-    assert_eq!(
-        client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
-        false
-    );
-    assert_eq!(client.exists(Path::new("/tmp")).ok().unwrap(), true);
-    finalize_client(client);
-}
-
-#[test]
-fn should_list_dir() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let wrkdir = client.pwd().ok().unwrap();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    let file = client
-        .list_dir(wrkdir.as_path())
-        .ok()
-        .unwrap()
-        .first()
-        .unwrap()
-        .clone();
-    assert_eq!(file.name().as_str(), "a.txt");
-    let mut expected_path = wrkdir;
-    expected_path.push(p);
-    assert_eq!(file.path.as_path(), expected_path.as_path());
-    assert_eq!(file.extension().as_deref().unwrap(), "txt");
-    assert_eq!(file.metadata.size, 10);
-    assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o644));
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_list_dir() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(client.list_dir(Path::new("/tmp/auhhfh/hfhjfhf/")).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_move_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    let dest = Path::new("b.txt");
-    assert!(client.mov(p, dest).is_ok());
-    assert_eq!(client.exists(p).ok().unwrap(), false);
-    assert_eq!(client.exists(dest).ok().unwrap(), true);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_move_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
-    assert!(client.mov(p, dest).is_err());
-    assert!(
-        client
-            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_open_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata::default().size(file_data.len() as u64);
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-    assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_open_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-    assert!(
-        client
-            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_print_working_directory() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(client.pwd().is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_remove_dir_all() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let mut dir_path = client.pwd().ok().unwrap();
-    dir_path.push(Path::new("test/"));
-    assert!(
-        client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    let mut file_path = dir_path.clone();
-    file_path.push(Path::new("a.txt"));
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(
-        client
-            .create_file(file_path.as_path(), &metadata, Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_remove_dir_all() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    assert!(
-        client
-            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_remove_dir() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let mut dir_path = client.pwd().ok().unwrap();
-    dir_path.push(Path::new("test/"));
-    assert!(
-        client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    assert!(client.remove_dir(dir_path.as_path()).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_remove_dir() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let mut dir_path = client.pwd().ok().unwrap();
-    dir_path.push(Path::new("test/"));
-    assert!(
-        client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    let mut file_path = dir_path.clone();
-    file_path.push(Path::new("a.txt"));
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(
-        client
-            .create_file(file_path.as_path(), &metadata, Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.remove_dir(dir_path.as_path()).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_remove_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    assert!(client.remove_file(p).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_setstat_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-
-    assert!(
-        client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: Some(SystemTime::UNIX_EPOCH),
-                    created: None,
-                    file_type: FileType::File,
-                    gid: Some(1000),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: Some(SystemTime::UNIX_EPOCH),
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1000),
-                }
-            )
-            .is_ok()
-    );
-    let entry = client.stat(p).ok().unwrap();
-    let stat = entry.metadata();
-    // SCP stat comes from ls parsing; access time may not be available
-    assert_eq!(stat.created, None);
-    assert_eq!(stat.modified, Some(SystemTime::UNIX_EPOCH));
-    assert_eq!(stat.mode.unwrap(), UnixPex::from(0o755));
-    assert_eq!(stat.size, 7);
-
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_setstat_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("bbbbb/cccc/a.sh");
-    assert!(
-        client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: None,
-                    created: None,
-                    file_type: FileType::File,
-                    gid: Some(1),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: None,
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1),
-                }
-            )
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_stat_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert_eq!(
-        client
-            .create_file(p, &metadata, Box::new(reader))
-            .ok()
-            .unwrap(),
-        7
-    );
-    let entry = client.stat(p).ok().unwrap();
-    assert_eq!(entry.name(), "a.sh");
-    let mut expected_path = client.pwd().ok().unwrap();
-    expected_path.push("a.sh");
-    assert_eq!(entry.path(), expected_path.as_path());
-    let meta = entry.metadata();
-    assert_eq!(meta.mode.unwrap(), UnixPex::from(0o644));
-    assert_eq!(meta.size, 7);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_stat_file() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.sh");
-    assert!(client.stat(p).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_make_symlink() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    let symlink = Path::new("b.sh");
-    assert!(client.symlink(symlink, p).is_ok());
-    assert!(client.remove_file(symlink).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_make_symlink() {
-    crate::mock::logger();
-    let TestCtx {
-        mut client,
-        container: _container,
-    } = setup_client();
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    let metadata = Metadata {
-        size: file_data.len() as u64,
-        ..Default::default()
-    };
-    assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-    let symlink = Path::new("b.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(symlink, &metadata, Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.symlink(symlink, p).is_err());
-    assert!(client.remove_file(symlink).is_ok());
-    assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
-    finalize_client(client);
-}
-
-// -- test utils
+type Client = RusshScpFs<NoCheckServerKey>;
 
 struct TestCtx {
-    client: ScpFs<super::super::super::backend::RusshSession<NoCheckServerKey>>,
-    #[allow(dead_code)]
+    runtime: tokio::runtime::Runtime,
+    client: Client,
+    root: PathBuf,
     container: OpensshServer,
 }
 
-fn setup_client() -> TestCtx {
-    let container = OpensshServer::start();
-    let port = container.port();
-
-    use crate::SshAgentIdentity;
-
-    let runtime = test_runtime();
-    let config_file = ssh_mock::create_ssh_config(port);
-    let mut client = ScpFs::russh(
-        SshOpts::new("scp")
-            .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
-            .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
-            .ssh_agent_identity(Some(SshAgentIdentity::All)),
-        runtime,
-    );
-    assert!(client.connect().is_ok());
-    let tempdir = PathBuf::from(generate_tempdir());
-    assert!(
-        client
-            .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    assert!(client.change_dir(tempdir.as_path()).is_ok());
-
-    TestCtx { client, container }
+impl TestCtx {
+    fn path(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
 }
 
-fn finalize_client(
-    mut client: ScpFs<super::super::super::backend::RusshSession<NoCheckServerKey>>,
-) {
-    let wrkdir = client.pwd().ok().unwrap();
-    assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
-    assert!(client.disconnect().is_ok());
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+}
+
+fn opts(port: u16) -> (SshOpts, tempfile::NamedTempFile) {
+    let config_file = ssh_mock::create_ssh_config(port);
+    let opts = SshOpts::new("scp")
+        .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
+        .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
+        .ssh_agent_identity(Some(crate::SshAgentIdentity::All));
+    (opts, config_file)
+}
+
+fn setup() -> TestCtx {
+    crate::mock::logger();
+    let container = OpensshServer::start();
+    let (opts, _config) = opts(container.port());
+    let runtime = runtime();
+    let mut client = Client::new(opts);
+    let root = PathBuf::from(generate_tempdir());
+    runtime.block_on(async {
+        client.connect().await.expect("connect");
+        client
+            .create_dir(&root, Some(UnixPex::from(0o775)))
+            .await
+            .expect("create scratch directory");
+    });
+    TestCtx {
+        runtime,
+        client,
+        root,
+        container,
+    }
+}
+
+fn finalize(ctx: TestCtx) {
+    let TestCtx {
+        runtime,
+        mut client,
+        root,
+        container,
+    } = ctx;
+    runtime.block_on(async {
+        client
+            .remove_dir_all(&root)
+            .await
+            .expect("remove scratch directory");
+        client.disconnect().await.expect("disconnect");
+    });
+    drop(container);
+}
+
+async fn write(client: &Client, path: &Path, data: &[u8]) {
+    let mut source = data;
+    let written = client
+        .write_file(
+            path,
+            &WriteOptions::default().size_hint(data.len() as u64),
+            &mut source,
+        )
+        .await
+        .expect("write_file");
+    assert_eq!(written, data.len() as u64);
+}
+
+async fn read(client: &Client, path: &Path, opts: &ReadOptions) -> Vec<u8> {
+    let mut output = Vec::new();
+    client
+        .read_file(path, opts, &mut output)
+        .await
+        .expect("read_file");
+    output
 }
 
 fn generate_tempdir() -> String {
@@ -780,4 +117,215 @@ fn generate_tempdir() -> String {
         .take(8)
         .collect();
     format!("/tmp/temp_{name}")
+}
+
+#[test]
+fn should_reject_relative_paths() {
+    let client = Client::new(SshOpts::new("scp"));
+    let error = runtime()
+        .block_on(client.stat(Path::new("relative")))
+        .unwrap_err();
+    assert_eq!(error.kind(), RemoteErrorType::InvalidPath);
+}
+
+#[test]
+fn should_copy_and_honor_scp_ranges() {
+    let ctx = setup();
+    let source = ctx.path("source.txt");
+    let destination = ctx.path("destination.txt");
+    ctx.runtime.block_on(async {
+        write(&ctx.client, &source, b"abcdef").await;
+        ctx.client.copy(&source, &destination).await.unwrap();
+        assert_eq!(
+            read(
+                &ctx.client,
+                &destination,
+                &ReadOptions::default().offset(2).length(2),
+            )
+            .await,
+            b"cd"
+        );
+    });
+    finalize(ctx);
+}
+
+#[test]
+fn should_require_size_and_reject_append() {
+    let ctx = setup();
+    ctx.runtime.block_on(async {
+        let path = ctx.path("missing.txt");
+        assert_eq!(
+            ctx.client
+                .create(&path, &WriteOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::SizeRequired
+        );
+        assert_eq!(
+            ctx.client
+                .append(&path, &WriteOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+
+        let path = ctx.path("short.txt");
+        let mut source = &b"short"[..];
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ctx.client
+                .write_file(&path, &WriteOptions::default().size_hint(10), &mut source),
+        )
+        .await
+        .expect("short SCP upload must not hang")
+        .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::ProtocolError);
+    });
+    finalize(ctx);
+}
+
+#[test]
+fn should_not_seek_scp_streams_and_finish_explicitly() {
+    let ctx = setup();
+    let path = ctx.path("stream.txt");
+    ctx.runtime.block_on(async {
+        write(&ctx.client, &path, b"abcdef").await;
+        let stream = ctx
+            .client
+            .open(&path, &ReadOptions::default())
+            .await
+            .unwrap();
+        assert!(!stream.seekable());
+        let mut stream = stream.into_tokio();
+        assert_eq!(
+            stream.seek(SeekFrom::Start(1)).await.unwrap_err().kind(),
+            ErrorKind::Unsupported
+        );
+        let mut output = Vec::new();
+        stream.read_to_end(&mut output).await.unwrap();
+        stream.into_inner().finish().await.unwrap();
+        assert_eq!(output, b"abcdef");
+
+        let mut writer = ctx
+            .client
+            .create(
+                &ctx.path("new.txt"),
+                &WriteOptions::default()
+                    .size_hint(5)
+                    .modified(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+            )
+            .await
+            .unwrap()
+            .into_tokio();
+        assert!(!writer.get_ref().seekable());
+        writer.write_all(b"hello").await.unwrap();
+        writer.flush().await.unwrap();
+        writer.shutdown().await.unwrap();
+        writer.into_inner().finish().await.unwrap();
+        assert_eq!(
+            ctx.client
+                .stat(&ctx.path("new.txt"))
+                .await
+                .unwrap()
+                .metadata()
+                .modified
+                .unwrap()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1_700_000_000
+        );
+    });
+    finalize(ctx);
+}
+
+#[test]
+fn should_advertise_capabilities_and_stat_symlink() {
+    let ctx = setup();
+    let target = ctx.path("target.txt");
+    let link = ctx.path("link.txt");
+    ctx.runtime.block_on(async {
+        write(&ctx.client, &target, b"data").await;
+        ctx.client.symlink(&link, &target).await.unwrap();
+        assert!(ctx.client.stat(&link).await.unwrap().is_symlink());
+        let caps = ctx.client.capabilities();
+        assert!(!caps.contains(Capabilities::APPEND | Capabilities::RANGE_READ));
+        assert!(caps.contains(Capabilities::COPY | Capabilities::SYMLINK));
+
+        ctx.client.remove_file(&target).await.unwrap();
+        assert!(ctx.client.exists(&link).await.unwrap());
+        ctx.client.remove_file(&link).await.unwrap();
+    });
+    finalize(ctx);
+}
+
+#[test]
+fn should_remove_special_entries_recursively_and_classify_nonempty_dirs() {
+    let ctx = setup();
+    let directory = ctx.path("special");
+    let fifo = directory.join("pipe");
+    ctx.runtime.block_on(async {
+        ctx.client.create_dir(&directory, None).await.unwrap();
+        let output = ctx
+            .client
+            .exec(&format!("mkfifo {fifo}", fifo = fifo.display()))
+            .await
+            .unwrap();
+        assert_eq!(output.exit_code, 0, "mkfifo failed: {}", output.stdout);
+        assert_eq!(
+            ctx.client.remove_dir(&directory).await.unwrap_err().kind(),
+            RemoteErrorType::DirectoryNotEmpty
+        );
+        ctx.client.remove_dir_all(&directory).await.unwrap();
+    });
+    finalize(ctx);
+}
+
+#[test]
+fn should_work_through_blocking_wrapper() {
+    crate::mock::logger();
+    let container = OpensshServer::start();
+    let (opts, _config) = opts(container.port());
+    let runtime = runtime();
+    let mut client: BlockingRusshScpFs<NoCheckServerKey> =
+        Client::new(opts).into_blocking(runtime.handle().clone());
+    client.connect().unwrap();
+    let root = PathBuf::from(generate_tempdir());
+    client.create_dir(&root, None).unwrap();
+    let path = root.join("blocking.txt");
+    let mut source = std::io::Cursor::new(b"hello".to_vec());
+    client
+        .write_file(&path, &WriteOptions::default().size_hint(5), &mut source)
+        .unwrap();
+    let mut output = Vec::new();
+    client
+        .read_file(&path, &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(output, b"hello");
+    client.remove_dir_all(&root).unwrap();
+    client.disconnect().unwrap();
+    drop(runtime);
+    drop(container);
+}
+
+#[test]
+#[should_panic(expected = "into_blocking requires a multi-thread Tokio runtime")]
+fn should_reject_current_thread_blocking_wrapper() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _ = Client::new(SshOpts::new("127.0.0.1")).into_blocking(runtime.handle().clone());
+}
+
+#[test]
+fn should_be_send_and_sync() {
+    fn is_send<T: Send>(_: &T) {}
+    fn is_sync<T: Sync>(_: &T) {}
+    let client = Client::new(SshOpts::new("scp"));
+    is_send(&client);
+    is_sync(&client);
+    let _: Box<dyn remotefs::AsyncRemoteFs> = Box::new(client);
 }

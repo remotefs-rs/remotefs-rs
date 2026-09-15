@@ -1,54 +1,45 @@
 //! SCP protocol implementation over russh channels.
-//!
-//! SCP is not a standalone protocol — it runs `scp -f` (recv) and `scp -t` (send)
-//! over a normal SSH exec channel and uses a simple header + ACK wire format.
 
-use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use remotefs::fs::{AsyncReadStream, AsyncWriteStream, ReadOptions};
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use russh::client::Handler;
-use tokio::runtime::Runtime;
 
 use super::open_channel;
+
+const MAX_SCP_HEADER_SIZE: usize = 64 * 1024;
 
 fn shell_escape_arg(value: &str) -> String {
     format!("'{}'", value.replace('\'', r#"'\''"#))
 }
 
-/// SCP recv: open a channel, exec `scp -f <path>`, handshake, and return
-/// a synchronous reader that drains exactly `filesize` bytes.
 pub(super) async fn recv<T>(
     session: &russh::client::Handle<T>,
     path: &Path,
+    opts: &ReadOptions,
     forward_agent: bool,
-) -> RemoteResult<Box<dyn std::io::Read + Send>>
+) -> RemoteResult<AsyncReadStream>
 where
     T: Handler,
 {
     debug!("Opening channel for scp recv");
     let mut channel = open_channel(session, forward_agent).await?;
-
     let cmd = format!("scp -f {}", shell_escape_arg(&path.to_string_lossy()));
     channel.exec(true, cmd.as_bytes()).await.map_err(|err| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not exec scp command: {err}"),
         )
     })?;
-
-    // Send initial ACK (\0)
-    debug!("Sending initial ACK");
-    channel.data(&[0u8][..]).await.map_err(|err| {
-        RemoteError::new_ex(
+    channel.data(&[0_u8][..]).await.map_err(|err| {
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not write ACK to channel: {err}"),
         )
     })?;
 
-    // Read the SCP header (e.g. "C0644 12345 filename\n")
-    debug!("Reading SCP header");
     let mut header_buf = Vec::new();
     let mut initial_data = Vec::new();
     loop {
@@ -56,196 +47,162 @@ where
             Some(russh::ChannelMsg::Data { data }) => {
                 header_buf.extend_from_slice(&data);
                 if let Some(header_end) = header_buf.iter().position(|byte| *byte == b'\n') {
+                    if header_end + 1 > MAX_SCP_HEADER_SIZE {
+                        return Err(RemoteError::with_message(
+                            RemoteErrorType::ProtocolError,
+                            "SCP header exceeds the maximum allowed size",
+                        ));
+                    }
                     initial_data.extend_from_slice(&header_buf[header_end + 1..]);
                     header_buf.truncate(header_end + 1);
                     break;
                 }
+                if header_buf.len() > MAX_SCP_HEADER_SIZE {
+                    return Err(RemoteError::with_message(
+                        RemoteErrorType::ProtocolError,
+                        "SCP header exceeds the maximum allowed size",
+                    ));
+                }
             }
-            Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) => break,
+            Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) | None => {
+                return Err(RemoteError::with_message(
+                    RemoteErrorType::ProtocolError,
+                    "SCP channel closed before the file header",
+                ));
+            }
             _ => {}
         }
     }
-
     let filesize = parse_header_filesize(&header_buf)?;
-    debug!("File size: {filesize}");
-
-    // Send OK
-    debug!("Sending OK");
-    channel.data(&[0u8][..]).await.map_err(|err| {
-        RemoteError::new_ex(
+    channel.data(&[0_u8][..]).await.map_err(|err| {
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not write ACK to channel: {err}"),
         )
     })?;
-
-    // Collect all data bytes up to filesize
-    let mut buf = Vec::with_capacity(filesize);
-    buf.extend_from_slice(&initial_data);
-    if buf.len() > filesize {
-        buf.truncate(filesize);
-    }
-    while buf.len() < filesize {
-        match channel.wait().await {
-            Some(russh::ChannelMsg::Data { data }) => {
-                buf.extend_from_slice(&data);
-            }
-            Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) => break,
-            _ => {}
-        }
-    }
-    buf.truncate(filesize);
-
-    let _ = channel.eof().await;
-
-    Ok(Box::new(std::io::Cursor::new(buf)) as Box<dyn std::io::Read + Send>)
+    Ok(AsyncReadStream::new(super::stream::RusshScpReader::new(
+        channel,
+        initial_data,
+        filesize as u64,
+        opts,
+    )))
 }
 
-/// SCP send: open a channel, exec `scp -t <path>`, handshake, and return
-/// a synchronous writer that forwards data into the channel.
 pub(super) async fn send<T>(
     session: &russh::client::Handle<T>,
     remote_path: &Path,
-    mode: i32,
+    mode: u32,
     size: u64,
-    runtime: Arc<Runtime>,
+    modified: Option<SystemTime>,
     forward_agent: bool,
-) -> RemoteResult<Box<dyn Write + Send>>
+) -> RemoteResult<AsyncWriteStream>
 where
     T: Handler,
 {
     debug!("Opening channel for scp send");
     let mut channel = open_channel(session, forward_agent).await?;
-
     let cmd = format!(
         "scp -t {}",
         shell_escape_arg(&remote_path.to_string_lossy())
     );
     channel.exec(true, cmd.as_bytes()).await.map_err(|err| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not exec scp command: {err}"),
         )
     })?;
-
-    // Wait for initial ACK
     wait_for_ack(&mut channel).await?;
-
+    if let Some(modified) = modified {
+        let seconds = modified.duration_since(UNIX_EPOCH).map_err(|err| {
+            RemoteError::with_message(
+                RemoteErrorType::InvalidPath,
+                format!("Invalid SCP modification time: {err}"),
+            )
+        })?;
+        let timestamp = format!("T{mtime} 0 {mtime} 0\n", mtime = seconds.as_secs());
+        channel.data(timestamp.as_bytes()).await.map_err(|err| {
+            RemoteError::with_message(
+                RemoteErrorType::ProtocolError,
+                format!("Could not write SCP timestamp: {err}"),
+            )
+        })?;
+        wait_for_ack(&mut channel).await?;
+    }
     let filename = remote_path
         .file_name()
-        .map(|f| f.to_string_lossy())
+        .map(|file| file.to_string_lossy())
         .ok_or_else(|| {
-            RemoteError::new_ex(
+            RemoteError::with_message(
                 RemoteErrorType::ProtocolError,
                 format!("Could not get file name: {remote_path:?}"),
             )
         })?;
-
-    // Send file header: C<mode> <size> <filename>\n
     let header = format!("C{mode:04o} {size} {filename}\n", mode = mode & 0o7777);
-    debug!("Sending SCP header: {header}");
     channel.data(header.as_bytes()).await.map_err(|err| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             format!("Could not write header to channel: {err}"),
         )
     })?;
-
-    // Wait for ACK
     wait_for_ack(&mut channel).await?;
-
-    let writer = SendChannel { channel, runtime };
-    Ok(Box::new(writer) as Box<dyn Write + Send>)
+    Ok(AsyncWriteStream::new(super::stream::RusshScpWriter::new(
+        channel, size,
+    )))
 }
 
-/// Wait for a single-byte SCP ACK (0x00 = OK).
-///
-/// Skips non-data channel messages (e.g. `WindowAdjusted`, `Eof`) that may
-/// arrive before the actual ACK byte.
-async fn wait_for_ack(channel: &mut russh::Channel<russh::client::Msg>) -> RemoteResult<()> {
-    debug!("Waiting for channel acknowledgment");
+pub(super) async fn wait_for_ack(
+    channel: &mut russh::Channel<russh::client::Msg>,
+) -> RemoteResult<()> {
     loop {
         match channel.wait().await {
             Some(russh::ChannelMsg::Data { data }) => {
                 if data.first() == Some(&0) {
                     return Ok(());
                 }
-                return Err(RemoteError::new_ex(
+                return Err(RemoteError::with_message(
                     RemoteErrorType::ProtocolError,
                     format!("Unexpected SCP ACK: {data:?}"),
                 ));
             }
             Some(russh::ChannelMsg::Close) | None => {
-                return Err(RemoteError::new_ex(
+                return Err(RemoteError::with_message(
                     RemoteErrorType::ProtocolError,
                     "Channel closed before receiving SCP ACK",
                 ));
             }
             Some(other) => {
-                trace!("Skipping non-data channel message while waiting for ACK: {other:?}");
+                trace!("Skipping non-data channel message while waiting for ACK: {other:?}")
             }
         }
     }
 }
 
-/// Parse file size from an SCP header (`C<mode> <size> <filename>\n`).
 fn parse_header_filesize(header: &[u8]) -> RemoteResult<usize> {
-    let header_str = std::str::from_utf8(header).map_err(|e| {
-        RemoteError::new_ex(
+    let header_str = std::str::from_utf8(header).map_err(|err| {
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
-            format!("Could not parse SCP header: {e}"),
+            format!("Could not parse SCP header: {err}"),
         )
     })?;
     let parts: Vec<&str> = header_str.split_whitespace().collect();
     if parts.len() < 3 {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             "Invalid SCP header: not enough parts",
         ));
     }
     if !parts[0].starts_with('C') {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::ProtocolError,
             "Invalid SCP header: missing 'C'",
         ));
     }
-    parts[1].parse::<usize>().map_err(|e| {
-        RemoteError::new_ex(
+    parts[1].parse::<usize>().map_err(|err| {
+        RemoteError::with_message(
             RemoteErrorType::ProtocolError,
-            format!("Invalid file size in SCP header: {e}"),
+            format!("Invalid file size in SCP header: {err}"),
         )
     })
-}
-
-/// Synchronous writer wrapping a russh channel for SCP send.
-///
-/// Stores the full `Arc<Runtime>` rather than just a `Handle` so that
-/// `Runtime::block_on` drives IO and background tasks (including SSH
-/// window-adjust processing) on a current-thread runtime.
-struct SendChannel {
-    channel: russh::Channel<russh::client::Msg>,
-    runtime: Arc<Runtime>,
-}
-
-impl Write for SendChannel {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.runtime
-            .block_on(self.channel.data(buf))
-            .map(|()| buf.len())
-            .map_err(std::io::Error::other)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Drop for SendChannel {
-    fn drop(&mut self) {
-        debug!("Dropping SCP send channel");
-        if let Err(err) = self.runtime.block_on(self.channel.eof()) {
-            debug!("Error sending EOF: {err}");
-        }
-    }
 }
 
 #[cfg(test)]
@@ -259,9 +216,8 @@ mod tests {
     }
 
     #[test]
-    fn should_parse_scp_header_with_payload_remainder_trimmed() {
-        let header = b"C0644 5 hello.txt\nhello";
-        let trimmed = &header[..header.iter().position(|byte| *byte == b'\n').unwrap() + 1];
-        assert_eq!(parse_header_filesize(trimmed).unwrap(), 5);
+    fn should_parse_scp_header_filesize() {
+        assert_eq!(parse_header_filesize(b"C0644 42 file.txt\n").unwrap(), 42);
+        assert!(parse_header_filesize(b"bad\n").is_err());
     }
 }

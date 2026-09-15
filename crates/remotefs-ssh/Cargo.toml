@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-ssh"
-version = "0.9.0"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-ssh"
@@ -35,28 +35,31 @@ libssh2 = [
 libssh2-vendored = ["libssh2", "openssl/vendored", "ssh2/vendored-openssl"]
 no-log = ["log/max_level_off"]
 russh = [
+  "dep:futures-io",
   "dep:if-addrs",
   "dep:russh",
   "dep:russh-sftp",
   "dep:socket2",
   "dep:tokio",
+  "remotefs/tokio",
 ]
 
 [dependencies]
 chrono = "0.4"
+futures-io = { version = "0.3", optional = true }
 if-addrs = { version = "0.15", optional = true }
 lazy-regex = "3"
 libssh-rs = { version = "0.3", optional = true }
 log = "0.4"
 openssl = { version = "0.10", optional = true }
-remotefs = "0.3"
+remotefs = "1"
 russh = { version = "0.63", optional = true }
 russh-sftp = { version = "2", optional = true }
 socket2 = { version = "0.6", optional = true }
 ssh-key = { version = "0.7.0-rc.11", optional = true }
 ssh2 = { version = "0.9", optional = true }
 ssh2-config = "0.8"
-tokio = { version = "1", default-features = false, features = ["net", "rt", "time"], optional = true }
+tokio = { version = "1", default-features = false, features = ["io-util", "net", "rt", "time"], optional = true }
 
 [dev-dependencies]
 criterion = "0.8"
@@ -66,10 +69,7 @@ rand = "0.10"
 rpassword = "7"
 tempfile = "3"
 testcontainers = { version = "0.28", features = ["blocking"] }
-
-[target."cfg(target_os = \"windows\")"]
-[target."cfg(target_os = \"windows\")".dependencies]
-path-slash = "0.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [package.metadata.docs.rs]
 all-features = true

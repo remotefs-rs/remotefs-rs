@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
 use russh::client::{Handle, Handler};
-use tokio::runtime::Runtime;
 
 use crate::SshOpts;
 use crate::ssh::config::Config;
@@ -67,9 +66,8 @@ impl russh::Signer for PrivateKeySigner {
 }
 
 /// Authenticate a russh session using the configured methods.
-pub(super) fn authenticate<T>(
+pub(super) async fn authenticate<T>(
     session: &mut Handle<T>,
-    runtime: &Runtime,
     opts: &SshOpts,
     ssh_config: &Config,
 ) -> RemoteResult<()>
@@ -84,11 +82,12 @@ where
     if pubkey_authentication && let Some(agent_identity) = opts.ssh_agent_identity.as_ref() {
         match auth_with_agent(
             session,
-            runtime,
             username,
             agent_identity,
             ssh_config.params.pubkey_accepted_algorithms.algorithms(),
-        ) {
+        )
+        .await
+        {
             Ok(()) => {
                 info!("Authenticated with ssh agent");
                 return Ok(());
@@ -137,7 +136,6 @@ where
             } => {
                 match auth_with_rsa_key(
                     session,
-                    runtime,
                     username,
                     &key_path,
                     KeyAuthenticationOptions {
@@ -149,7 +147,9 @@ where
                             .algorithms(),
                         add_to_agent: ssh_config.params.add_keys_to_agent.unwrap_or(false),
                     },
-                ) {
+                )
+                .await
+                {
                     Ok(()) => {
                         info!("Authenticated with key at '{}'", key_path.display());
                         return Ok(());
@@ -164,7 +164,7 @@ where
                 }
             }
             Authentication::Password(password) => {
-                match auth_with_password(session, runtime, username, &password) {
+                match auth_with_password(session, username, &password).await {
                     Ok(()) => {
                         info!("Authenticated with password");
                         return Ok(());
@@ -179,7 +179,7 @@ where
     }
 
     Err(last_err.unwrap_or_else(|| {
-        RemoteError::new_ex(
+        RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             "no authentication method provided",
         )
@@ -244,9 +244,8 @@ fn sign_with_private_key(
 }
 
 /// Authenticate with an RSA private key file.
-fn auth_with_rsa_key<T>(
+async fn auth_with_rsa_key<T>(
     session: &mut Handle<T>,
-    runtime: &Runtime,
     username: &str,
     key_path: &Path,
     options: KeyAuthenticationOptions<'_>,
@@ -261,7 +260,7 @@ where
 
     let private_key =
         russh::keys::load_secret_key(key_path, options.passphrase).map_err(|err| {
-            RemoteError::new_ex(
+            RemoteError::with_message(
                 RemoteErrorType::AuthenticationFailed,
                 format!(
                     "Could not load private key at '{}': {err}",
@@ -270,12 +269,12 @@ where
             )
         })?;
     let private_key = Arc::new(private_key);
-    maybe_add_key_to_agent(runtime, private_key.as_ref(), options.add_to_agent);
+    maybe_add_key_to_agent(private_key.as_ref(), options.add_to_agent).await;
 
     if let Some(certificate_path) = options.certificate_path {
         let certificate =
             russh::keys::load_openssh_certificate(certificate_path).map_err(|err| {
-                RemoteError::new_ex(
+                RemoteError::with_message(
                     RemoteErrorType::AuthenticationFailed,
                     format!(
                         "Could not load certificate at '{}': {err}",
@@ -286,7 +285,7 @@ where
         let hash_algs =
             accepted_hash_algorithms(&certificate.algorithm(), options.accepted_algorithms, true);
         if hash_algs.is_empty() {
-            return Err(RemoteError::new_ex(
+            return Err(RemoteError::with_message(
                 RemoteErrorType::AuthenticationFailed,
                 format!(
                     "certificate algorithm {} is not accepted by SSH config",
@@ -300,18 +299,12 @@ where
         };
         let mut last_failure = None;
         for hash_alg in hash_algs {
-            let auth_result = runtime
-                .block_on(async {
-                    session
-                        .authenticate_certificate_with(
-                            username,
-                            certificate.clone(),
-                            hash_alg,
-                            &mut signer,
-                        )
-                        .await
-                })
-                .map_err(|err| RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err))?;
+            let auth_result = session
+                .authenticate_certificate_with(username, certificate.clone(), hash_alg, &mut signer)
+                .await
+                .map_err(|err| {
+                    RemoteError::with_source(RemoteErrorType::AuthenticationFailed, err)
+                })?;
             match auth_result {
                 russh::client::AuthResult::Success => return Ok(()),
                 russh::client::AuthResult::Failure {
@@ -326,7 +319,7 @@ where
                 }
             }
         }
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             format!(
                 "certificate authentication failed for key at '{}' (remaining methods: {last_failure:?})",
@@ -338,7 +331,7 @@ where
     let key_algorithm = private_key.algorithm();
     let hash_algs = accepted_hash_algorithms(&key_algorithm, options.accepted_algorithms, false);
     if hash_algs.is_empty() {
-        return Err(RemoteError::new_ex(
+        return Err(RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             format!("public key algorithm {key_algorithm} is not accepted by SSH config"),
         ));
@@ -348,13 +341,10 @@ where
     for hash_alg in hash_algs {
         let key_with_hash = russh::keys::PrivateKeyWithHashAlg::new(private_key.clone(), hash_alg);
 
-        let auth_result = runtime
-            .block_on(async {
-                session
-                    .authenticate_publickey(username, key_with_hash)
-                    .await
-            })
-            .map_err(|err| RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err))?;
+        let auth_result = session
+            .authenticate_publickey(username, key_with_hash)
+            .await
+            .map_err(|err| RemoteError::with_source(RemoteErrorType::AuthenticationFailed, err))?;
 
         match auth_result {
             russh::client::AuthResult::Success => return Ok(()),
@@ -376,7 +366,7 @@ where
         }
     }
 
-    Err(RemoteError::new_ex(
+    Err(RemoteError::with_message(
         RemoteErrorType::AuthenticationFailed,
         format!(
             "public key authentication failed for key at '{}' (remaining methods: {last_failure:?})",
@@ -385,51 +375,41 @@ where
     ))
 }
 
-fn maybe_add_key_to_agent(
-    runtime: &Runtime,
-    private_key: &russh::keys::PrivateKey,
-    add_to_agent: bool,
-) {
-    if add_to_agent && let Err(err) = add_key_to_agent(runtime, private_key) {
+async fn maybe_add_key_to_agent(private_key: &russh::keys::PrivateKey, add_to_agent: bool) {
+    if add_to_agent && let Err(err) = add_key_to_agent(private_key).await {
         warn!("Could not add loaded key to SSH agent: {err}");
     }
 }
 
 #[cfg(unix)]
-fn add_key_to_agent(runtime: &Runtime, private_key: &russh::keys::PrivateKey) -> RemoteResult<()> {
+async fn add_key_to_agent(private_key: &russh::keys::PrivateKey) -> RemoteResult<()> {
     use russh::keys::agent::client::AgentClient;
 
-    runtime.block_on(async {
-        let mut agent = AgentClient::connect_env().await.map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::ConnectionError,
-                format!("could not connect to SSH agent: {err}"),
-            )
-        })?;
-        agent.add_identity(private_key, &[]).await.map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                format!("could not add identity to SSH agent: {err}"),
-            )
-        })
+    let mut agent = AgentClient::connect_env().await.map_err(|err| {
+        RemoteError::with_message(
+            RemoteErrorType::ConnectionError,
+            format!("could not connect to SSH agent: {err}"),
+        )
+    })?;
+    agent.add_identity(private_key, &[]).await.map_err(|err| {
+        RemoteError::with_message(
+            RemoteErrorType::ProtocolError,
+            format!("could not add identity to SSH agent: {err}"),
+        )
     })
 }
 
 #[cfg(not(unix))]
-fn add_key_to_agent(
-    _runtime: &Runtime,
-    _private_key: &russh::keys::PrivateKey,
-) -> RemoteResult<()> {
-    Err(RemoteError::new_ex(
+async fn add_key_to_agent(_private_key: &russh::keys::PrivateKey) -> RemoteResult<()> {
+    Err(RemoteError::with_message(
         RemoteErrorType::UnsupportedFeature,
         "adding identities to the SSH agent is not supported on this platform",
     ))
 }
 
 /// Authenticate with username and password.
-fn auth_with_password<T>(
+async fn auth_with_password<T>(
     session: &mut Handle<T>,
-    runtime: &Runtime,
     username: &str,
     password: &str,
 ) -> RemoteResult<()>
@@ -438,13 +418,14 @@ where
 {
     debug!("Authenticating with username '{username}' and password");
 
-    let auth_result = runtime
-        .block_on(async { session.authenticate_password(username, password).await })
-        .map_err(|err| RemoteError::new_ex(RemoteErrorType::AuthenticationFailed, err))?;
+    let auth_result = session
+        .authenticate_password(username, password)
+        .await
+        .map_err(|err| RemoteError::with_source(RemoteErrorType::AuthenticationFailed, err))?;
 
     match auth_result {
         russh::client::AuthResult::Success => Ok(()),
-        russh::client::AuthResult::Failure { .. } => Err(RemoteError::new_ex(
+        russh::client::AuthResult::Failure { .. } => Err(RemoteError::with_message(
             RemoteErrorType::AuthenticationFailed,
             "password authentication failed",
         )),
@@ -455,9 +436,8 @@ where
 ///
 /// The agent socket is resolved from the `SSH_AUTH_SOCK` environment variable.
 #[cfg(unix)]
-fn auth_with_agent<T>(
+async fn auth_with_agent<T>(
     session: &mut Handle<T>,
-    runtime: &Runtime,
     username: &str,
     identity: &crate::SshAgentIdentity,
     accepted_algorithms: &[String],
@@ -469,105 +449,97 @@ where
 
     debug!("Authenticating with username '{username}' via ssh agent");
 
-    runtime.block_on(async {
-        let mut agent = AgentClient::connect_env().await.map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::ConnectionError,
-                format!("could not connect to ssh agent: {err}"),
-            )
-        })?;
+    let mut agent = AgentClient::connect_env().await.map_err(|err| {
+        RemoteError::with_message(
+            RemoteErrorType::ConnectionError,
+            format!("could not connect to ssh agent: {err}"),
+        )
+    })?;
 
-        let identities = agent.request_identities().await.map_err(|err| {
-            RemoteError::new_ex(
-                RemoteErrorType::ConnectionError,
-                format!("could not list ssh agent identities: {err}"),
-            )
-        })?;
+    let identities = agent.request_identities().await.map_err(|err| {
+        RemoteError::with_message(
+            RemoteErrorType::ConnectionError,
+            format!("could not list ssh agent identities: {err}"),
+        )
+    })?;
 
-        let mut last_err = None;
-        for agent_identity in identities {
-            let pubkey = agent_identity.public_key().into_owned();
-            let (blob, key_algorithm, certificate) = match &agent_identity {
-                russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
-                    (key.to_bytes().unwrap_or_default(), key.algorithm(), false)
-                }
-                russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => (
-                    certificate.to_bytes().unwrap_or_default(),
-                    certificate.algorithm(),
-                    true,
-                ),
-            };
-            if !identity.pubkey_matches(&blob) {
-                continue;
+    let mut last_err = None;
+    for agent_identity in identities {
+        let pubkey = agent_identity.public_key().into_owned();
+        let (blob, key_algorithm, certificate) = match &agent_identity {
+            russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
+                (key.to_bytes().unwrap_or_default(), key.algorithm(), false)
             }
-            debug!(
-                "Trying to authenticate with ssh agent identity: {}",
-                pubkey.fingerprint(russh::keys::HashAlg::Sha256)
-            );
+            russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => (
+                certificate.to_bytes().unwrap_or_default(),
+                certificate.algorithm(),
+                true,
+            ),
+        };
+        if !identity.pubkey_matches(&blob) {
+            continue;
+        }
+        debug!(
+            "Trying to authenticate with ssh agent identity: {}",
+            pubkey.fingerprint(russh::keys::HashAlg::Sha256)
+        );
 
-            let hash_algs =
-                accepted_hash_algorithms(&key_algorithm, accepted_algorithms, certificate);
+        let hash_algs = accepted_hash_algorithms(&key_algorithm, accepted_algorithms, certificate);
 
-            for hash_alg in hash_algs {
-                let auth_result = match &agent_identity {
-                    russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
-                        session
-                            .authenticate_publickey_with(
-                                username,
-                                key.clone(),
-                                hash_alg,
-                                &mut agent,
-                            )
-                            .await
-                    }
-                    russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => {
-                        session
-                            .authenticate_certificate_with(
-                                username,
-                                certificate.clone(),
-                                hash_alg,
-                                &mut agent,
-                            )
-                            .await
-                    }
-                };
-                match auth_result {
-                    Ok(russh::client::AuthResult::Success) => return Ok(()),
-                    Ok(russh::client::AuthResult::Failure {
-                        remaining_methods, ..
-                    }) => {
-                        debug!(
-                            "ssh agent auth with hash {hash_alg:?} failed; remaining methods: {remaining_methods:?}"
-                        );
-                        let pubkey_still_offered =
-                            remaining_methods.contains(&russh::MethodKind::PublicKey);
-                        last_err = Some(RemoteError::new_ex(
-                            RemoteErrorType::AuthenticationFailed,
-                            "ssh agent authentication failed",
-                        ));
-                        if !pubkey_still_offered {
-                            break;
-                        }
-                    }
-                    Err(err) => {
-                        debug!("ssh agent auth signing error: {err}");
-                        last_err = Some(RemoteError::new_ex(
-                            RemoteErrorType::AuthenticationFailed,
-                            format!("ssh agent signing failed: {err}"),
-                        ));
+        for hash_alg in hash_algs {
+            let auth_result = match &agent_identity {
+                russh::keys::agent::AgentIdentity::PublicKey { key, .. } => {
+                    session
+                        .authenticate_publickey_with(username, key.clone(), hash_alg, &mut agent)
+                        .await
+                }
+                russh::keys::agent::AgentIdentity::Certificate { certificate, .. } => {
+                    session
+                        .authenticate_certificate_with(
+                            username,
+                            certificate.clone(),
+                            hash_alg,
+                            &mut agent,
+                        )
+                        .await
+                }
+            };
+            match auth_result {
+                Ok(russh::client::AuthResult::Success) => return Ok(()),
+                Ok(russh::client::AuthResult::Failure {
+                    remaining_methods, ..
+                }) => {
+                    debug!(
+                        "ssh agent auth with hash {hash_alg:?} failed; remaining methods: {remaining_methods:?}"
+                    );
+                    let pubkey_still_offered =
+                        remaining_methods.contains(&russh::MethodKind::PublicKey);
+                    last_err = Some(RemoteError::with_message(
+                        RemoteErrorType::AuthenticationFailed,
+                        "ssh agent authentication failed",
+                    ));
+                    if !pubkey_still_offered {
                         break;
                     }
                 }
+                Err(err) => {
+                    debug!("ssh agent auth signing error: {err}");
+                    last_err = Some(RemoteError::with_message(
+                        RemoteErrorType::AuthenticationFailed,
+                        format!("ssh agent signing failed: {err}"),
+                    ));
+                    break;
+                }
             }
         }
+    }
 
-        Err(last_err.unwrap_or_else(|| {
-            RemoteError::new_ex(
-                RemoteErrorType::AuthenticationFailed,
-                "ssh agent provided no usable identity",
-            )
-        }))
-    })
+    Err(last_err.unwrap_or_else(|| {
+        RemoteError::with_message(
+            RemoteErrorType::AuthenticationFailed,
+            "ssh agent provided no usable identity",
+        )
+    }))
 }
 
 #[cfg(test)]
@@ -628,9 +600,8 @@ mod tests {
 /// The SSH agent is only reachable over a Unix socket; on other platforms this is a no-op
 /// that simply reports the agent as unavailable so the remaining methods are tried.
 #[cfg(not(unix))]
-fn auth_with_agent<T>(
+async fn auth_with_agent<T>(
     _session: &mut Handle<T>,
-    _runtime: &Runtime,
     _username: &str,
     _identity: &crate::SshAgentIdentity,
     _accepted_algorithms: &[String],
@@ -638,7 +609,7 @@ fn auth_with_agent<T>(
 where
     T: Handler,
 {
-    Err(RemoteError::new_ex(
+    Err(RemoteError::with_message(
         RemoteErrorType::AuthenticationFailed,
         "ssh agent authentication is not supported on this platform for the russh backend",
     ))
