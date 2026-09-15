@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 
 ## 1.0.0
 
-Released on 2026-09-09
+Released on 2026-09-15
 
 ### Breaking changes
 
