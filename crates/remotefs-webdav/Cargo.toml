@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-webdav"
-version = "0.3.0"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-webdav"
@@ -19,22 +19,27 @@ default = ["find"]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
+tokio = ["dep:tokio", "remotefs/tokio"]
 # tests
 with-containers = []
 
 [dependencies]
-bytes = "1.5"
-dav-xml = "0.2"
-dav-xml-client = { version = "0.2", default-features = false, features = ["native-tls", "ureq"] }
+dav-xml-client = { version = "0.2", default-features = false, features = ["native-tls", "reqwest"] }
+futures = "0.3"
+futures-io = "0.3"
+http = "1"
 log = "0.4"
-remotefs = "0.3"
-thiserror = "2"
+remotefs = { version = "1", features = ["async"] }
+tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
 
 [dev-dependencies]
+dav-xml-client = { version = "0.2", default-features = false, features = ["mock", "native-tls", "reqwest"] }
 env_logger = "0.11"
 pretty_assertions = "1"
 serial_test = "4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 
 [package.metadata.docs.rs]
+all-features = true
 rustdoc-args = ["--cfg", "docsrs"]

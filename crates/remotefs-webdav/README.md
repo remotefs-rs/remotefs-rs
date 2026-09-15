@@ -62,63 +62,96 @@ remotefs-webdav is a client implementation for [remotefs](https://github.com/rem
 
 ## Get started 🚀
 
-First of all, add `remotefs-webdav` to your project dependencies:
+Add `remotefs` and `remotefs-webdav` to your project dependencies:
 
 ```toml
-remotefs = "0.3"
-remotefs-webdav = "0.2"
+[dependencies]
+futures = "0.3"
+remotefs = "1"
+remotefs-webdav = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-then connect to the server and use the client as any other remotefs client:
+Then connect to the server and use the client with absolute paths:
 
-```rust
+```rust,no_run
 use std::path::Path;
 
-use remotefs::{Auth, RemoteFs};
-use remotefs_webdav::WebDAVFs;
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::{ReadOptions, WriteOptions};
+use remotefs_webdav::{Auth, WebDAVFs};
 
-let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
+async fn run() -> remotefs::RemoteResult<()> {
+    let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"))?;
+    client.connect().await?;
 
-client.connect().expect("connection failed");
-client.change_dir(Path::new("/tmp")).expect("cd failed");
-client.disconnect().expect("disconnection failed");
+    let mut source = futures::io::Cursor::new(b"hello".to_vec());
+    client
+        .write_file(
+            Path::new("/docs/hello.txt"),
+            &WriteOptions::default().size_hint(5),
+            &mut source,
+        )
+        .await?;
+
+    let mut destination = futures::io::Cursor::new(Vec::new());
+    client
+        .read_file(
+            Path::new("/docs/hello.txt"),
+            &ReadOptions::default().offset(1).length(3),
+            &mut destination,
+        )
+        .await?;
+    assert_eq!(destination.into_inner(), b"ell");
+
+    client.disconnect().await?;
+    Ok(())
+}
 ```
+
+### Blocking usage
+
+Enable the `tokio` feature and call `WebDAVFs::into_blocking` to obtain a
+`BlockingWebDAVFs` implementing `remotefs::RemoteFs`. The handle must belong
+to a multi-thread Tokio runtime, and the wrapper must not be called from an
+async context.
 
 these features are supported:
 
-- `find`: enable `find()` method on client (_enabled by default_)
+- `find`: enable `remotefs::find_async` and `remotefs::find` (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
+- `tokio`: enable `BlockingWebDAVFs` and `WebDAVFs::into_blocking` for blocking callers.
 
 ---
 
 ### Client compatibility table ✔️
 
-The following table states the compatibility for the client client and the remote file system trait method.
+The following table states the compatibility between this client and the
+remotefs 1 remote file system trait methods.
 
-Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
+Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be
+supported, and are so omitted in the table.
 
 | Client/Method  | webdav |
 | -------------- | ------ |
 | append_file    | No     |
 | append         | No     |
-| change_dir     | Yes    |
-| copy           | No     |
+| copy           | Yes    |
 | create_dir     | Yes    |
-| create_file    | Yes    |
-| create         | No     |
+| create         | Yes    |
 | exec           | No     |
 | exists         | Yes    |
 | list_dir       | Yes    |
-| mov            | Yes    |
-| open_file      | Yes    |
-| open           | No     |
-| pwd            | Yes    |
+| open           | Yes    |
+| read_file      | Yes    |
 | remove_dir_all | Yes    |
 | remove_dir     | Yes    |
 | remove_file    | Yes    |
-| setstat        | No     |
+| rename         | Yes    |
+| set_metadata   | No     |
 | stat           | Yes    |
 | symlink        | No     |
+| write_file     | Yes    |
 
 ---
 

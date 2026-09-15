@@ -7,49 +7,105 @@
 //! client implementation for the WebDAV protocol, as specified in
 //! [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918).
 //!
-//! It exposes a single type, [`WebDAVFs`], which implements the
-//! [`RemoteFs`] trait and can therefore be used
-//! interchangeably with any other remotefs client.
+//! It exposes [`WebDAVFs`], which implements [`remotefs::AsyncRemoteFs`] and
+//! can therefore be used interchangeably with any other remotefs client. With
+//! the `tokio` feature, `WebDAVFs::into_blocking` returns a
+//! `BlockingWebDAVFs` implementing the blocking [`remotefs::RemoteFs`].
 //!
 //! ## Get started
 //!
-//! First of all you need to add **remotefs** and **remotefs-webdav** to your
-//! project dependencies:
+//! Add **remotefs** and **remotefs-webdav** to your project dependencies:
 //!
 //! ```toml
 //! [dependencies]
-//! remotefs = "0.3"
-//! remotefs-webdav = "0.2"
+//! futures = "0.3"
+//! remotefs = "1"
+//! remotefs-webdav = "1"
+//! tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 //! ```
 //!
-//! Then connect to the server and use the client as any other remotefs client:
+//! Then connect to the server and use the client with absolute paths:
 //!
-//! ```rust
+//! ```rust,no_run
 //! use std::path::Path;
 //!
+//! use remotefs::AsyncRemoteFs;
+//! use remotefs::fs::{ReadOptions, WriteOptions};
+//! use remotefs_webdav::{Auth, WebDAVFs};
+//!
+//! # async fn run() -> remotefs::RemoteResult<()> {
+//! let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"))?;
+//! client.connect().await?;
+//!
+//! let mut source = futures::io::Cursor::new(b"hello".to_vec());
+//! client
+//!     .write_file(
+//!         Path::new("/docs/hello.txt"),
+//!         &WriteOptions::default().size_hint(5),
+//!         &mut source,
+//!     )
+//!     .await?;
+//!
+//! let mut destination = futures::io::Cursor::new(Vec::new());
+//! client
+//!     .read_file(
+//!         Path::new("/docs/hello.txt"),
+//!         &ReadOptions::default().offset(1).length(3),
+//!         &mut destination,
+//!     )
+//!     .await?;
+//! assert_eq!(destination.into_inner(), b"ell");
+//!
+//! client.disconnect().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Blocking usage
+//!
+//! Enable the `tokio` feature and call `WebDAVFs::into_blocking` to get a
+//! `BlockingWebDAVFs`, which implements [`remotefs::RemoteFs`] and can be
+//! stored as `Box<dyn RemoteFs>`. It must not be called from inside an async
+//! context, and the handle must belong to a multi-thread Tokio runtime.
+//!
+//! ```rust,no_run
 //! use remotefs::RemoteFs;
 //! use remotefs_webdav::{Auth, WebDAVFs};
 //!
-//! let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
-//!
-//! // connect
-//! client.connect().expect("connection failed");
-//! // print the working directory
-//! println!("wrkdir: {wrkdir}", wrkdir = client.pwd().expect("pwd failed").display());
-//! # if false {
-//! // change the working directory; this one talks to the server
-//! client.change_dir(Path::new("/tmp")).expect("cd failed");
+//! # #[cfg(feature = "tokio")]
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let runtime = tokio::runtime::Runtime::new()?;
+//! let mut client: Box<dyn RemoteFs> = Box::new(
+//!     WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"))?
+//!         .into_blocking(runtime.handle().clone()),
+//! );
+//! client.connect()?;
+//! client.disconnect()?;
+//! # Ok(())
 //! # }
-//! // disconnect
-//! client.disconnect().expect("disconnection failed");
+//! # #[cfg(not(feature = "tokio"))]
+//! # fn main() {}
 //! ```
+//!
+//! ## Filesystem semantics
+//!
+//! Every path is absolute and resolved against the base URL given to
+//! [`WebDAVFs::new`]. `open` downloads the requested range with an HTTP
+//! `Range` header and returns a seekable in-memory stream; `create` buffers
+//! writes and uploads them with one `PUT` when the stream is finished, so a
+//! dropped stream creates nothing. `rename` and `copy` use `MOVE` and `COPY`
+//! with overwrite enabled. `remove_dir` refuses non-empty collections and
+//! `remove_dir_all` issues a single recursive `DELETE`. `append`,
+//! `set_metadata`, `symlink`, and `exec` return
+//! [`remotefs::RemoteErrorType::UnsupportedFeature`].
 //!
 //! ## Feature flags
 //!
 //! | name              | description                                                        | default |
 //! | ----------------- | ------------------------------------------------------------------ | ------- |
-//! | `find`            | Enable the `find()` method on the client.                          | ✔       |
+//! | `find`            | Enable `remotefs::find_async` and `remotefs::find`.                | ✔       |
 //! | `no-log`          | Disable logging. By default this library logs via the `log` crate. |         |
+//! | `tokio`           | Enable `BlockingWebDAVFs` and `WebDAVFs::into_blocking`.           |         |
 //! | `with-containers` | Enable the tests which need the WebDAV container. Internal only.   |         |
 
 #![doc(html_playground_url = "https://play.rust-lang.org")]
@@ -63,822 +119,19 @@
 #[macro_use]
 extern crate log;
 
+mod client;
+mod error;
 #[cfg(test)]
 mod mock;
+mod resource;
+mod stream;
+mod url;
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
-
+#[cfg(feature = "tokio")]
+#[doc(inline)]
+pub use client::BlockingWebDAVFs;
+#[doc(inline)]
+pub use client::WebDAVFs;
+#[doc(no_inline)]
+pub use dav_xml_client;
 pub use dav_xml_client::Auth;
-use dav_xml_client::headers::Overwrite;
-use dav_xml_client::transport::ureq::Agent;
-use dav_xml_client::{DavClient, Resource};
-use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
-use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-
-/// A [`RemoteFs`] client speaking WebDAV.
-///
-/// The client is stateful: it keeps the base URL of the server, the current
-/// working directory, and the HTTP Basic credentials used for every request.
-/// Because WebDAV has neither streamed transfers nor POSIX metadata, `append`,
-/// `create`, `open`, `setstat`, `symlink`, `copy`, and `exec` always fail with
-/// [`RemoteErrorType::UnsupportedFeature`].
-///
-/// # Examples
-///
-/// ```rust
-/// use remotefs::RemoteFs;
-/// use remotefs_webdav::{WebDAVFs, Auth};
-///
-/// let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
-/// client.connect().expect("connection failed");
-/// ```
-pub struct WebDAVFs {
-    client: DavClient<Agent>,
-    url: String,
-    wrkdir: String,
-    connected: bool,
-}
-
-impl WebDAVFs {
-    /// Create a client for `url`, authenticating with the given `auth` credentials.
-    ///
-    /// The `url` is the base URL of the WebDAV share, without a trailing path;
-    /// every path passed to the client is resolved against it. No request is
-    /// sent until [`WebDAVFs::connect`] is called.
-    ///
-    /// The `auth` parameter specifies the authentication method to use for every request.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use remotefs_webdav::{WebDAVFs, Auth};
-    ///
-    /// let client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
-    /// ```
-    pub fn new(url: &str, auth: Auth) -> WebDAVFs {
-        WebDAVFs {
-            client: DavClient::ureq(auth),
-            url: url.to_string(),
-            wrkdir: String::from("/"),
-            connected: false,
-        }
-    }
-
-    /// Resolve `path` into the absolute URL to query.
-    ///
-    /// `force_dir` appends a trailing slash even when `path` does not look like
-    /// a directory, which WebDAV requires for collection operations.
-    fn url(&self, path: &Path, force_dir: bool) -> String {
-        let mut p = self.url.clone();
-        p.push_str(&self.path(path).to_string_lossy());
-        if !p.ends_with('/') && (path.is_dir() || force_dir) {
-            p.push('/');
-        }
-        p
-    }
-
-    /// Resolve `path` against the current working directory.
-    fn path(&self, path: &Path) -> PathBuf {
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            Path::new(&self.wrkdir).join(path)
-        }
-    }
-}
-
-impl RemoteFs for WebDAVFs {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
-        //self.list_dir(Path::new("/"))?;
-        self.connected = true;
-
-        Ok(Welcome::default())
-    }
-
-    fn disconnect(&mut self) -> RemoteResult<()> {
-        self.connected = false;
-        Ok(())
-    }
-
-    fn is_connected(&mut self) -> bool {
-        self.connected
-    }
-
-    fn pwd(&mut self) -> RemoteResult<PathBuf> {
-        Ok(PathBuf::from(&self.wrkdir))
-    }
-
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
-        let new_dir = self.path(dir);
-        self.list_dir(&new_dir)?;
-
-        self.wrkdir = new_dir.to_string_lossy().to_string();
-        if !self.wrkdir.ends_with('/') {
-            self.wrkdir.push('/');
-        }
-        debug!("Changed directory to: {}", self.wrkdir);
-        Ok(new_dir)
-    }
-
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        let url = self.url(path, true);
-        debug!("Listing directory: {}", url);
-        let response = self
-            .client
-            .list(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        debug!("Parsing response");
-
-        Ok(response
-            .into_iter()
-            .filter(|d| d.path() != path)
-            .map(resource_to_file)
-            .collect::<Vec<_>>())
-    }
-
-    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        let url = self.url(path, false);
-        debug!("Listing directory: {}", url);
-        let Some(response) = self
-            .client
-            .stat(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?
-        else {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        };
-
-        debug!("Parsing response");
-        Ok(resource_to_file(response))
-    }
-
-    fn setstat(&mut self, _path: &Path, _metadata: Metadata) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
-        debug!("Checking if file exists: {}", path.display());
-        Ok(self.stat(path).is_ok())
-    }
-
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        let url = self.url(path, false);
-        debug!("Removing file: {}", url);
-        self.client
-            .delete(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
-    }
-
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        let url = self.url(path, true);
-        debug!("Removing directory: {}", url);
-        self.client
-            .delete(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
-    }
-
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        self.remove_dir(path)
-    }
-
-    fn create_dir(&mut self, path: &Path, _mode: UnixPex) -> RemoteResult<()> {
-        if self.stat(path).is_ok() {
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
-        }
-        let url = self.url(path, true);
-        // check if dir exists
-        debug!("Creating directory: {}", url);
-        self.client
-            .mkcol(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
-    }
-
-    fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn copy(&mut self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        let src_url = self.url(src, false);
-        let dest_url = self.url(dest, false);
-        debug!("Moving file: {} to {}", src_url, dest_url);
-
-        self.client
-            .mv(&src_url, &dest_url, Overwrite::True)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
-    }
-
-    fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn open(&mut self, _path: &Path) -> RemoteResult<ReadStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create_file(
-        &mut self,
-        path: &Path,
-        _metadata: &Metadata,
-        mut reader: Box<dyn std::io::Read + Send>,
-    ) -> RemoteResult<u64> {
-        let url = self.url(path, false);
-        debug!("Creating file: {}", url);
-        let mut content = Vec::new();
-        reader
-            .read_to_end(&mut content)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
-        let size = content.len() as u64;
-        self.client
-            .put(&url, content, "application/octet-stream")
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        Ok(size)
-    }
-
-    fn open_file(
-        &mut self,
-        src: &Path,
-        mut dest: Box<dyn std::io::Write + Send>,
-    ) -> RemoteResult<u64> {
-        let url = self.url(src, false);
-        debug!("Opening file: {url}");
-        let response = self
-            .client
-            .get(&url)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))?;
-
-        if !response.status().is_success() {
-            error!("Failed to open file: {status}", status = response.status());
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-
-        let body = response.body();
-        let size = body.len() as u64;
-
-        dest.write_all(body)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))?;
-
-        Ok(size)
-    }
-}
-
-fn resource_to_file(resource: Resource) -> File {
-    debug!("converting resource to file: {resource:?}");
-
-    File {
-        path: PathBuf::from(resource.path()),
-        metadata: Metadata {
-            accessed: None,
-            created: resource.creation_date.map(|d| {
-                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(d.unix_timestamp() as u64)
-            }),
-            gid: None,
-            mode: None,
-            modified: resource.last_modified.map(SystemTime::from),
-            size: resource.content_length.unwrap_or_default(),
-            symlink: None,
-            file_type: if resource.path().ends_with('/') {
-                remotefs::fs::FileType::Directory
-            } else {
-                remotefs::fs::FileType::File
-            },
-            uid: None,
-        },
-    }
-}
-
-#[cfg(test)]
-mod test {
-
-    #[cfg(feature = "with-containers")]
-    use std::io::Cursor;
-
-    use pretty_assertions::assert_eq;
-    #[cfg(feature = "with-containers")]
-    use serial_test::serial;
-
-    use super::*;
-
-    #[test]
-    fn test_should_init_client() {
-        crate::mock::logger();
-        let client = client();
-        assert_eq!(client.url, "http://localhost:3080");
-        assert_eq!(client.wrkdir, "/");
-    }
-
-    #[test]
-    fn test_should_get_url() {
-        let mut client = client();
-        let path = Path::new("a.txt");
-        assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
-
-        let path = Path::new("/a.txt");
-        assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
-
-        let path = Path::new("/");
-        assert_eq!(client.url(path, false), "http://localhost:3080/");
-
-        client.wrkdir = "/test/".to_string();
-        let path = Path::new("a.txt");
-        assert_eq!(client.url(path, false), "http://localhost:3080/test/a.txt");
-
-        let path = Path::new("/a.txt");
-        assert_eq!(client.url(path, false), "http://localhost:3080/a.txt");
-
-        let path = Path::new("/gabibbo");
-        assert_eq!(client.url(path, true), "http://localhost:3080/gabibbo/");
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_append_to_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .append_file(p, &Metadata::default(), Box::new(reader))
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_change_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        assert!(
-            client
-                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_copy_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_create_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_create_directory_cause_already_exists() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir/"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        assert_eq!(
-            client
-                .create_dir(Path::new("mydir/"), UnixPex::from(0o755))
-                .unwrap_err()
-                .kind,
-            RemoteErrorType::DirectoryAlreadyExists
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_create_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(
-                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                    UnixPex::from(0o755)
-                )
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_create_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert_eq!(
-            client
-                .create_file(p, &metadata, Box::new(reader))
-                .ok()
-                .unwrap(),
-            10
-        );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_exec_command() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client.exec("echo 5").is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_tell_whether_file_exists() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        assert_eq!(client.exists(p).ok().unwrap(), true);
-        assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
-        assert_eq!(
-            client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
-            false
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_list_dir() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let wrkdir = client.pwd().ok().unwrap();
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let file = client
-            .list_dir(wrkdir.as_path())
-            .ok()
-            .unwrap()
-            .first()
-            .unwrap()
-            .clone();
-        assert_eq!(file.name().as_str(), "a.txt");
-        let mut expected_path = wrkdir;
-        expected_path.push(p);
-        assert_eq!(file.path.as_path(), expected_path.as_path());
-        assert_eq!(file.extension().as_deref().unwrap(), "txt");
-        assert_eq!(file.metadata.size, 10);
-        assert_eq!(file.metadata.mode, None);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_move_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let dest = Path::new("b.txt");
-        assert!(client.mov(p, dest).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_open_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_print_working_directory() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        assert!(client.pwd().is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_remove_dir_all() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(
-            client
-                .create_file(file_path.as_path(), &metadata, Box::new(reader))
-                .is_ok()
-        );
-        // Remove dir
-        assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_remove_dir() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        assert!(client.remove_dir(dir_path.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_remove_dir() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Remove dir
-        assert!(client.remove_dir(Path::new("test/")).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_remove_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.remove_file(p).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_setstat_file() {
-        use std::time::SystemTime;
-
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(
-            client
-                .setstat(
-                    p,
-                    Metadata {
-                        accessed: Some(SystemTime::UNIX_EPOCH),
-                        created: Some(SystemTime::UNIX_EPOCH),
-                        gid: Some(1000),
-                        file_type: remotefs::fs::FileType::File,
-                        mode: Some(UnixPex::from(0o755)),
-                        modified: Some(SystemTime::UNIX_EPOCH),
-                        size: 7,
-                        symlink: None,
-                        uid: Some(1000),
-                    }
-                )
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_stat_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let entry = client.stat(p).ok().unwrap();
-        assert_eq!(entry.name(), "a.sh");
-        let mut expected_path = client.pwd().ok().unwrap();
-        expected_path.push("a.sh");
-        assert_eq!(entry.path(), expected_path.as_path());
-        let meta = entry.metadata();
-        assert_eq!(meta.size, 7);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_not_stat_file() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        assert!(client.stat(p).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[serial]
-    #[cfg(feature = "with-containers")]
-    fn should_make_symlink() {
-        crate::mock::logger();
-        let mut client = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let symlink = Path::new("b.sh");
-        assert!(client.symlink(symlink, p).is_err());
-        finalize_client(client);
-    }
-
-    fn is_send<T: Send>(_send: T) {}
-
-    fn is_sync<T: Sync>(_sync: T) {}
-
-    #[test]
-    fn test_should_be_sync() {
-        let client = client();
-
-        is_sync(client);
-    }
-
-    #[test]
-    fn test_should_be_send() {
-        let client = client();
-
-        is_send(client);
-    }
-
-    #[cfg(feature = "with-containers")]
-    fn setup_client() -> WebDAVFs {
-        let mut client = WebDAVFs::new("http://localhost:3080", Auth::basic("alice", "secret1234"));
-        assert!(client.connect().is_ok(), "connect");
-        // generate random string
-        let wrkdir = PathBuf::from(format!("/test-{}/", uuid::Uuid::new_v4()));
-        // mkdir
-        assert!(
-            client.create_dir(&wrkdir, UnixPex::from(0o755)).is_ok(),
-            "create tempdir"
-        );
-        // change dir
-        assert!(client.change_dir(&wrkdir).is_ok(), "change dir");
-        assert!(client.is_connected(), "connected");
-
-        client
-    }
-
-    #[cfg(feature = "with-containers")]
-    fn finalize_client(mut client: WebDAVFs) {
-        let wrkdir = client.pwd().unwrap();
-        // remove tempdir
-        assert!(client.remove_dir_all(&wrkdir).is_ok(), "remove tempdir");
-        assert!(client.disconnect().is_ok(), "disconnect");
-        assert!(!client.is_connected(), "disconnected");
-    }
-
-    fn client() -> WebDAVFs {
-        WebDAVFs::new("http://localhost:3080", Auth::basic("user", "password"))
-    }
-}
