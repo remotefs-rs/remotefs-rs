@@ -9,16 +9,16 @@ use pavao::SmbStat;
 use remotefs::fs::{FileType, Metadata, UnixPex};
 use remotefs::File;
 
-/// Convert `SmbStat` to `File`
-pub fn smbstat_to_file<S: AsRef<str>>(uri: S, stat: SmbStat) -> File {
+/// Converts a pavao `SmbStat` for `path` into a remotefs `File`.
+pub fn smbstat_to_file(path: PathBuf, stat: SmbStat) -> File {
     #[cfg(target_os = "macos")]
     let mode = mode_t::from(stat.mode) as u32;
     #[cfg(not(target_os = "macos"))]
     let mode = mode_t::from(stat.mode);
 
-    File {
-        path: PathBuf::from(uri.as_ref()),
-        metadata: Metadata::default()
+    File::new(
+        path,
+        Metadata::default()
             .accessed(stat.accessed)
             .created(stat.created)
             .file_type(get_file_type_from_stat(&stat))
@@ -27,7 +27,7 @@ pub fn smbstat_to_file<S: AsRef<str>>(uri: S, stat: SmbStat) -> File {
             .modified(stat.modified)
             .size(stat.size)
             .uid(stat.uid),
-    }
+    )
 }
 
 fn get_file_type_from_stat(stat: &SmbStat) -> FileType {

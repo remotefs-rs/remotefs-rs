@@ -1,6 +1,8 @@
 #[macro_use]
 extern crate log;
 
+use std::path::Path;
+
 use argh::FromArgs;
 use remotefs::RemoteFs;
 #[cfg(target_family = "unix")]
@@ -58,11 +60,9 @@ fn main() -> anyhow::Result<()> {
     client.connect()?;
     info!("client connected");
 
-    let wrkdir = client.pwd()?;
-    info!("listing files at {}", wrkdir.display());
-    let files = client.list_dir(&wrkdir)?;
-
-    for file in files {
+    let root = Path::new("/");
+    info!("listing files at {}", root.display());
+    for file in client.list_dir(root)? {
         println!("{}", file.name());
     }
 

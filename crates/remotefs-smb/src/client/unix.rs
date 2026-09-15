@@ -3,7 +3,7 @@
 //! UNIX implementation of Smb fs client
 
 // -- exports
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use libc::mode_t;
@@ -13,11 +13,15 @@ pub use pavao::{
     SmbShareMode as PavaoSmbShareMode,
 };
 use pavao::{SmbDirentType, SmbMode, SmbOpenOptions};
-use remotefs::fs::{File, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
+use remotefs::fs::{
+    Capabilities, ExecOutput, File, ReadOptions, ReadStream, SetMetadata, UnixPex, WriteOptions,
+    WriteStream,
+};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
 use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
-use crate::utils::{path as path_utils, smb as smb_utils};
+use crate::utils::path::SharePath;
+use crate::utils::smb as smb_utils;
 
 impl From<SmbDialect> for pavao::SmbDialect {
     fn from(value: SmbDialect) -> Self {
@@ -32,10 +36,68 @@ impl From<SmbDialect> for pavao::SmbDialect {
     }
 }
 
+/// Wraps a pavao error, refining the kind from the underlying I/O error.
+pub(crate) fn pavao_error(kind: RemoteErrorType, error: pavao::SmbError) -> RemoteError {
+    let kind = match &error {
+        pavao::SmbError::Io(io) => match io.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => {
+                RemoteErrorType::NoSuchFileOrDirectory
+            }
+            io::ErrorKind::PermissionDenied => RemoteErrorType::PermissionDenied,
+            io::ErrorKind::AlreadyExists => RemoteErrorType::AlreadyExists,
+            io::ErrorKind::DirectoryNotEmpty => RemoteErrorType::DirectoryNotEmpty,
+            io::ErrorKind::ConnectionRefused
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NotConnected => RemoteErrorType::ConnectionError,
+            _ => kind,
+        },
+        _ => kind,
+    };
+    RemoteError::with_source(kind, error)
+}
+
 /// SMB file system client backed by pavao (libsmbclient).
+///
+/// This is a blocking [`RemoteFs`] client. Every path must be absolute and
+/// rooted at the share (`/`). Streamed transfers are not offered; use the
+/// one-shot `read_file`, `write_file`, and `append_file` methods, which honor
+/// read offsets and lengths natively. `WriteOptions::modified` is ignored
+/// because pavao does not expose a portable timestamp operation.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::io::Cursor;
+/// use std::path::Path;
+///
+/// use remotefs::RemoteFs;
+/// use remotefs::fs::WriteOptions;
+/// use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions};
+///
+/// let mut client = PavaoSmbFs::try_new(
+///     PavaoSmbCredentials::default()
+///         .server("smb://localhost:3445")
+///         .share("/temp")
+///         .username("test")
+///         .password("test")
+///         .workgroup("pavao"),
+///     PavaoSmbOptions::default(),
+/// )?;
+/// client.connect()?;
+/// client.create_dir(Path::new("/cargo"), None)?;
+/// let mut source = Cursor::new(b"hello".to_vec());
+/// client.write_file(
+///     Path::new("/cargo/hello.txt"),
+///     &WriteOptions::default(),
+///     &mut source,
+/// )?;
+/// client.disconnect()?;
+/// # Ok::<(), remotefs::RemoteError>(())
+/// ```
 pub struct PavaoSmbFs {
     client: SmbClient,
-    wrkdir: PathBuf,
+    connected: bool,
 }
 
 impl PavaoSmbFs {
@@ -107,297 +169,314 @@ impl PavaoSmbFs {
             .max_protocol(max_dialect.into());
         Ok(Self {
             client: SmbClient::new(credentials, options)
-                .map_err(|error| RemoteError::new_ex(RemoteErrorType::BadAddress, error))?,
-            wrkdir: PathBuf::from("/"),
+                .map_err(|error| pavao_error(RemoteErrorType::BadAddress, error))?,
+            connected: false,
         })
     }
 
-    /// Return a reference to the inner `pavao::SmbClient`
+    /// Returns a reference to the inner `pavao::SmbClient`.
     pub fn client(&self) -> &SmbClient {
         &self.client
     }
 
-    /// Return a mutable reference to the inner `pavao::SmbClient`
+    /// Returns a mutable reference to the inner `pavao::SmbClient`.
     pub fn client_mut(&mut self) -> &mut SmbClient {
         &mut self.client
     }
 
-    // -- private
-
-    fn check_connection(&self) -> RemoteResult<()> {
-        trace!("checking connection...");
-        match self.client.get_user() {
-            Err(e) => {
-                error!("connection ERROR: {}", e);
-                Err(RemoteError::new_ex(RemoteErrorType::ConnectionError, e))
-            }
-            Ok(_) => {
-                trace!("connection OK");
-                Ok(())
-            }
+    fn check_connected(&self) -> RemoteResult<()> {
+        if self.connected {
+            Ok(())
+        } else {
+            Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
 
-    fn get_uri<P: AsRef<Path>>(&self, p: P) -> String {
-        let p = path_utils::absolutize(self.wrkdir.as_path(), p.as_ref());
-        p.to_string_lossy().to_string()
+    fn uri(&self, path: &Path) -> RemoteResult<(PathBuf, String)> {
+        let share = SharePath::parse(path)?;
+        self.check_connected()?;
+        let absolute = share.to_path_buf();
+        let uri = absolute.to_string_lossy().into_owned();
+        Ok((absolute, uri))
+    }
+
+    fn uri_pair(
+        &self,
+        src: &Path,
+        dest: &Path,
+    ) -> RemoteResult<((PathBuf, String), (PathBuf, String))> {
+        let src = SharePath::parse(src)?.to_path_buf();
+        let dest = SharePath::parse(dest)?.to_path_buf();
+        self.check_connected()?;
+        Ok((
+            (src.clone(), src.to_string_lossy().into_owned()),
+            (dest.clone(), dest.to_string_lossy().into_owned()),
+        ))
+    }
+
+    fn open_for_write(
+        &self,
+        uri: &str,
+        opts: &WriteOptions,
+        append: bool,
+    ) -> RemoteResult<pavao::SmbFile<'_>> {
+        let mode = u32::from(opts.mode.unwrap_or_else(|| UnixPex::from(0o644))) as mode_t;
+        let options = SmbOpenOptions::default()
+            .create(true)
+            .write(true)
+            .append(append)
+            .truncate(!append)
+            .mode(mode);
+        self.client
+            .open_with(uri, options)
+            .map_err(|error| pavao_error(RemoteErrorType::CouldNotOpenFile, error))
+    }
+
+    fn copy_into(mut file: pavao::SmbFile<'_>, src: &mut (dyn Read + Send)) -> RemoteResult<u64> {
+        let copied = io::copy(src, &mut file).map_err(RemoteError::from)?;
+        file.flush().map_err(RemoteError::from)?;
+        Ok(copied)
+    }
+
+    fn unsupported() -> RemoteError {
+        RemoteError::new(RemoteErrorType::UnsupportedFeature)
     }
 }
 
 impl RemoteFs for PavaoSmbFs {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
-        // Get user to check whether connection works
-        self.check_connection()?;
-        Ok(Welcome::default())
+    fn connect(&mut self) -> RemoteResult<()> {
+        if self.connected {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyConnected));
+        }
+        trace!("checking connection...");
+        self.client
+            .get_user()
+            .map_err(|error| pavao_error(RemoteErrorType::ConnectionError, error))?;
+        self.connected = true;
+        debug!("connected");
+        Ok(())
     }
 
     fn disconnect(&mut self) -> RemoteResult<()> {
-        self.check_connection()
+        self.check_connected()?;
+        self.connected = false;
+        Ok(())
     }
 
-    fn is_connected(&mut self) -> bool {
-        // test connection
-        self.check_connection().is_ok()
+    fn is_connected(&self) -> bool {
+        self.connected
     }
 
-    fn pwd(&mut self) -> RemoteResult<PathBuf> {
-        self.check_connection().map(|_| self.wrkdir.clone())
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::APPEND
+            | Capabilities::RANGE_READ
+            | Capabilities::SET_METADATA
+            | Capabilities::POSIX_MODE
     }
 
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        let dir = path_utils::absolutize(self.wrkdir.as_path(), dir);
-        trace!("changing directory to {}", dir.display());
-        // check if directory exists
-        if self.stat(dir.as_path())?.is_dir() {
-            self.wrkdir = dir;
-            debug!("new working directory: {}", self.wrkdir.display());
-            Ok(self.wrkdir.clone())
-        } else {
-            error!("cannot enter directory {}. Not a directory", dir.display());
-            Err(RemoteError::new_ex(
-                RemoteErrorType::BadFile,
-                "not a directory",
-            ))
-        }
-    }
-
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("listing files at {}", path);
+    fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
+        let (absolute, uri) = self.uri(path)?;
+        trace!("listing files at {uri}");
         let dirents = self
             .client
-            .list_dir(path.as_str())
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::StatFailed, e))?;
-        // stat each dirent (NOTE: KEEP ONLY FILES AND DIRECTORIES)
-        Ok(dirents
-            .into_iter()
-            .filter_map(|d| {
-                if d.get_type() == SmbDirentType::File || d.get_type() == SmbDirentType::Dir {
-                    let p = PathBuf::from(format!("{}/{}", path, d.name()));
-                    Some(self.stat(&p))
-                } else {
-                    None
-                }
-            })
-            .flatten()
-            .collect())
+            .list_dir(uri.as_str())
+            .map_err(|error| pavao_error(RemoteErrorType::StatFailed, error))?;
+        let mut entries = Vec::with_capacity(dirents.len());
+        for dirent in dirents {
+            if dirent.get_type() != SmbDirentType::File && dirent.get_type() != SmbDirentType::Dir {
+                continue;
+            }
+            let child = absolute.join(dirent.name());
+            entries.push(self.stat(&child)?);
+        }
+        Ok(entries)
     }
 
-    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("get stat for {}", path);
+    fn stat(&self, path: &Path) -> RemoteResult<File> {
+        let (absolute, uri) = self.uri(path)?;
+        trace!("get stat for {uri}");
         self.client
-            .stat(path.as_str())
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::StatFailed, e))
-            .map(|stat| smb_utils::smbstat_to_file(path, stat))
+            .stat(uri.as_str())
+            .map_err(|error| pavao_error(RemoteErrorType::StatFailed, error))
+            .map(|stat| smb_utils::smbstat_to_file(absolute, stat))
     }
 
-    fn setstat(&mut self, _path: &Path, _metadata: Metadata) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
-        trace!("checking if {} exists...", path.display());
+    fn exists(&self, path: &Path) -> RemoteResult<bool> {
         match self.stat(path) {
             Ok(_) => Ok(true),
-            Err(RemoteError {
-                kind: RemoteErrorType::StatFailed,
-                ..
-            }) => Ok(false),
-            Err(err) => Err(err),
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => Ok(false),
+            Err(error) => Err(error),
         }
     }
 
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("removing file {}", path);
-        self.client
-            .unlink(path)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e))
-    }
-
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("removing directory at {}", path);
-        self.client
-            .rmdir(path)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotRemoveFile, e))
-    }
-
-    fn create_dir(&mut self, path: &Path, mode: UnixPex) -> RemoteResult<()> {
-        self.check_connection()?;
-        if self.exists(path)? {
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
+    fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
+        let (_, uri) = self.uri(path)?;
+        if metadata.uid.is_some()
+            || metadata.gid.is_some()
+            || metadata.accessed.is_some()
+            || metadata.modified.is_some()
+        {
+            return Err(Self::unsupported());
         }
-        let path = self.get_uri(path);
-        trace!("making directory at {}", path);
-        // check if directory exists
+        if let Some(mode) = metadata.mode {
+            trace!("chmod {uri} to {mode:?}");
+            self.client
+                .chmod(uri, SmbMode::from(u32::from(mode) as mode_t))
+                .map_err(|error| pavao_error(RemoteErrorType::PermissionDenied, error))?;
+        }
+        Ok(())
+    }
+
+    fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
+        let (_, uri) = self.uri(path)?;
+        trace!("making directory at {uri}");
+        let mode = u32::from(mode.unwrap_or_else(|| UnixPex::from(0o755))) as mode_t;
         self.client
-            .mkdir(path, SmbMode::from(u32::from(mode) as mode_t))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::FileCreateDenied, e))
+            .mkdir(uri, SmbMode::from(mode))
+            .map_err(|error| pavao_error(RemoteErrorType::FileCreateDenied, error))
     }
 
-    fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn remove_file(&self, path: &Path) -> RemoteResult<()> {
+        let (_, uri) = self.uri(path)?;
+        trace!("removing file {uri}");
+        self.client
+            .unlink(uri)
+            .map_err(|error| pavao_error(RemoteErrorType::CouldNotRemoveFile, error))
     }
 
-    fn copy(&mut self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
+        let (_, uri) = self.uri(path)?;
+        trace!("removing directory at {uri}");
+        self.client
+            .rmdir(uri)
+            .map_err(|error| pavao_error(RemoteErrorType::CouldNotRemoveFile, error))
     }
 
-    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = self.get_uri(src);
-        let dest = self.get_uri(dest);
-        trace!("moving {} to {}", src, dest);
-        // check if directory exists
+    fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        let ((_, src), (_, dest)) = self.uri_pair(src, dest)?;
+        trace!("moving {src} to {dest}");
         self.client
             .rename(src, dest)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::ProtocolError, e))
+            .map_err(|error| pavao_error(RemoteErrorType::ProtocolError, error))
     }
 
-    fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn copy(&self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
+        Err(Self::unsupported())
+    }
+
+    fn symlink(&self, _path: &Path, _target: &Path) -> RemoteResult<()> {
+        Err(Self::unsupported())
+    }
+
+    fn open(&self, _path: &Path, _opts: &ReadOptions) -> RemoteResult<ReadStream> {
+        Err(Self::unsupported())
+    }
+
+    fn create(&self, _path: &Path, _opts: &WriteOptions) -> RemoteResult<WriteStream> {
+        Err(Self::unsupported())
+    }
+
+    fn append(&self, _path: &Path, _opts: &WriteOptions) -> RemoteResult<WriteStream> {
+        Err(Self::unsupported())
+    }
+
+    fn read_file(
+        &self,
+        path: &Path,
+        opts: &ReadOptions,
+        dest: &mut (dyn Write + Send),
+    ) -> RemoteResult<u64> {
+        let (_, uri) = self.uri(path)?;
+        trace!("opening file at {uri} for read");
+        let mut file = self
+            .client
+            .open_with(uri, SmbOpenOptions::default().read(true))
+            .map_err(|error| pavao_error(RemoteErrorType::CouldNotOpenFile, error))?;
+        if let Some(offset) = opts.offset {
+            file.seek(SeekFrom::Start(offset))
+                .map_err(RemoteError::from)?;
+        }
+        let copied = match opts.length {
+            Some(length) => io::copy(&mut (&mut file).take(length), dest),
+            None => io::copy(&mut file, dest),
+        }
+        .map_err(RemoteError::from)?;
+        dest.flush().map_err(RemoteError::from)?;
+        Ok(copied)
+    }
+
+    fn write_file(
+        &self,
+        path: &Path,
+        opts: &WriteOptions,
+        src: &mut (dyn Read + Send),
+    ) -> RemoteResult<u64> {
+        let (_, uri) = self.uri(path)?;
+        trace!("creating file at {uri}");
+        let file = self.open_for_write(&uri, opts, false)?;
+        Self::copy_into(file, src)
     }
 
     fn append_file(
-        &mut self,
+        &self,
         path: &Path,
-        metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
+        opts: &WriteOptions,
+        src: &mut (dyn Read + Send),
     ) -> RemoteResult<u64> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("opening file at {} for append", path);
-        let mut file = self
-            .client
-            .open_with(
-                path,
-                SmbOpenOptions::default()
-                    .create(true)
-                    .append(true)
-                    .write(true)
-                    .mode(
-                        u32::from(metadata.mode.unwrap_or_else(|| UnixPex::from(0o644))) as mode_t,
-                    ),
-            )
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
-        io::copy(&mut reader, &mut file)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
+        let (_, uri) = self.uri(path)?;
+        trace!("opening file at {uri} for append");
+        let file = self.open_for_write(&uri, opts, true)?;
+        Self::copy_into(file, src)
     }
 
-    fn create_file(
-        &mut self,
-        path: &Path,
-        metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
-    ) -> RemoteResult<u64> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("creating file at {}", path);
-        let mut file = self
-            .client
-            .open_with(
-                path,
-                SmbOpenOptions::default()
-                    .create(true)
-                    .write(true)
-                    .mode(
-                        u32::from(metadata.mode.unwrap_or_else(|| UnixPex::from(0o644))) as mode_t,
-                    ),
-            )
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
-        io::copy(&mut reader, &mut file)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-    }
-
-    fn open_file(&mut self, path: &Path, mut dest: Box<dyn Write + Send>) -> RemoteResult<u64> {
-        self.check_connection()?;
-        let path = self.get_uri(path);
-        trace!("opening file at {} for read", path);
-        let mut file = self
-            .client
-            .open_with(path, SmbOpenOptions::default().read(true))
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
-        io::copy(&mut file, &mut dest).map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-    }
-
-    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn open(&mut self, _path: &Path) -> RemoteResult<ReadStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn exec(&self, _cmd: &str) -> RemoteResult<ExecOutput> {
+        Err(Self::unsupported())
     }
 }
 
 #[cfg(test)]
 mod test {
-
     #[cfg(feature = "with-containers")]
     use std::io::Cursor;
     #[cfg(feature = "with-containers")]
     use std::time::Duration;
 
+    use pretty_assertions::assert_eq;
+    use remotefs::fs::{Capabilities, ReadOptions};
+    #[cfg(feature = "with-containers")]
+    use remotefs::fs::{SetMetadata, WriteOptions};
+    use remotefs::{RemoteErrorType, RemoteFs};
     use serial_test::serial;
 
     use super::*;
 
+    fn test_credentials() -> PavaoSmbCredentials {
+        PavaoSmbCredentials::default()
+            .server("smb://localhost:3445")
+            .share("/temp")
+            .username("test")
+            .password("test")
+            .workgroup("pavao")
+    }
+
+    fn test_options() -> PavaoSmbOptions {
+        PavaoSmbOptions::default()
+            .case_sensitive(true)
+            .one_share_per_server(true)
+    }
+
     #[test]
     fn should_convert_all_dialects_to_pavao() {
-        assert_eq!(
-            pavao::SmbDialect::from(SmbDialect::Nt1),
-            pavao::SmbDialect::Nt1
-        );
-        assert_eq!(
-            pavao::SmbDialect::from(SmbDialect::Smb202),
-            pavao::SmbDialect::Smb202
-        );
-        assert_eq!(
-            pavao::SmbDialect::from(SmbDialect::Smb210),
-            pavao::SmbDialect::Smb210
-        );
-        assert_eq!(
-            pavao::SmbDialect::from(SmbDialect::Smb300),
-            pavao::SmbDialect::Smb300
-        );
-        assert_eq!(
-            pavao::SmbDialect::from(SmbDialect::Smb302),
-            pavao::SmbDialect::Smb302
-        );
-        assert_eq!(
-            pavao::SmbDialect::from(SmbDialect::Smb311),
-            pavao::SmbDialect::Smb311
-        );
+        for (ours, theirs) in [
+            (SmbDialect::Nt1, pavao::SmbDialect::Nt1),
+            (SmbDialect::Smb202, pavao::SmbDialect::Smb202),
+            (SmbDialect::Smb210, pavao::SmbDialect::Smb210),
+            (SmbDialect::Smb300, pavao::SmbDialect::Smb300),
+            (SmbDialect::Smb302, pavao::SmbDialect::Smb302),
+            (SmbDialect::Smb311, pavao::SmbDialect::Smb311),
+        ] {
+            assert_eq!(pavao::SmbDialect::from(ours), theirs);
+        }
     }
 
     #[test]
@@ -409,9 +488,8 @@ mod test {
             SmbDialect::Smb311,
             SmbDialect::Nt1,
         );
-
         assert_eq!(
-            result.err().expect("inverted bounds must fail").kind,
+            result.err().expect("inverted bounds must fail").kind(),
             RemoteErrorType::BadAddress,
         );
     }
@@ -421,15 +499,164 @@ mod test {
     fn should_default_to_secure_auto_dialect_bounds() {
         let default_client =
             PavaoSmbFs::try_new(test_credentials(), PavaoSmbOptions::default()).unwrap();
-        let explicit_auto_client = PavaoSmbFs::try_new_with_dialect(
+        let explicit = PavaoSmbFs::try_new_with_dialect(
             test_credentials(),
             PavaoSmbOptions::default(),
             SmbDialect::Smb202,
             SmbDialect::Smb311,
         );
-
-        assert!(explicit_auto_client.is_ok());
+        assert!(explicit.is_ok());
         drop(default_client);
+    }
+
+    #[test]
+    #[serial]
+    fn should_advertise_capabilities() {
+        let client = PavaoSmbFs::try_new(test_credentials(), test_options()).unwrap();
+        let capabilities = client.capabilities();
+        assert!(capabilities.contains(Capabilities::APPEND));
+        assert!(capabilities.contains(Capabilities::RANGE_READ));
+        assert!(capabilities.contains(Capabilities::SET_METADATA));
+        assert!(capabilities.contains(Capabilities::POSIX_MODE));
+        assert!(!capabilities.contains(Capabilities::STREAM_READ));
+        assert!(!capabilities.contains(Capabilities::STREAM_WRITE));
+        assert!(!capabilities.contains(Capabilities::COPY));
+        assert!(!capabilities.contains(Capabilities::SYMLINK));
+        assert!(!capabilities.contains(Capabilities::EXEC));
+    }
+
+    #[test]
+    #[serial]
+    fn should_fail_when_not_connected_and_on_relative_paths() {
+        let client = PavaoSmbFs::try_new(test_credentials(), test_options()).unwrap();
+        assert!(!client.is_connected());
+        assert_eq!(
+            client.stat(Path::new("/")).unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert_eq!(
+            client.stat(Path::new("a.txt")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client
+                .open(Path::new("/a.txt"), &ReadOptions::default())
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn should_map_pavao_io_errors() {
+        let not_found = pavao::SmbError::Io(io::Error::from(io::ErrorKind::NotFound));
+        assert_eq!(
+            pavao_error(RemoteErrorType::StatFailed, not_found).kind(),
+            RemoteErrorType::NoSuchFileOrDirectory
+        );
+        let denied = pavao::SmbError::Io(io::Error::from(io::ErrorKind::PermissionDenied));
+        assert_eq!(
+            pavao_error(RemoteErrorType::IoError, denied).kind(),
+            RemoteErrorType::PermissionDenied
+        );
+        let other = pavao::SmbError::BadValue;
+        let mapped = pavao_error(RemoteErrorType::ProtocolError, other);
+        assert_eq!(mapped.kind(), RemoteErrorType::ProtocolError);
+        assert!(std::error::Error::source(&mapped).is_some());
+    }
+
+    fn is_send<T: Send>(_send: T) {}
+
+    fn is_sync<T: Sync>(_sync: T) {}
+
+    #[test]
+    #[serial]
+    fn test_should_be_send_and_sync() {
+        let client = PavaoSmbFs::try_new(test_credentials(), test_options()).unwrap();
+        is_sync(&client);
+        is_send(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_connect_and_disconnect() {
+        crate::mock::logger();
+        let mut client = init_client();
+        assert!(client.is_connected());
+        assert_eq!(
+            client.connect().unwrap_err().kind(),
+            RemoteErrorType::AlreadyConnected
+        );
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_write_stat_and_read_file() {
+        crate::mock::logger();
+        let client = init_client();
+        let p = Path::new("/cargo-test/a.txt");
+        let mut reader = Cursor::new(b"test data\n".to_vec());
+        assert_eq!(
+            client
+                .write_file(p, &WriteOptions::default().size_hint(10), &mut reader)
+                .unwrap(),
+            10
+        );
+        let entry = client.stat(p).unwrap();
+        assert_eq!(entry.path(), p);
+        assert_eq!(entry.name(), "a.txt");
+        assert_eq!(entry.metadata().size, Some(10));
+        assert!(entry.is_file());
+        let mut buffer: Vec<u8> = Vec::new();
+        assert_eq!(
+            client
+                .read_file(p, &ReadOptions::default(), &mut buffer)
+                .unwrap(),
+            10
+        );
+        assert_eq!(buffer, b"test data\n");
+        let mut reader = Cursor::new(b"xy".to_vec());
+        assert_eq!(
+            client
+                .write_file(p, &WriteOptions::default(), &mut reader)
+                .unwrap(),
+            2
+        );
+        assert_eq!(client.stat(p).unwrap().metadata().size, Some(2));
+        finalize_client(client);
+    }
+
+    #[test]
+    #[cfg(feature = "with-containers")]
+    #[serial]
+    fn should_read_ranges() {
+        crate::mock::logger();
+        let client = init_client();
+        let p = Path::new("/cargo-test/range.txt");
+        let mut reader = Cursor::new(b"abcdef".to_vec());
+        client
+            .write_file(p, &WriteOptions::default(), &mut reader)
+            .unwrap();
+        let mut out = Vec::new();
+        client
+            .read_file(p, &ReadOptions::default().offset(2).length(2), &mut out)
+            .unwrap();
+        assert_eq!(out, b"cd");
+        let mut out = Vec::new();
+        client
+            .read_file(p, &ReadOptions::default().offset(2).length(0), &mut out)
+            .unwrap();
+        assert!(out.is_empty());
+        let mut out = Vec::new();
+        client
+            .read_file(p, &ReadOptions::default().offset(100), &mut out)
+            .unwrap();
+        assert!(out.is_empty());
+        finalize_client(client);
     }
 
     #[test]
@@ -437,176 +664,43 @@ mod test {
     #[serial]
     fn should_append_to_file() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create file
+        let client = init_client();
         let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
+        let mut reader = Cursor::new(b"test data\n".to_vec());
         assert_eq!(
             client
-                .create_file(p, &Metadata::default().size(10), Box::new(reader))
-                .ok()
+                .write_file(p, &WriteOptions::default(), &mut reader)
                 .unwrap(),
             10
         );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
+        let mut reader = Cursor::new(b"Hello, world!\n".to_vec());
         assert_eq!(
             client
-                .append_file(p, &Metadata::default().size(14), Box::new(reader))
-                .ok()
+                .append_file(p, &WriteOptions::default(), &mut reader)
                 .unwrap(),
             14
         );
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 24);
+        assert_eq!(client.stat(p).unwrap().metadata().size, Some(24));
         finalize_client(client);
     }
 
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
-    fn should_not_append_to_file() {
+    fn should_not_write_into_missing_directory() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_change_directory() {
-        crate::mock::logger();
-        let mut client = init_client();
-        let pwd = client.pwd().ok().unwrap();
-        assert!(client.change_dir(Path::new("/cargo-test")).is_ok());
-        assert!(client.change_dir(pwd.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_change_directory() {
-        crate::mock::logger();
-        let mut client = init_client();
-        assert!(client
-            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-            .is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_copy_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
-        assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_create_directory() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // create directory
-        assert!(client
-            .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
-            .is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_create_directory_cause_already_exists() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // create directory
-        assert!(client
-            .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
-            .is_ok());
-        assert_eq!(
-            client
-                .create_dir(Path::new("/cargo-test/mydir"), UnixPex::from(0o755))
-                .err()
-                .unwrap()
-                .kind,
-            RemoteErrorType::DirectoryAlreadyExists
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_create_directory() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // create directory
-        assert!(client
-            .create_dir(
-                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                UnixPex::from(0o755)
-            )
-            .is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_create_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert_eq!(
-            client
-                .create_file(p, &Metadata::default().size(10), Box::new(reader))
-                .ok()
-                .unwrap(),
-            10
-        );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_create_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
+        let client = init_client();
         let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
+        let mut reader = Cursor::new(b"x".to_vec());
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
+            .write_file(p, &WriteOptions::default(), &mut reader)
+            .is_err());
+        assert!(client
+            .append_file(p, &WriteOptions::default(), &mut reader)
+            .is_err());
+        let mut out = Vec::new();
+        assert!(client
+            .read_file(p, &ReadOptions::default(), &mut out)
             .is_err());
         finalize_client(client);
     }
@@ -614,207 +708,34 @@ mod test {
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
-    fn should_not_exec_command() {
+    fn should_create_list_and_remove_directories() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        assert!(client.exec("echo 5").is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_tell_whether_file_exists() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
+        let client = init_client();
+        let dir = Path::new("/cargo-test/mydir");
+        client.create_dir(dir, Some(UnixPex::from(0o755))).unwrap();
+        assert_eq!(
+            client.create_dir(dir, None).unwrap_err().kind(),
+            RemoteErrorType::AlreadyExists
+        );
         assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
-        // Verify size
-        assert_eq!(client.exists(p).ok().unwrap(), true);
-        assert_eq!(
-            client.exists(Path::new("/cargo-test/b.txt")).ok().unwrap(),
-            false
-        );
-        assert_eq!(
-            client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
-            false
-        );
-        assert_eq!(client.exists(Path::new("/cargo-test/")).ok().unwrap(), true);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_list_dir() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let wrkdir = client.pwd().ok().unwrap();
-        let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert_eq!(
-            client
-                .append_file(p, &Metadata::default().size(10), Box::new(reader))
-                .unwrap(),
-            10
-        );
-        // Verify size
-        let file = client
-            .list_dir(Path::new("/cargo-test/"))
-            .ok()
-            .unwrap()
-            .get(0)
-            .unwrap()
-            .clone();
-        assert_eq!(file.name().as_str(), "a.txt");
-        let mut expected_path = wrkdir;
-        expected_path.push(p);
-        assert_eq!(file.path.as_path(), expected_path.as_path());
-        assert_eq!(file.extension().as_deref().unwrap(), "txt");
-        assert_eq!(file.metadata.size, 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_list_dir() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
+            .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None)
+            .is_err());
+        let mut reader = Cursor::new(b"x".to_vec());
+        client
+            .write_file(
+                Path::new("/cargo-test/mydir/a.txt"),
+                &WriteOptions::default(),
+                &mut reader,
+            )
+            .unwrap();
+        let entries = client.list_dir(Path::new("/cargo-test/mydir")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), Path::new("/cargo-test/mydir/a.txt"));
+        assert_eq!(entries[0].extension().as_deref(), Some("txt"));
         assert!(client.list_dir(Path::new("/tmp/auhhfh/hfhjfhf/")).is_err());
-        finalize_client(client);
-    }
-
-    /*
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_move_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
-        // Verify size
-        let dest = Path::new("/cargo-test/b.txt");
-        assert!(client.mov(p, dest).is_ok());
-        assert_eq!(client.exists(p).ok().unwrap(), false);
-        assert_eq!(client.exists(dest).ok().unwrap(), true);
-        finalize_client(client);
-    }
-     */
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_move_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
-        // Verify size
-        let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
-        assert!(client.mov(p, dest).is_err());
-        assert!(client
-            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-            .is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_open_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .is_ok());
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_open_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(client
-            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-            .is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_print_working_directory() {
-        crate::mock::logger();
-        let mut client = init_client();
-        assert!(client.pwd().is_ok());
-        finalize_client(client);
-    }
-
-    /*
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_remove_dir_all() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("/cargo-test/a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-            .is_ok());
-        // Remove dir
-        assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_remove_dir_all() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Remove dir
+        assert!(client.remove_dir(dir).is_err());
+        client.remove_dir_all(dir).unwrap();
+        assert!(!client.exists(dir).unwrap());
         assert!(client
             .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
             .is_err());
@@ -824,190 +745,118 @@ mod test {
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
-    fn should_remove_dir() {
+    fn should_tell_whether_entries_exist() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
-        assert!(client.remove_dir(dir_path.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_remove_dir() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok());
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-            .is_ok());
-        // Remove dir
-        assert!(client.remove_dir(dir_path.as_path()).is_err());
-        finalize_client(client);
-    }
-     */
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_remove_file() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
+        let client = init_client();
         let p = Path::new("/cargo-test/a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok());
+        let mut reader = Cursor::new(b"x".to_vec());
+        client
+            .write_file(p, &WriteOptions::default(), &mut reader)
+            .unwrap();
+        assert!(client.exists(p).unwrap());
+        assert!(client.exists(Path::new("/cargo-test/")).unwrap());
+        assert!(!client.exists(Path::new("/cargo-test/b.txt")).unwrap());
+        assert!(!client.exists(Path::new("/tmp/ppppp/bhhrhu")).unwrap());
+        assert_eq!(
+            client.exists(Path::new("a.txt")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
-    fn should_not_setstat_file() {
+    fn should_rename_and_remove_file() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("bbbbb/cccc/a.sh");
+        let client = init_client();
+        let p = Path::new("/cargo-test/a.txt");
+        let dest = Path::new("/cargo-test/b.txt");
+        let mut reader = Cursor::new(b"x".to_vec());
+        client
+            .write_file(p, &WriteOptions::default(), &mut reader)
+            .unwrap();
+        client.rename(p, dest).unwrap();
+        assert!(!client.exists(p).unwrap());
+        assert!(client.exists(dest).unwrap());
         assert!(client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: None,
-                    created: None,
-                    file_type: remotefs::fs::FileType::File,
-                    gid: Some(1),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: None,
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1),
-                }
-            )
+            .rename(dest, Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"))
             .is_err());
+        client.remove_file(dest).unwrap();
+        assert!(!client.exists(dest).unwrap());
+        assert_eq!(
+            client.remove_file(dest).unwrap_err().kind(),
+            RemoteErrorType::NoSuchFileOrDirectory
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
-    fn should_stat_file() {
+    fn should_set_mode_only() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create file
+        let client = init_client();
         let p = Path::new("/cargo-test/a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(client
-            .create_file(p, &Metadata::default().size(7), Box::new(reader))
-            .is_ok());
-        let entry = client.stat(p).ok().unwrap();
-        assert_eq!(entry.name(), "a.sh");
-        let mut expected_path = client.pwd().ok().unwrap();
-        expected_path.push("/cargo-test/a.sh");
-        assert_eq!(entry.path(), expected_path.as_path());
-        let meta = entry.metadata();
-        assert_eq!(meta.size, 7);
+        let mut reader = Cursor::new(b"echo 5\n".to_vec());
+        client
+            .write_file(p, &WriteOptions::default(), &mut reader)
+            .unwrap();
+        client
+            .set_metadata(p, &SetMetadata::default().mode(UnixPex::from(0o755)))
+            .unwrap();
+        assert_eq!(
+            client
+                .set_metadata(p, &SetMetadata::default().uid(1))
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
         finalize_client(client);
     }
 
     #[test]
     #[cfg(feature = "with-containers")]
     #[serial]
-    fn should_not_stat_file() {
+    fn should_reject_unsupported_operations() {
         crate::mock::logger();
-        let mut client = init_client();
-        // Create file
-        let p = Path::new("a.sh");
-        assert!(client.stat(p).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-containers")]
-    #[serial]
-    fn should_not_make_symlink() {
-        crate::mock::logger();
-        let mut client = init_client();
-        // Create file
+        let client = init_client();
         let p = Path::new("/cargo-test/a.sh");
-        let symlink = Path::new("/cargo-test/b.sh");
-        assert!(client.symlink(symlink, p).is_err());
+        assert_eq!(
+            client.exec("echo 5").unwrap_err().kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            client
+                .symlink(Path::new("/cargo-test/b.sh"), p)
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            client
+                .copy(p, Path::new("/cargo-test/c.sh"))
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            client
+                .create(p, &WriteOptions::default())
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
         finalize_client(client);
-    }
-
-    fn is_send<T: Send>(_send: T) {}
-
-    fn is_sync<T: Sync>(_sync: T) {}
-
-    fn test_credentials() -> PavaoSmbCredentials {
-        PavaoSmbCredentials::default()
-            .server("smb://localhost:3445")
-            .share("/temp")
-            .username("test")
-            .password("test")
-            .workgroup("pavao")
-    }
-
-    #[test]
-    fn test_should_be_sync() {
-        let client = PavaoSmbFs::try_new(
-            test_credentials(),
-            PavaoSmbOptions::default()
-                .case_sensitive(true)
-                .one_share_per_server(true),
-        )
-        .unwrap();
-
-        is_sync(client);
-    }
-
-    #[test]
-    fn test_should_be_send() {
-        let client = PavaoSmbFs::try_new(
-            test_credentials(),
-            PavaoSmbOptions::default()
-                .case_sensitive(true)
-                .one_share_per_server(true),
-        )
-        .unwrap();
-
-        is_send(client);
     }
 
     #[cfg(feature = "with-containers")]
     fn init_client() -> PavaoSmbFs {
-        let mut client = PavaoSmbFs::try_new(
-            test_credentials(),
-            PavaoSmbOptions::default()
-                .case_sensitive(true)
-                .one_share_per_server(true),
-        )
-        .unwrap();
-        // make test dir over SMB (not on the host fs: the samba container's
-        // entrypoint chowns/chmods the bind-mounted share root, which can leave
-        // the host path unwritable for the CI user)
+        let mut client = PavaoSmbFs::try_new(test_credentials(), test_options()).unwrap();
+        client.connect().unwrap();
         let _ = client.remove_dir_all(Path::new("/cargo-test"));
         client
-            .create_dir(Path::new("/cargo-test"), UnixPex::from(0o755))
+            .create_dir(Path::new("/cargo-test"), Some(UnixPex::from(0o755)))
             .unwrap();
         client
     }
@@ -1015,6 +864,7 @@ mod test {
     #[cfg(feature = "with-containers")]
     fn finalize_client(mut client: PavaoSmbFs) {
         let _ = client.remove_dir_all(Path::new("/cargo-test"));
+        client.disconnect().unwrap();
         std::thread::sleep(Duration::from_secs(1));
         drop(client);
     }

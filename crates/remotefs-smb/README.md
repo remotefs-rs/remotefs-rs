@@ -11,7 +11,7 @@
 <p align="center">~ Remotefs SMB client ~</p>
 
 <p align="center">Developed by <a href="https://veeso.github.io/" target="_blank">@veeso</a></p>
-<p align="center">Current version: 0.5.0 (02/09/2026)</p>
+<p align="center">Current version: 1.0.0 (13/09/2026)</p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"
@@ -76,25 +76,25 @@ remotefs-smb is a client implementation for [remotefs](https://github.com/remote
 First of all, add `remotefs-smb` to your project dependencies:
 
 ```toml
-remotefs = "0.3"
-remotefs-smb = "^0.5"
+remotefs = "1"
+remotefs-smb = "1"
 ```
 
 These features are supported:
 
 - `pavao`: enable the `libsmbclient`-based client on UNIX (_enabled by default_)
-- `smb`: enable the Rust-native client on every platform
-- `find`: enable `find()` method on client (_enabled by default_)
+- `smb`: enable the Rust-native async client on every platform (enables `remotefs/async` and `remotefs/tokio`)
+- `find`: enable `remotefs::find` and `remotefs::find_async` (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 - `vendored`: build pavao with **vendored libsmbclient** (implies `pavao`)
 
 Three clients ship in this crate and can be enabled together:
 
-| Client       | Feature | Platforms | Dialects           | System libraries  |
-| ------------ | ------- | --------- | ------------------ | ----------------- |
-| `SmbFs`      | `smb`   | all       | SMB 2.0.2 to 3.1.1 | none              |
-| `PavaoSmbFs` | `pavao` | UNIX      | SMB1 to SMB 3.1.1  | `libsmbclient`    |
-| `WNetSmbFs`  | always  | Windows   | OS managed         | `WNet` (built in) |
+| Client       | Feature | Platforms | Dialects                   | System libraries  |
+| ------------ | ------- | --------- | -------------------------- | ----------------- |
+| `SmbFs`      | `smb`   | all       | SMB 2.0.2 to 3.1.1 (async) | none              |
+| `PavaoSmbFs` | `pavao` | UNIX      | SMB1 to SMB 3.1.1          | `libsmbclient`    |
+| `WNetSmbFs`  | always  | Windows   | OS managed                 | `WNet` (built in) |
 
 ### Install dependencies (pavao client only)
 
@@ -149,56 +149,85 @@ rm -rf samba/
 
 #### Rust-native client (all platforms)
 
-Enable the `smb` feature and add `tokio`:
+Enable the `smb` feature and add Tokio:
 
 ```toml
-remotefs-smb = { version = "^0.5", features = ["smb"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
+remotefs-smb = { version = "1", features = ["smb"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust
 use std::path::Path;
-use std::sync::Arc;
 
-use remotefs::{fs::UnixPex, RemoteFs};
+use remotefs::fs::WriteOptions;
+use remotefs::AsyncRemoteFs;
 use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
-use tokio::runtime::Runtime;
 
-let runtime = Arc::new(Runtime::new().unwrap());
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = SmbFs::try_new(
+        SmbCredentials::default()
+            .server("smb://localhost:3445")
+            .share("/temp")
+            .username("test")
+            .password("test")
+            .workgroup("pavao"),
+        SmbOptions::default(),
+    )?;
+
+    client.connect().await?;
+    client.create_dir(Path::new("/cargo"), None).await?;
+    let mut source = futures::io::Cursor::new(b"hello".to_vec());
+    client
+        .write_file(
+            Path::new("/cargo/hello.txt"),
+            &WriteOptions::default(),
+            &mut source,
+        )
+        .await?;
+    client.disconnect().await?;
+    Ok(())
+}
+```
+
+Blocking code wraps the client with `into_blocking`; the result implements
+`remotefs::RemoteFs`:
+
+```rust
+use std::path::Path;
+
+use remotefs::RemoteFs;
+use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
+
+let runtime = tokio::runtime::Runtime::new().unwrap();
 let mut client = SmbFs::try_new(
     SmbCredentials::default()
         .server("smb://localhost:3445")
-        .share("/temp")
-        .username("test")
-        .password("test")
-        .workgroup("pavao"),
+        .share("/temp"),
     SmbOptions::default(),
-    &runtime,
 )
-.unwrap();
-// connect
-assert!(client.connect().is_ok());
-// get working directory
-println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-// make directory
-assert!(client
-    .create_dir(Path::new("/cargo"), UnixPex::from(0o755))
-    .is_ok());
-// change working directory
-assert!(client.change_dir(Path::new("/cargo")).is_ok());
-// disconnect
-assert!(client.disconnect().is_ok());
+.unwrap()
+.into_blocking(runtime.handle().clone());
+client.connect().unwrap();
+for entry in client.list_dir(Path::new("/")).unwrap() {
+    println!("{}", entry.name());
+}
+client.disconnect().unwrap();
 ```
 
-The runtime must outlive the client and the client must not be called from a task running on that same runtime.
+`SmbFs` is asynchronous and needs a Tokio runtime. `into_blocking` requires
+a multi-thread runtime and must not be called from inside an async task.
 
 #### Pavao client (UNIX)
 
 ```rust
-// import remotefs trait and client
-use remotefs::{RemoteFs, fs::UnixPex};
-use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions};
+use std::io::Cursor;
 use std::path::Path;
+
+use remotefs::RemoteFs;
+use remotefs::fs::WriteOptions;
+use remotefs_smb::{PavaoSmbCredentials, PavaoSmbFs, PavaoSmbOptions};
+
 let mut client = PavaoSmbFs::try_new(
     PavaoSmbCredentials::default()
         .server("smb://localhost:3445")
@@ -211,74 +240,64 @@ let mut client = PavaoSmbFs::try_new(
         .one_share_per_server(true),
 )
 .unwrap();
-// connect
-assert!(client.connect().is_ok());
-// get working directory
-println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-// make directory
-assert!(client.create_dir(Path::new("/cargo"), UnixPex::from(0o755)).is_ok());
-// change working directory
-assert!(client.change_dir(Path::new("/cargo")).is_ok());
-// disconnect
-assert!(client.disconnect().is_ok());
+client.connect().unwrap();
+client.create_dir(Path::new("/cargo"), None).unwrap();
+let mut source = Cursor::new(b"hello".to_vec());
+client
+    .write_file(
+        Path::new("/cargo/hello.txt"),
+        &WriteOptions::default(),
+        &mut source,
+    )
+    .unwrap();
+client.disconnect().unwrap();
 ```
+
+The pavao client offers one-shot transfers only; `open`, `create`, and
+`append` return `UnsupportedFeature`.
 
 #### WNet client (Windows)
 
 ```rust
-// import remotefs trait and client
-use remotefs::{RemoteFs, fs::UnixPex};
-use remotefs_smb::{WNetSmbCredentials, WNetSmbFs};
 use std::path::Path;
+
+use remotefs::RemoteFs;
+use remotefs_smb::{WNetSmbCredentials, WNetSmbFs};
+
 let mut client = WNetSmbFs::new(
     WNetSmbCredentials::new("localhost:3445", "temp")
         .username("test")
-        .password("test")
+        .password("test"),
 );
-// connect
-assert!(client.connect().is_ok());
-// get working directory
-println!("Wrkdir: {}", client.pwd().ok().unwrap().display());
-// make directory
-assert!(client.create_dir(Path::new("\\cargo"), UnixPex::from(0o755)).is_ok());
-// change working directory
-assert!(client.change_dir(Path::new("\\cargo")).is_ok());
-// disconnect
-assert!(client.disconnect().is_ok());
+client.connect().unwrap();
+client.create_dir(Path::new("/cargo"), None).unwrap();
+client.disconnect().unwrap();
 ```
 
 ---
 
-### Client compatibility table ✔️
+### Client capabilities ✔️
 
-The following table states the compatibility for the client client and the remote file system trait method.
+Every client supports the lifecycle (`connect`, `disconnect`,
+`is_connected`), `list_dir`, `stat`, `exists`, `create_dir`,
+`remove_file`, `remove_dir`, `remove_dir_all`, `rename`, and the one-shot
+transfers `read_file`, `write_file`, and `append_file`. Paths are absolute
+and rooted at the share. The table lists the `Capabilities` flags each client
+advertises; `exec` and `symlink` are unsupported everywhere.
 
-Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
-
-| Client/Method  | Rust-native | pavao (UNIX) | WNet (Windows) |
-| -------------- | ----------- | ------------ | -------------- |
-| append_file    | Yes         | Yes          | Yes            |
-| append         | No          | No           | Yes            |
-| change_dir     | Yes         | Yes          | Yes            |
-| copy           | No          | No           | Yes            |
-| create_dir     | Yes         | Yes          | Yes            |
-| create_file    | Yes         | Yes          | Yes            |
-| create         | No          | No           | Yes            |
-| exec           | No          | No           | No             |
-| exists         | Yes         | Yes          | Yes            |
-| list_dir       | Yes         | Yes          | Yes            |
-| mov            | Yes         | Yes          | Yes            |
-| open_file      | Yes         | Yes          | Yes            |
-| open           | No          | No           | Yes            |
-| pwd            | Yes         | Yes          | Yes            |
-| remove_dir_all | Yes         | Yes          | Yes            |
-| remove_dir     | Yes         | Yes          | Yes            |
-| remove_file    | Yes         | Yes          | Yes            |
-| setstat        | No          | No           | Yes            |
-| stat           | Yes         | Yes          | Yes            |
-| symlink        | No          | No           | Yes            |
-
----
+| Capability     | Rust-native (`SmbFs`) | pavao (`PavaoSmbFs`) | WNet (`WNetSmbFs`) |
+| -------------- | --------------------- | -------------------- | ------------------ |
+| `STREAM_READ`  | Yes                   | No                   | Yes                |
+| `STREAM_WRITE` | Yes                   | No                   | Yes                |
+| `APPEND`       | Yes                   | Yes                  | Yes                |
+| `RANGE_READ`   | Yes                   | Yes                  | Yes                |
+| `SEEK_READ`    | Yes                   | No                   | Yes                |
+| `SEEK_WRITE`   | Yes                   | No                   | Yes                |
+| `COPY`         | Yes                   | No                   | Yes                |
+| `SYMLINK`      | No                    | No                   | No                 |
+| `SET_METADATA` | Yes (times)           | Yes (mode)           | Yes (times)        |
+| `POSIX_MODE`   | No                    | Yes                  | No                 |
+| `EXEC`         | No                    | No                   | No                 |
 
 ## Development 🛠️
 
@@ -302,7 +321,7 @@ just check                 # the full local quality gate
 and `test`, and is the required gate before opening a pull request. Most
 tests need the Samba container from `tests/docker-compose.yml` running
 locally (`docker compose -f tests/docker-compose.yml up -d --build`) before
-`just test "--no-default-features --features find,with-containers"` will pass.
+`just test "--no-default-features --features find,pavao,with-containers"` will pass.
 Pass `--features smb` (or `find,pavao,smb,with-containers`) to cover the
 Rust-native client; it shares the same container.
 

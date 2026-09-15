@@ -134,7 +134,7 @@ pub(super) fn build_client_config(
     };
     connection
         .validate()
-        .map_err(|e| RemoteError::new_ex(RemoteErrorType::BadAddress, e))?;
+        .map_err(|e| RemoteError::with_source(RemoteErrorType::BadAddress, e))?;
     Ok(ClientConfig {
         dfs: options.dfs,
         connection,
@@ -143,7 +143,7 @@ pub(super) fn build_client_config(
 }
 
 fn nt1_unsupported() -> RemoteError {
-    RemoteError::new_ex(
+    RemoteError::with_message(
         RemoteErrorType::BadAddress,
         "the SMB1/CIFS NT1 dialect is not supported by the Rust-native client",
     )
@@ -246,7 +246,7 @@ mod test {
             SmbDialect::Smb311,
         )
         .unwrap_err();
-        assert_eq!(err.kind, RemoteErrorType::BadAddress);
+        assert_eq!(err.kind(), RemoteErrorType::BadAddress);
     }
 
     #[test]
@@ -258,6 +258,6 @@ mod test {
             SmbDialect::Smb202,
         )
         .unwrap_err();
-        assert_eq!(err.kind, RemoteErrorType::BadAddress);
+        assert_eq!(err.kind(), RemoteErrorType::BadAddress);
     }
 }

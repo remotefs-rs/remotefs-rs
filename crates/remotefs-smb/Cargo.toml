@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-smb"
-version = "0.5.1"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-smb"
@@ -15,11 +15,12 @@ rust-version = "1.89.0"
 description = "remotefs SMB client library"
 
 [dependencies]
+futures-io = { version = "0.3", optional = true }
 futures-util = { version = "0.3", optional = true }
 log = "0.4"
-remotefs = "0.3"
+remotefs = "1"
 smb = { version = "0.11", default-features = false, features = ["async", "compress", "encrypt", "sign"], optional = true }
-tokio = { version = "1", features = ["rt", "rt-multi-thread"], optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]
@@ -35,16 +36,25 @@ windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_WNet", "W
 anyhow = "1"
 argh = "0.1"
 env_logger = "0.11"
+futures = "0.3"
 pretty_assertions = "1"
 rpassword = "7"
 serial_test = "3"
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["find", "pavao"]
 # clients
 pavao = ["dep:libc", "dep:pavao"]
-smb = ["dep:futures-util", "dep:smb", "dep:tokio"]
+smb = [
+  "dep:futures-io",
+  "dep:futures-util",
+  "dep:smb",
+  "dep:tokio",
+  "remotefs/async",
+  "remotefs/tokio",
+]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]

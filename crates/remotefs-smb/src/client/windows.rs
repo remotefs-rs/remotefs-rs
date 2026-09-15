@@ -5,27 +5,60 @@
 mod credentials;
 mod file_stream;
 
-use std::ffi::CString;
+use std::fs::OpenOptions;
+use std::io::{self, Seek};
 use std::path::{Path, PathBuf};
 
 pub use credentials::WNetSmbCredentials;
-use file_stream::FileStream;
-use filetime::{self, FileTime};
-use remotefs::fs::stream::{ReadAndSeek, WriteAndSeek};
-use remotefs::fs::{File, Metadata, ReadStream, UnixPex, Welcome, WriteStream};
+use file_stream::{WNetReadStream, WNetWriteStream};
+use filetime::FileTime;
+use remotefs::fs::{
+    Capabilities, ExecOutput, File, Metadata, ReadOptions, ReadStream, SetMetadata, UnixPex,
+    WriteOptions, WriteStream,
+};
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-use windows_sys::Win32::Foundation::{NO_ERROR, TRUE};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_ALREADY_ASSIGNED, ERROR_ALREADY_CONNECTED, ERROR_BAD_NETPATH,
+    ERROR_BAD_NET_NAME, ERROR_BAD_PROVIDER, ERROR_CONNECTION_UNAVAIL, ERROR_INVALID_ADDRESS,
+    ERROR_INVALID_PASSWORD, ERROR_LOGON_FAILURE, ERROR_NETWORK_UNREACHABLE, ERROR_NO_NETWORK,
+    NO_ERROR, TRUE,
+};
 use windows_sys::Win32::NetworkManagement::WNet;
 
 use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
+use crate::utils::path::SharePath;
 
 /// SMB file system client backed by the Windows WNet API.
+///
+/// This is a blocking [`RemoteFs`] client. Paths are rooted at the share:
+/// `/docs/report.txt` addresses `\\server\share\docs\report.txt`. The
+/// connection's own UNC root (`\\server\share\...`) is accepted as well and
+/// converted to the share-rooted form; returned entries always use the
+/// share-rooted form. `WriteOptions::modified` is applied when a stream
+/// finishes.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// use remotefs::RemoteFs;
+/// use remotefs_smb::{WNetSmbCredentials, WNetSmbFs};
+///
+/// let mut client = WNetSmbFs::new(
+///     WNetSmbCredentials::new("localhost", "temp")
+///         .username("test")
+///         .password("test"),
+/// );
+/// client.connect()?;
+/// client.create_dir(Path::new("/cargo"), None)?;
+/// client.disconnect()?;
+/// # Ok::<(), remotefs::RemoteError>(())
+/// ```
 pub struct WNetSmbFs {
-    remote_path: PathBuf,
     remote_name: String,
     credentials: WNetSmbCredentials,
-    wrkdir: PathBuf,
-    is_connected: bool,
+    connected: bool,
 }
 
 impl WNetSmbFs {
@@ -49,7 +82,7 @@ impl WNetSmbFs {
 
     /// Instantiates an SMB client with cross-platform dialect bounds.
     ///
-    /// Windows' native `WNetAddConnection2A` redirector API does not expose
+    /// Windows' native `WNetAddConnection2W` redirector API does not expose
     /// per-connection SMB dialect bounds. The `min_dialect` and `max_dialect`
     /// arguments are therefore accepted for API parity but are not enforced;
     /// the operating system manages protocol negotiation. In particular,
@@ -77,45 +110,115 @@ impl WNetSmbFs {
             share = credentials.share,
         );
         Self {
-            remote_path: PathBuf::from(&remote_name),
             remote_name,
             credentials,
-            wrkdir: PathBuf::from("\\"),
-            is_connected: false,
+            connected: false,
         }
     }
 
-    /// Get full path for entry
-    fn full_path(&self, p: &Path) -> PathBuf {
-        let mut full_path = self.remote_path.clone();
-
-        full_path.push(&self.wrkdir);
-        full_path.push(p);
-
-        full_path
+    /// Parses a share-rooted path, also accepting this connection's UNC root.
+    fn share_path(&self, path: &Path) -> RemoteResult<SharePath> {
+        let text = path.to_string_lossy();
+        let prefix_len = self.remote_name.len();
+        let rooted = match text.get(..prefix_len) {
+            Some(prefix) if prefix.eq_ignore_ascii_case(&self.remote_name) => {
+                let rest = &text[prefix_len..];
+                if !rest.is_empty() && !rest.starts_with(['\\', '/']) {
+                    return Err(RemoteError::with_message(
+                        RemoteErrorType::InvalidPath,
+                        "UNC path does not belong to the connected share",
+                    ));
+                }
+                format!("/{rest}", rest = rest.replace('\\', "/"))
+            }
+            _ => text.into_owned(),
+        };
+        if rooted.starts_with("\\\\") {
+            return Err(RemoteError::with_message(
+                RemoteErrorType::InvalidPath,
+                "UNC path does not belong to the connected share",
+            ));
+        }
+        SharePath::parse(Path::new(&rooted))
     }
 
-    fn check_connection(&mut self) -> RemoteResult<()> {
-        if self.is_connected() {
+    /// Builds the local UNC path the redirector understands.
+    fn local_path(&self, share: &SharePath) -> PathBuf {
+        PathBuf::from(format!(
+            "{root}\\{relative}",
+            root = self.remote_name,
+            relative = share.join("\\")
+        ))
+    }
+
+    fn resolve(&self, path: &Path) -> RemoteResult<(SharePath, PathBuf)> {
+        let share = self.share_path(path)?;
+        self.check_connection()?;
+        let local = self.local_path(&share);
+        Ok((share, local))
+    }
+
+    fn resolve_pair(
+        &self,
+        src: &Path,
+        dest: &Path,
+    ) -> RemoteResult<((SharePath, PathBuf), (SharePath, PathBuf))> {
+        let src_share = self.share_path(src)?;
+        let dest_share = self.share_path(dest)?;
+        self.check_connection()?;
+        Ok((
+            (src_share.clone(), self.local_path(&src_share)),
+            (dest_share.clone(), self.local_path(&dest_share)),
+        ))
+    }
+
+    fn check_connection(&self) -> RemoteResult<()> {
+        if self.connected {
             Ok(())
         } else {
             Err(RemoteError::new(RemoteErrorType::NotConnected))
         }
     }
 
-    fn to_cstr(s: &str) -> CString {
-        CString::new(s).unwrap()
+    fn to_wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    fn wnet_error(code: u32) -> RemoteError {
+        let kind = match code {
+            ERROR_LOGON_FAILURE | ERROR_INVALID_PASSWORD => RemoteErrorType::AuthenticationFailed,
+            ERROR_ACCESS_DENIED => RemoteErrorType::PermissionDenied,
+            ERROR_BAD_NETPATH | ERROR_BAD_NET_NAME | ERROR_INVALID_ADDRESS => {
+                RemoteErrorType::BadAddress
+            }
+            ERROR_ALREADY_CONNECTED | ERROR_ALREADY_ASSIGNED => RemoteErrorType::AlreadyConnected,
+            ERROR_CONNECTION_UNAVAIL
+            | ERROR_NO_NETWORK
+            | ERROR_NETWORK_UNREACHABLE
+            | ERROR_BAD_PROVIDER => RemoteErrorType::ConnectionError,
+            _ => RemoteErrorType::ConnectionError,
+        };
+        RemoteError::with_source(kind, io::Error::from_raw_os_error(code as i32))
+    }
+
+    fn stat_local(share: &SharePath, local: &Path) -> RemoteResult<File> {
+        let attr = std::fs::symlink_metadata(local).map_err(RemoteError::from)?;
+        Ok(File::new(share.to_path_buf(), Metadata::from(attr)))
+    }
+
+    fn unsupported() -> RemoteError {
+        RemoteError::new(RemoteErrorType::UnsupportedFeature)
     }
 }
 
 impl RemoteFs for WNetSmbFs {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
-        // add connection
+    fn connect(&mut self) -> RemoteResult<()> {
+        if self.connected {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyConnected));
+        }
         trace!("connecting to {}", self.remote_name);
-
-        let remote_name = Self::to_cstr(&self.remote_name);
-
-        let mut resource = WNet::NETRESOURCEA {
+        let mut remote_name = Self::to_wide(&self.remote_name);
+        let resource = WNet::NETRESOURCEW {
             dwDisplayType: WNet::RESOURCEDISPLAYTYPE_SHAREADMIN,
             dwScope: WNet::RESOURCE_GLOBALNET,
             dwType: WNet::RESOURCETYPE_DISK,
@@ -123,299 +226,237 @@ impl RemoteFs for WNetSmbFs {
             lpComment: std::ptr::null_mut(),
             lpLocalName: std::ptr::null_mut(),
             lpProvider: std::ptr::null_mut(),
-            lpRemoteName: remote_name.as_c_str().as_ptr() as *mut u8,
+            lpRemoteName: remote_name.as_mut_ptr(),
         };
-
-        let username = self
-            .credentials
-            .username
-            .as_mut()
-            .map(|username| Self::to_cstr(username));
-
-        let password = self
-            .credentials
-            .password
-            .as_mut()
-            .map(|password| Self::to_cstr(password));
-
+        let username = self.credentials.username.as_deref().map(Self::to_wide);
+        let password = self.credentials.password.as_deref().map(Self::to_wide);
+        // SAFETY: every pointer handed to `WNetAddConnection2W` points at a
+        // UTF-16 buffer or `NETRESOURCEW` that outlives the call, and null is the
+        // documented value for an absent user name or password.
         let result = unsafe {
             let username_ptr = username
                 .as_ref()
-                .map(|username| username.as_ptr())
-                .unwrap_or(std::ptr::null());
+                .map_or(std::ptr::null(), |username| username.as_ptr());
             let password_ptr = password
                 .as_ref()
-                .map(|password| password.as_ptr())
-                .unwrap_or(std::ptr::null());
-            WNet::WNetAddConnection2A(
-                &mut resource as *mut WNet::NETRESOURCEA,
-                password_ptr as *const u8,
-                username_ptr as *const u8,
+                .map_or(std::ptr::null(), |password| password.as_ptr());
+            WNet::WNetAddConnection2W(
+                &resource,
+                password_ptr,
+                username_ptr,
                 WNet::CONNECT_INTERACTIVE,
             )
         };
-
         if result == NO_ERROR {
-            self.is_connected = true;
-            debug!("connected to {}", self.remote_path.display());
-            Ok(Welcome::default())
+            self.connected = true;
+            debug!("connected to {}", self.remote_name);
+            Ok(())
         } else {
-            Err(RemoteError::new_ex(
-                RemoteErrorType::ConnectionError,
-                result,
-            ))
+            Err(Self::wnet_error(result))
         }
     }
 
     fn disconnect(&mut self) -> RemoteResult<()> {
         self.check_connection()?;
-
-        let remote_name = Self::to_cstr(&self.remote_name);
-
-        let result =
-            unsafe { WNet::WNetCancelConnection2A(remote_name.as_ptr() as *mut u8, 0, TRUE) };
-
+        let remote_name = Self::to_wide(&self.remote_name);
+        // SAFETY: `remote_name` is a valid NUL-terminated UTF-16 string that
+        // outlives the call.
+        let result = unsafe { WNet::WNetCancelConnection2W(remote_name.as_ptr(), 0, TRUE) };
         if result == NO_ERROR {
-            self.is_connected = false;
-            debug!("disconnected from {}", self.remote_path.display());
+            self.connected = false;
+            debug!("disconnected from {}", self.remote_name);
             Ok(())
         } else {
-            Err(RemoteError::new_ex(
-                RemoteErrorType::ConnectionError,
-                result,
-            ))
+            Err(Self::wnet_error(result))
         }
     }
 
-    fn is_connected(&mut self) -> bool {
-        self.is_connected
+    fn is_connected(&self) -> bool {
+        self.connected
     }
 
-    fn pwd(&mut self) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-
-        Ok(self.wrkdir.clone())
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::STREAM_READ
+            | Capabilities::STREAM_WRITE
+            | Capabilities::APPEND
+            | Capabilities::RANGE_READ
+            | Capabilities::SEEK_READ
+            | Capabilities::SEEK_WRITE
+            | Capabilities::COPY
+            | Capabilities::SET_METADATA
     }
 
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        let path = self.full_path(dir);
-        debug!("changing directory to {}", path.display());
-        let file = self.stat(&path)?;
-        if file.is_dir() {
-            self.wrkdir = dir.to_path_buf();
-            Ok(self.wrkdir.clone())
-        } else {
-            Err(RemoteError::new_ex(
-                RemoteErrorType::BadFile,
-                "path is not a directory",
-            ))
+    fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
+        let (share, local) = self.resolve(path)?;
+        debug!("listing dir {}", local.display());
+        let mut entries = Vec::new();
+        for entry in std::fs::read_dir(&local).map_err(RemoteError::from)? {
+            let entry = entry.map_err(RemoteError::from)?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let child = share.child(&name);
+            entries.push(Self::stat_local(&child, &entry.path())?);
+        }
+        Ok(entries)
+    }
+
+    fn stat(&self, path: &Path) -> RemoteResult<File> {
+        let (share, local) = self.resolve(path)?;
+        debug!("stat {}", local.display());
+        Self::stat_local(&share, &local)
+    }
+
+    fn exists(&self, path: &Path) -> RemoteResult<bool> {
+        match self.stat(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => Ok(false),
+            Err(error) => Err(error),
         }
     }
 
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        self.check_connection()?;
-        let abs_path = self.full_path(path);
-        debug!("listing dir {}", abs_path.display());
-        match std::fs::read_dir(abs_path) {
-            Ok(e) => {
-                let mut fs_entries: Vec<File> = Vec::new();
-                for entry in e.flatten() {
-                    match self.stat(entry.path().as_path()) {
-                        Ok(entry) => fs_entries.push(entry),
-                        Err(e) => error!("Failed to stat {}: {}", entry.path().display(), e),
-                    }
-                }
-                Ok(fs_entries)
-            }
-            Err(err) => Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err)),
+    fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
+        let (_, local) = self.resolve(path)?;
+        if metadata.mode.is_some() || metadata.uid.is_some() || metadata.gid.is_some() {
+            return Err(Self::unsupported());
         }
-    }
-
-    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("stat {}", path.display());
-
-        let attr = match std::fs::metadata(path.as_path()) {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                error!("Could not read file metadata: {}", err);
-                return Err(RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, err));
-            }
-        };
-        let metadata = Metadata::from(attr);
-        // Match dir / file
-        Ok(File { path, metadata })
-    }
-
-    fn setstat(&mut self, path: &Path, metadata: Metadata) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("setstat for {}", path.display());
-
-        if let Some(mtime) = metadata.modified {
-            let mtime = FileTime::from_system_time(mtime);
-            debug!("setting mtime {:?}", mtime);
-            filetime::set_file_mtime(&path, mtime)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
+        if let Some(modified) = metadata.modified {
+            filetime::set_file_mtime(&local, FileTime::from_system_time(modified))
+                .map_err(RemoteError::from)?;
         }
-        if let Some(atime) = metadata.accessed {
-            let atime = FileTime::from_system_time(atime);
-            filetime::set_file_atime(path, atime)
-                .map_err(|e| RemoteError::new_ex(RemoteErrorType::CouldNotOpenFile, e))?;
+        if let Some(accessed) = metadata.accessed {
+            filetime::set_file_atime(&local, FileTime::from_system_time(accessed))
+                .map_err(RemoteError::from)?;
         }
         Ok(())
     }
 
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("checking whether {} exists", path.display());
-        Ok(path.exists())
+    fn create_dir(&self, path: &Path, _mode: Option<UnixPex>) -> RemoteResult<()> {
+        let (_, local) = self.resolve(path)?;
+        debug!("creating dir at {}", local.display());
+        std::fs::create_dir(&local).map_err(RemoteError::from)
     }
 
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("removing file {}", path.display());
-        std::fs::remove_file(path).map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
+    fn remove_file(&self, path: &Path) -> RemoteResult<()> {
+        let (_, local) = self.resolve(path)?;
+        debug!("removing file {}", local.display());
+        std::fs::remove_file(local).map_err(RemoteError::from)
     }
 
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("removing dir {}", path.display());
-        std::fs::remove_dir(path).map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
+    fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
+        let (_, local) = self.resolve(path)?;
+        debug!("removing dir {}", local.display());
+        std::fs::remove_dir(local).map_err(RemoteError::from)
     }
 
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("removing all at {}", path.display());
-        std::fs::remove_dir_all(path).map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-    }
-
-    fn create_dir(&mut self, path: &Path, _mode: UnixPex) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("creating dir at {}", path.display());
-        if path.exists() {
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
-        }
-        std::fs::create_dir(&path).map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-    }
-
-    fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn copy(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = self.full_path(src);
-        let dest = self.full_path(dest);
-        debug!("copying {} to {}", src.display(), dest.display());
-
-        if src.is_dir() {
-            // If destination path doesn't exist, create destination
-            if !dest.exists() {
-                debug!("Directory {} doesn't exist; creating it", dest.display());
-                self.create_dir(dest.as_path(), UnixPex::from(0o775))?;
-            }
-            // Scan dir
-            let dir_files: Vec<File> = self.list_dir(src.as_path())?;
-            // Iterate files
-            for dir_entry in dir_files.iter() {
-                // Calculate dst
-                let mut sub_dst = dest.clone();
-                sub_dst.push(dir_entry.name());
-                // Call function recursively
-                self.copy(dir_entry.path(), sub_dst.as_path())?;
-            }
-        } else {
-            // Copy file
-            // If destination path is a directory, push file name
-            let dest = match dest.as_path().is_dir() {
-                true => {
-                    let mut p: PathBuf = dest.clone();
-                    p.push(src.file_name().unwrap());
-                    p
-                }
-                false => dest.clone(),
-            };
-            // Copy entry path to dest path
-            if let Err(err) = std::fs::copy(src, dest.as_path()) {
-                error!("Failed to copy file: {}", err);
-                return Err(RemoteError::new_ex(RemoteErrorType::IoError, err));
-            }
-            debug!("file copied");
-        }
-        Ok(())
-    }
-
-    fn mov(&mut self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let src = self.full_path(src);
-        let dest = self.full_path(dest);
+    fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        let ((_, src), (_, dest)) = self.resolve_pair(src, dest)?;
         debug!("moving {} to {}", src.display(), dest.display());
-
-        std::fs::rename(src, dest).map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
+        std::fs::rename(src, dest).map_err(RemoteError::from)
     }
 
-    fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
+        let ((src_share, src_local), (dest_share, dest_local)) = self.resolve_pair(src, dest)?;
+        if src_share.is_same_or_descendant(&dest_share) {
+            return Err(RemoteError::with_message(
+                RemoteErrorType::InvalidPath,
+                "copy destination cannot be the source or one of its descendants",
+            ));
+        }
+        debug!(
+            "copying {} to {}",
+            src_local.display(),
+            dest_local.display()
+        );
+        if src_local.is_dir() {
+            let destination_exists = dest_local.exists();
+            if !destination_exists {
+                std::fs::create_dir(&dest_local).map_err(RemoteError::from)?;
+            }
+            let result = (|| {
+                for entry in self.list_dir(&src_share.to_path_buf())? {
+                    let child_dest = dest_share.child(&entry.name()).to_path_buf();
+                    self.copy(entry.path(), &child_dest)?;
+                }
+                Ok(())
+            })();
+            if result.is_err() && !destination_exists {
+                let _ = std::fs::remove_dir_all(&dest_local);
+            }
+            result
+        } else {
+            let dest_local = if dest_local.is_dir() {
+                match src_share.name() {
+                    Some(name) => dest_local.join(name),
+                    None => dest_local,
+                }
+            } else {
+                dest_local
+            };
+            if dest_local == src_local {
+                return Err(RemoteError::with_message(
+                    RemoteErrorType::InvalidPath,
+                    "copy destination cannot be the source or one of its descendants",
+                ));
+            }
+            std::fs::copy(src_local, dest_local)
+                .map(|_| ())
+                .map_err(RemoteError::from)
+        }
     }
 
-    fn append(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream> {
-        self.check_connection()?;
-        let path_abs = self.full_path(path);
-        debug!("creating {} for reading...", path_abs.display());
-
-        let writer = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path_abs)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-            .map(|file| {
-                WriteStream::from(Box::new(FileStream::from(file)) as Box<dyn WriteAndSeek>)
-            })?;
-
-        self.setstat(path, metadata.clone())?;
-
-        Ok(writer)
+    fn symlink(&self, _path: &Path, _target: &Path) -> RemoteResult<()> {
+        Err(Self::unsupported())
     }
 
-    fn create(&mut self, path: &Path, metadata: &Metadata) -> RemoteResult<WriteStream> {
-        self.check_connection()?;
-        let path_abs = self.full_path(path);
-        debug!("creating {} for reading...", path_abs.display());
-
-        let writer = std::fs::File::create(path_abs)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-            .map(|file| {
-                WriteStream::from(Box::new(FileStream::from(file)) as Box<dyn WriteAndSeek>)
-            })?;
-
-        self.setstat(path, metadata.clone())?;
-
-        Ok(writer)
+    fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream> {
+        let (_, local) = self.resolve(path)?;
+        debug!("opening file {} for reading", local.display());
+        let mut file = std::fs::File::open(local).map_err(RemoteError::from)?;
+        if let Some(offset) = opts.offset {
+            file.seek(std::io::SeekFrom::Start(offset))
+                .map_err(RemoteError::from)?;
+        }
+        Ok(ReadStream::new(WNetReadStream::new(file, opts.length)))
     }
 
-    fn open(&mut self, path: &Path) -> RemoteResult<ReadStream> {
-        self.check_connection()?;
-        let path = self.full_path(path);
-        debug!("opening file {} for reading...", path.display());
+    fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
+        let (_, local) = self.resolve(path)?;
+        debug!("creating {} for writing", local.display());
+        let file = std::fs::File::create(&local).map_err(RemoteError::from)?;
+        Ok(WriteStream::new(WNetWriteStream::new(file, opts.modified)))
+    }
 
-        std::fs::File::open(path)
-            .map_err(|e| RemoteError::new_ex(RemoteErrorType::IoError, e))
-            .map(|file| ReadStream::from(Box::new(FileStream::from(file)) as Box<dyn ReadAndSeek>))
+    fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
+        let (_, local) = self.resolve(path)?;
+        debug!("opening {} for append", local.display());
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .truncate(false)
+            .write(true)
+            .open(&local)
+            .map_err(RemoteError::from)?;
+        let mut file = file;
+        file.seek(std::io::SeekFrom::End(0))
+            .map_err(RemoteError::from)?;
+        Ok(WriteStream::new(WNetWriteStream::new(file, opts.modified)))
+    }
+
+    fn exec(&self, _cmd: &str) -> RemoteResult<ExecOutput> {
+        Err(Self::unsupported())
     }
 }
 
 #[cfg(test)]
 mod test {
+    use pretty_assertions::assert_eq;
+    use remotefs::fs::Capabilities;
+    use remotefs::{RemoteErrorType, RemoteFs};
 
     use super::*;
+
+    fn client() -> WNetSmbFs {
+        WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"))
+    }
 
     #[test]
     fn should_construct_with_explicit_dialect_bounds() {
@@ -424,27 +465,94 @@ mod test {
             SmbDialect::Nt1,
             SmbDialect::Nt1,
         );
-
         assert_eq!(client.remote_name, r"\\pippo\pippo");
-        assert!(!client.is_connected);
+        assert!(!client.is_connected());
     }
 
     #[test]
     fn should_construct_with_secure_auto_defaults() {
-        let client = WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"));
-
+        let client = client();
         assert_eq!(AUTO_MIN_DIALECT, SmbDialect::Smb202);
         assert_eq!(AUTO_MAX_DIALECT, SmbDialect::Smb311);
-        assert!(!client.is_connected);
+        assert!(!client.is_connected());
     }
 
     #[test]
-    #[cfg(feature = "with-containers")]
-    fn should_print_working_directory() {
-        crate::mock::logger();
-        let mut client = init_client();
-        assert!(client.pwd().is_ok());
-        finalize_client(client);
+    fn should_advertise_capabilities() {
+        let capabilities = client().capabilities();
+        assert!(capabilities.contains(Capabilities::STREAM_READ));
+        assert!(capabilities.contains(Capabilities::STREAM_WRITE));
+        assert!(capabilities.contains(Capabilities::APPEND));
+        assert!(capabilities.contains(Capabilities::RANGE_READ));
+        assert!(capabilities.contains(Capabilities::SEEK_READ));
+        assert!(capabilities.contains(Capabilities::SEEK_WRITE));
+        assert!(capabilities.contains(Capabilities::COPY));
+        assert!(capabilities.contains(Capabilities::SET_METADATA));
+        assert!(!capabilities.contains(Capabilities::SYMLINK));
+        assert!(!capabilities.contains(Capabilities::POSIX_MODE));
+        assert!(!capabilities.contains(Capabilities::EXEC));
+    }
+
+    #[test]
+    fn should_map_share_and_unc_paths() {
+        let client = client();
+        assert_eq!(
+            client
+                .share_path(Path::new("/cargo/a.txt"))
+                .unwrap()
+                .to_path_buf(),
+            PathBuf::from("/cargo/a.txt")
+        );
+        assert_eq!(
+            client
+                .share_path(Path::new(r"\\PIPPO\pippo\cargo\a.txt"))
+                .unwrap()
+                .to_path_buf(),
+            PathBuf::from("/cargo/a.txt")
+        );
+        assert_eq!(
+            client
+                .share_path(Path::new(r"\\pippo\pippo"))
+                .unwrap()
+                .to_path_buf(),
+            PathBuf::from("/")
+        );
+        assert_eq!(
+            client
+                .share_path(Path::new(r"\\other\share\x"))
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.share_path(Path::new(r"\cargo")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.share_path(Path::new("cargo")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+    }
+
+    #[test]
+    fn should_build_local_paths() {
+        let client = client();
+        let share = client.share_path(Path::new("/cargo/a.txt")).unwrap();
+        assert_eq!(
+            client.local_path(&share),
+            PathBuf::from(r"\\pippo\pippo\cargo\a.txt")
+        );
+        let root = client.share_path(Path::new("/")).unwrap();
+        assert_eq!(client.local_path(&root), PathBuf::from(r"\\pippo\pippo\"));
+    }
+
+    #[test]
+    fn should_fail_when_not_connected() {
+        let client = client();
+        assert_eq!(
+            client.stat(Path::new("/")).unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
     }
 
     fn is_send<T: Send>(_send: T) {}
@@ -452,33 +560,9 @@ mod test {
     fn is_sync<T: Sync>(_sync: T) {}
 
     #[test]
-    fn test_should_be_sync() {
-        let client = WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"));
-
-        is_sync(client);
-    }
-
-    #[test]
-    fn test_should_be_send() {
-        let client = WNetSmbFs::new(WNetSmbCredentials::new("pippo", "pippo"));
-
+    fn test_should_be_send_and_sync() {
+        let client = client();
+        is_sync(&client);
         is_send(client);
-    }
-
-    #[cfg(feature = "with-containers")]
-    fn init_client() -> WNetSmbFs {
-        let mut client = WNetSmbFs::new(
-            WNetSmbCredentials::new(env!("SMB_SERVER"), env!("SMB_SHARE"))
-                .username(env!("SMB_USERNAME"))
-                .password(env!("SMB_PASSWORD")),
-        );
-        assert!(client.connect().is_ok());
-
-        client
-    }
-
-    #[cfg(feature = "with-containers")]
-    fn finalize_client(mut client: WNetSmbFs) {
-        assert!(client.disconnect().is_ok());
     }
 }

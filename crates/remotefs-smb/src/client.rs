@@ -86,4 +86,4 @@ pub use windows::*;
 #[cfg(feature = "smb")]
 mod rust_smb;
 #[cfg(feature = "smb")]
-pub use rust_smb::{SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions};
+pub use rust_smb::{BlockingSmbFs, SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions};

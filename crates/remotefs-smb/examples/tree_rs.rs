@@ -1,12 +1,11 @@
 #[macro_use]
 extern crate log;
 
-use std::sync::Arc;
+use std::path::Path;
 
 use argh::FromArgs;
-use remotefs::RemoteFs;
+use remotefs::AsyncRemoteFs;
 use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
-use tokio::runtime::Runtime;
 
 #[derive(FromArgs)]
 #[argh(description = "
@@ -34,7 +33,8 @@ struct Args {
     server: String,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     assert!(env_logger::builder().try_init().is_ok());
     let args: Args = argh::from_env();
     let password = match &args.password {
@@ -46,7 +46,6 @@ fn main() -> anyhow::Result<()> {
         "initializing client with server {} and share {}, with username {} and workgroup {}",
         args.server, args.share, args.username, args.workgroup
     );
-    let runtime = Arc::new(Runtime::new()?);
     let mut client = SmbFs::try_new(
         SmbCredentials::default()
             .server(args.server)
@@ -55,21 +54,20 @@ fn main() -> anyhow::Result<()> {
             .password(password)
             .workgroup(args.workgroup),
         SmbOptions::default(),
-        &runtime,
     )?;
 
     info!("connecting to server...");
-    client.connect()?;
+    client.connect().await?;
     info!("client connected");
 
-    let wrkdir = client.pwd()?;
-    info!("listing files at {}", wrkdir.display());
-    for file in client.list_dir(&wrkdir)? {
+    let root = Path::new("/");
+    info!("listing files at {}", root.display());
+    for file in client.list_dir(root).await? {
         println!("{}", file.name());
     }
 
     info!("disconnecting client...");
-    client.disconnect()?;
+    client.disconnect().await?;
     info!("client disconnected");
 
     Ok(())

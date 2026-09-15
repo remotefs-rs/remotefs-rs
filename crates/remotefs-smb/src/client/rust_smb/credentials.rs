@@ -120,7 +120,7 @@ pub(super) fn parse_server(server: &str) -> RemoteResult<(String, Option<u16>)> 
 }
 
 fn bad_address<S: ToString>(msg: S) -> RemoteError {
-    RemoteError::new_ex(RemoteErrorType::BadAddress, msg)
+    RemoteError::with_message(RemoteErrorType::BadAddress, msg.to_string())
 }
 
 #[cfg(test)]
@@ -156,15 +156,15 @@ mod test {
     #[test]
     fn should_reject_empty_or_bad_server() {
         assert_eq!(
-            parse_server("").unwrap_err().kind,
+            parse_server("").unwrap_err().kind(),
             RemoteErrorType::BadAddress
         );
         assert_eq!(
-            parse_server("smb://").unwrap_err().kind,
+            parse_server("smb://").unwrap_err().kind(),
             RemoteErrorType::BadAddress
         );
         assert_eq!(
-            parse_server("host:notaport").unwrap_err().kind,
+            parse_server("host:notaport").unwrap_err().kind(),
             RemoteErrorType::BadAddress
         );
     }
@@ -204,7 +204,7 @@ mod test {
             .server("fileserver")
             .resolve()
             .unwrap_err();
-        assert_eq!(err.kind, RemoteErrorType::BadAddress);
+        assert_eq!(err.kind(), RemoteErrorType::BadAddress);
     }
 
     #[test]
@@ -214,6 +214,6 @@ mod test {
             .share("temp/sub")
             .resolve()
             .unwrap_err();
-        assert_eq!(err.kind, RemoteErrorType::BadAddress);
+        assert_eq!(err.kind(), RemoteErrorType::BadAddress);
     }
 }
