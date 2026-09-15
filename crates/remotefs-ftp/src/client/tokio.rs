@@ -1,7 +1,5 @@
 //! Tokio-backed FTP client.
 
-#![allow(unused_imports)]
-
 mod stream;
 
 use std::future::Future;
@@ -33,6 +31,7 @@ use suppaftp::tokio::AsyncRustlsConnector as TlsConnector;
 pub use suppaftp::tokio::AsyncRustlsFtpStream as AsyncFtpStream;
 use suppaftp::types::{FileType as SuppaFtpFileType, Mode};
 use suppaftp::{FtpError, FtpResult, Status};
+use tokio::io::AsyncReadExt as _;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -434,6 +433,152 @@ impl TokioFtpFs {
         )
     }
 
+    /// Classifies a file operation refusal after probing for positive evidence.
+    async fn classify_file_refusal(&self, path: &Path, err: FtpError) -> RemoteError {
+        if !is_file_unavailable(&err) {
+            return ftp_error(err);
+        }
+        match self.stat(path).await {
+            Ok(file) if file.is_dir() => RemoteError::with_source(RemoteErrorType::BadFile, err),
+            Err(probe) if probe.kind() == RemoteErrorType::NoSuchFileOrDirectory => {
+                RemoteError::with_source(RemoteErrorType::NoSuchFileOrDirectory, err)
+            }
+            _ => ftp_error(err),
+        }
+    }
+
+    /// Classifies a failed STOR or APPE while preserving ambiguous refusals.
+    async fn classify_create_refusal(&self, path: &Path, err: FtpError) -> RemoteError {
+        if !is_creation_refusal(&err) {
+            return ftp_error(err);
+        }
+        match self.stat(path).await {
+            Ok(file) if file.is_dir() => {
+                RemoteError::with_source(RemoteErrorType::AlreadyExists, err)
+            }
+            Err(error)
+                if error.kind() == RemoteErrorType::NoSuchFileOrDirectory
+                    && self.destination_parent_is_missing(path).await =>
+            {
+                RemoteError::with_source(RemoteErrorType::NoSuchFileOrDirectory, err)
+            }
+            _ => RemoteError::with_source(RemoteErrorType::PermissionDenied, err),
+        }
+    }
+
+    /// Classifies a failed RMD while preserving ambiguous refusals.
+    async fn classify_remove_dir_refusal(&self, path: &Path, err: FtpError) -> RemoteError {
+        if !is_file_unavailable(&err) {
+            return ftp_error(err);
+        }
+        match self.stat(path).await {
+            Ok(file) if !file.is_dir() => RemoteError::with_source(RemoteErrorType::BadFile, err),
+            Ok(_) => match self.list_dir(path).await {
+                Ok(entries) if !entries.is_empty() => {
+                    RemoteError::with_source(RemoteErrorType::DirectoryNotEmpty, err)
+                }
+                _ => RemoteError::with_source(RemoteErrorType::PermissionDenied, err),
+            },
+            Err(probe) if probe.kind() == RemoteErrorType::NoSuchFileOrDirectory => {
+                RemoteError::with_source(RemoteErrorType::NoSuchFileOrDirectory, err)
+            }
+            _ => RemoteError::with_source(RemoteErrorType::PermissionDenied, err),
+        }
+    }
+
+    /// Probes ancestors until a successful listing can positively prove absence.
+    async fn ancestor_proves_absent(&self, path: &Path) -> RemoteResult<bool> {
+        let mut candidate = path.to_path_buf();
+        for _ in 0..8 {
+            let Some(parent) = candidate.parent() else {
+                return Ok(false);
+            };
+            let remote_parent = remote_path(parent)?;
+            match self.list_dir_raw(parent, &remote_parent).await {
+                Ok(entries) => return Ok(!entries.iter().any(|entry| entry.path() == candidate)),
+                Err(error) if is_ambiguous_path_refusal(&error) => {
+                    candidate = parent.to_path_buf();
+                }
+                Err(_) => return Ok(false),
+            }
+        }
+        Ok(false)
+    }
+
+    /// Returns true only when metadata lookup positively proves a missing parent.
+    async fn destination_parent_is_missing(&self, path: &Path) -> bool {
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        matches!(
+            self.stat(parent).await,
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory
+        )
+    }
+
+    /// Classifies a failed `MKD` while preserving ambiguous 550 refusals.
+    async fn classify_create_dir_refusal(&self, path: &Path, err: FtpError) -> RemoteError {
+        if !is_creation_refusal(&err) {
+            return ftp_error(err);
+        }
+        match self.stat(path).await {
+            Ok(_) => RemoteError::with_source(RemoteErrorType::AlreadyExists, err),
+            Err(error)
+                if error.kind() == RemoteErrorType::NoSuchFileOrDirectory
+                    && self.destination_parent_is_missing(path).await =>
+            {
+                RemoteError::with_source(RemoteErrorType::NoSuchFileOrDirectory, err)
+            }
+            _ => RemoteError::with_source(RemoteErrorType::PermissionDenied, err),
+        }
+    }
+
+    /// Classifies a failed rename while distinguishing source and destination lookup.
+    async fn classify_rename_refusal(&self, src: &Path, dest: &Path, err: FtpError) -> RemoteError {
+        if !is_creation_refusal(&err) {
+            return ftp_error(err);
+        }
+        match self.stat(src).await {
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => {
+                RemoteError::with_source(RemoteErrorType::NoSuchFileOrDirectory, err)
+            }
+            Err(_) => RemoteError::with_source(RemoteErrorType::PermissionDenied, err),
+            Ok(_) if self.destination_parent_is_missing(dest).await => {
+                RemoteError::with_source(RemoteErrorType::NoSuchFileOrDirectory, err)
+            }
+            Ok(_) => RemoteError::with_source(RemoteErrorType::PermissionDenied, err),
+        }
+    }
+
+    /// Lists a path without first asserting that the path is a directory.
+    async fn list_dir_raw(&self, path: &Path, remote: &str) -> RemoteResult<Vec<File>> {
+        let mut guard = self.lock_stream().await?;
+        let (result, requires_reconnect) = read_list_bytes(guard.stream(), remote).await;
+        guard.complete();
+        if requires_reconnect {
+            self.mark_connection_unusable();
+        }
+        let bytes = result.inspect_err(|error| error!("Failed to list directory: {error}"))?;
+        let lines = decode_list_bytes(bytes).map_err(ftp_error)?;
+        parse_list_lines(path, lines)
+    }
+
+    /// Runs a plain control command and records reconnect-worthy failures.
+    async fn run_command<R>(
+        &self,
+        command: impl for<'s> FnOnce(
+            &'s mut AsyncFtpStream,
+        ) -> Pin<Box<dyn Future<Output = FtpResult<R>> + Send + 's>>,
+    ) -> RemoteResult<FtpResult<R>> {
+        let mut guard = self.lock_stream().await?;
+        let result = command(guard.stream()).await;
+        guard.complete();
+        if let Err(error) = &result {
+            self.record_ftp_error(error);
+        }
+        Ok(result)
+    }
+
     #[cfg(feature = "tokio-native-tls")]
     fn setup_tls_connector(&self) -> RemoteResult<TlsConnector> {
         let connector = suppaftp::async_native_tls::TlsConnector::new()
@@ -599,18 +744,108 @@ impl AsyncRemoteFs for TokioFtpFs {
     }
 
     async fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
-        let _ = path;
-        todo!("task 5")
+        debug!("Getting list entries for {}", path.display());
+        let remote = remote_path(path)?;
+        let path = resolve(path);
+        let entries = match self.list_dir_raw(&path, &remote).await {
+            Ok(entries) => entries,
+            Err(error) if is_ambiguous_path_refusal(&error) => {
+                if self.ancestor_proves_absent(&path).await? {
+                    return Err(RemoteError::with_source(
+                        RemoteErrorType::NoSuchFileOrDirectory,
+                        error,
+                    ));
+                }
+                return Err(ambiguous_path_permission(error));
+            }
+            Err(error) => return Err(error),
+        };
+        if path != Path::new("/") {
+            let target_name = path.file_name().and_then(|name| name.to_str());
+            let target_is_file = entries.len() == 1
+                && target_name.is_some_and(|name| entries[0].name() == name)
+                && entries[0].is_file();
+            if target_is_file && matches!(self.stat(&path).await, Ok(entry) if entry.is_file()) {
+                return Err(RemoteError::with_message(
+                    RemoteErrorType::BadFile,
+                    "LIST requires a directory path",
+                ));
+            }
+            if entries.is_empty() && matches!(self.stat(&path).await, Ok(entry) if entry.is_file())
+            {
+                return Err(RemoteError::with_message(
+                    RemoteErrorType::BadFile,
+                    "LIST requires a directory path",
+                ));
+            }
+        }
+        Ok(entries)
     }
 
     async fn stat(&self, path: &Path) -> RemoteResult<File> {
-        let _ = path;
-        todo!("task 5")
+        debug!("Getting file information for {}", path.display());
+        remote_path(path)?;
+        let path = resolve(path);
+        if path == Path::new("/") {
+            trace!("{} has no parent: returning root", path.display());
+            let guard = self.lock_stream().await?;
+            guard.complete();
+            return Ok(File::new(
+                path,
+                Metadata::default().file_type(FileType::Directory),
+            ));
+        }
+        let parent = path
+            .parent()
+            .expect("a non-root absolute path must have a parent");
+        trace!("Listing entries for stat path file: {}", parent.display());
+        let remote_parent = remote_path(parent)?;
+        let entries = match self.list_dir_raw(parent, &remote_parent).await {
+            Ok(entries) => entries,
+            Err(error) if is_ambiguous_path_refusal(&error) => {
+                if self.ancestor_proves_absent(parent).await? {
+                    return Err(RemoteError::with_source(
+                        RemoteErrorType::NoSuchFileOrDirectory,
+                        error,
+                    ));
+                }
+                return Err(ambiguous_path_permission(error));
+            }
+            Err(error) => return Err(error),
+        };
+        let parent_name = parent.file_name().and_then(|name| name.to_str());
+        let parent_is_ambiguous_file_listing = entries.len() == 1
+            && parent_name.is_some_and(|name| entries[0].name() == name)
+            && entries[0].is_file();
+        if parent_is_ambiguous_file_listing {
+            match self.stat(parent).await {
+                Ok(parent_entry) if parent_entry.is_file() => {
+                    return Err(RemoteError::with_message(
+                        RemoteErrorType::BadFile,
+                        "the parent path is a regular file",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == RemoteErrorType::PermissionDenied => {}
+                Err(error) => return Err(error),
+            }
+        }
+        entries
+            .into_iter()
+            .find(|entry| entry.path() == path.as_path())
+            .ok_or_else(|| {
+                error!("Could not find file; no such file or directory");
+                RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory)
+            })
     }
 
     async fn exists(&self, path: &Path) -> RemoteResult<bool> {
-        let _ = path;
-        todo!("task 5")
+        debug!("Checking whether {} exists", path.display());
+        match self.stat(path).await {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == RemoteErrorType::NoSuchFileOrDirectory => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     async fn set_metadata(&self, path: &Path, _metadata: &SetMetadata) -> RemoteResult<()> {
@@ -619,23 +854,78 @@ impl AsyncRemoteFs for TokioFtpFs {
     }
 
     async fn create_dir(&self, path: &Path, _mode: Option<UnixPex>) -> RemoteResult<()> {
-        let _ = path;
-        todo!("task 5")
+        debug!("Trying to create directory {}", path.display());
+        let remote = remote_path(path)?;
+        let result = self
+            .run_command(|stream| Box::pin(stream.mkdir(remote.clone())))
+            .await?;
+        match result {
+            Ok(()) => Ok(()),
+            Err(FtpError::UnexpectedResponse(response))
+                if matches!(
+                    response.status,
+                    Status::FileUnavailable | Status::BadFilename
+                ) =>
+            {
+                let err = FtpError::UnexpectedResponse(response);
+                let error = self.classify_create_dir_refusal(path, err).await;
+                error!("Failed to create directory: {error}");
+                Err(error)
+            }
+            Err(e) => {
+                error!("Failed to create directory: {}", e);
+                Err(ftp_error(e))
+            }
+        }
     }
 
     async fn remove_file(&self, path: &Path) -> RemoteResult<()> {
-        let _ = path;
-        todo!("task 5")
+        debug!("Removing file {}", path.display());
+        let remote = remote_path(path)?;
+        let result = self
+            .run_command(|stream| Box::pin(stream.rm(remote.clone())))
+            .await?;
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let error = self.classify_file_refusal(path, err).await;
+                error!("Failed to remove file: {error}");
+                Err(error)
+            }
+        }
     }
 
     async fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
-        let _ = path;
-        todo!("task 5")
+        debug!("Removing directory {}", path.display());
+        let remote = remote_path(path)?;
+        let result = self
+            .run_command(|stream| Box::pin(stream.rmdir(remote.clone())))
+            .await?;
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let error = self.classify_remove_dir_refusal(path, err).await;
+                error!("Failed to remove directory: {error}");
+                Err(error)
+            }
+        }
     }
 
     async fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        let _ = (src, dest);
-        todo!("task 5")
+        debug!("Trying to rename {} to {}", src.display(), dest.display());
+        let remote_src = remote_path(src)?;
+        let remote_dest = remote_path(dest)?;
+        let result = self
+            .run_command(|stream| Box::pin(stream.rename(remote_src.clone(), remote_dest.clone())))
+            .await?;
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                let error = self.classify_rename_refusal(src, dest, err).await;
+                error!("Failed to rename file: {error}");
+                Err(error)
+            }
+        }
     }
 
     async fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
@@ -651,18 +941,106 @@ impl AsyncRemoteFs for TokioFtpFs {
     }
 
     async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
-        let _ = (path, opts);
-        todo!("task 5")
+        debug!("Opening {} for read ({opts:?})", path.display());
+        let remote = remote_path(path)?;
+        let offset = opts.offset.unwrap_or(0);
+        let mut guard = self.lock_stream().await?;
+        let stream = guard.stream();
+        let mut resumed = false;
+        if offset > 0 {
+            match request_offset(stream, offset).await {
+                Ok(value) => resumed = value,
+                Err(error) => {
+                    self.record_remote_error(&error);
+                    guard.complete();
+                    return Err(error);
+                }
+            }
+        }
+        let mut result = stream.retr_as_stream(&remote).await;
+        if resumed && result.is_err() {
+            match stream.resume_transfer(0).await {
+                Ok(()) => {
+                    resumed = false;
+                    result = stream.retr_as_stream(&remote).await;
+                }
+                Err(error) => {
+                    self.mark_connection_unusable();
+                    guard.complete();
+                    error!("Failed to reset REST marker after RETR refusal: {error}");
+                    return Err(ftp_error(error));
+                }
+            }
+        }
+        if let Err(err) = &result {
+            self.record_ftp_error(err);
+        }
+        let transfer = match result {
+            Ok(transfer) => transfer,
+            Err(err) => {
+                guard.complete();
+                error!("Failed to open file: {err}");
+                return Err(self.classify_file_refusal(path, err).await);
+            }
+        };
+        let transfer_guard = self.start_transfer();
+        guard.complete();
+        let mut reader = TokioReadStream::new(transfer, opts.length, transfer_guard);
+        if offset > 0 && !resumed {
+            debug!("Skipping {offset} bytes locally");
+            if let Err(skip) = reader.skip_prefix(offset).await {
+                return Err(reader.finish_after_skip(skip).await);
+            }
+        }
+        Ok(AsyncReadStream::new(reader))
     }
 
     async fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
-        let _ = (path, opts);
-        todo!("task 5")
+        debug!("Opening {} for write ({opts:?})", path.display());
+        let remote = remote_path(path)?;
+        let mut guard = self.lock_stream().await?;
+        let result = guard.stream().put_with_stream(&remote).await;
+        if let Err(err) = &result {
+            self.record_ftp_error(err);
+        }
+        let transfer = match result {
+            Ok(transfer) => transfer,
+            Err(err) => {
+                guard.complete();
+                error!("Failed to open file: {err}");
+                return Err(self.classify_create_refusal(path, err).await);
+            }
+        };
+        let transfer_guard = self.start_transfer();
+        guard.complete();
+        Ok(AsyncWriteStream::new(TokioWriteStream::new(
+            transfer,
+            transfer_guard,
+        )))
     }
 
     async fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
-        let _ = (path, opts);
-        todo!("task 5")
+        debug!("Opening {} for append ({opts:?})", path.display());
+        let remote = remote_path(path)?;
+        let mut guard = self.lock_stream().await?;
+        let result = guard.stream().append_with_stream(&remote).await;
+        if let Err(err) = &result {
+            self.record_ftp_error(err);
+        }
+        let transfer = match result {
+            Ok(transfer) => transfer,
+            Err(err) => {
+                guard.complete();
+                error!("Failed to open file: {err}");
+                return Err(self.classify_create_refusal(path, err).await);
+            }
+        };
+        let transfer_guard = self.start_transfer();
+        guard.complete();
+        Ok(AsyncWriteStream::new(TokioWriteStream::new(
+            transfer,
+            transfer_guard,
+        )))
     }
 
     async fn exec(&self, cmd: &str) -> RemoteResult<ExecOutput> {
@@ -682,6 +1060,71 @@ impl AsyncRemoteFs for TokioFtpFs {
             status,
             String::from_utf8_lossy(&response.body).into_owned(),
         ))
+    }
+}
+
+/// Requests a native FTP restart marker, falling back to a local skip when refused.
+async fn request_offset(stream: &mut AsyncFtpStream, offset: u64) -> RemoteResult<bool> {
+    let Ok(offset) = usize::try_from(offset) else {
+        warn!("offset {offset} does not fit the REST command; skipping locally");
+        return Ok(false);
+    };
+    match stream.resume_transfer(offset).await {
+        Ok(()) => Ok(true),
+        Err(FtpError::UnexpectedResponse(response)) if response.status != Status::NotAvailable => {
+            warn!(
+                "server refused REST {offset} ({}); skipping locally",
+                response.status
+            );
+            Ok(false)
+        }
+        Err(error) => {
+            error!("Failed to request offset {offset}: {error}");
+            Err(ftp_error(error))
+        }
+    }
+}
+
+/// Reads raw `LIST` bytes and reports whether cleanup requires reconnecting.
+async fn read_list_bytes(
+    stream: &mut AsyncFtpStream,
+    remote: &str,
+) -> (RemoteResult<Vec<u8>>, bool) {
+    let (_, mut transfer) = match stream
+        .custom_data_command(
+            format!("LIST {remote}"),
+            &[Status::AboutToSend, Status::AlreadyOpen],
+        )
+        .await
+    {
+        Ok(transfer) => transfer,
+        Err(err) => {
+            let requires_reconnect = transfer_setup_requires_reconnect(&err);
+            return (Err(ftp_error(err)), requires_reconnect);
+        }
+    };
+    let mut bytes = Vec::new();
+    let read_result = transfer
+        .read_to_end(&mut bytes)
+        .await
+        .map(|_| ())
+        .map_err(FtpError::ConnectionError);
+    let finish_result = transfer.finish().await;
+    match (read_result, finish_result) {
+        (Ok(()), Ok(())) => (Ok(bytes), false),
+        (Err(read), Ok(())) => (Err(ftp_error(read)), true),
+        (Ok(()), Err(finish)) => (Err(ftp_error(finish)), true),
+        (Err(read), Err(finish)) => {
+            let read = ftp_error(read);
+            let finish = ftp_error(finish);
+            (
+                Err(RemoteError::with_source(
+                    read.kind(),
+                    ListCleanupFailure { read, finish },
+                )),
+                true,
+            )
+        }
     }
 }
 
@@ -829,5 +1272,580 @@ mod tests {
         is_sync(TokioFtpFs::new("127.0.0.1", 10021));
         let _: Box<dyn AsyncRemoteFs> = Box::new(TokioFtpFs::new("127.0.0.1", 10021));
         let _: Arc<dyn AsyncRemoteFs> = Arc::new(TokioFtpFs::new("127.0.0.1", 10021));
+    }
+
+    #[tokio::test]
+    async fn ranged_open_requests_rest_before_retr() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            assert_eq!(read_scripted_command(&mut control), "REST 2\r\n");
+            write_scripted_reply(&mut control, "350 restart position accepted\r\n");
+            let transfer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let transfer_port = transfer_listener.local_addr().unwrap().port();
+            assert_eq!(read_scripted_command(&mut control), "PASV\r\n");
+            write_scripted_reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    transfer_port / 256,
+                    transfer_port % 256
+                ),
+            );
+            assert_eq!(read_scripted_command(&mut control), "RETR /file\r\n");
+            write_scripted_reply(&mut control, "150 opening data\r\n");
+            let (mut transfer_data, _) = transfer_listener.accept().unwrap();
+            std::io::Write::write_all(&mut transfer_data, b"cdef").unwrap();
+            drop(transfer_data);
+            write_scripted_reply(&mut control, "226 transfer complete\r\n");
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        let mut reader = client
+            .open(Path::new("/file"), &ReadOptions::default().offset(2))
+            .await
+            .unwrap();
+        let mut contents = Vec::new();
+        futures::AsyncReadExt::read_to_end(&mut reader, &mut contents)
+            .await
+            .unwrap();
+        reader.finish().await.unwrap();
+        assert_eq!(contents, b"cdef");
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_dir_classifies_a_direct_single_file_listing() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            complete_scripted_list(
+                &mut control,
+                "/dir/file",
+                b"-rw-r--r-- 1 test test 4 Jan 01 12:00 file\r\n",
+            );
+            complete_scripted_list(
+                &mut control,
+                "/dir",
+                b"-rw-r--r-- 1 test test 4 Jan 01 12:00 file\r\n",
+            );
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client
+                .list_dir(Path::new("/dir/file"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::BadFile
+        );
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_dir_classifies_a_missing_path_after_parent_probe() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            refuse_scripted_list(&mut control, "/dir/missing");
+            complete_scripted_list(
+                &mut control,
+                "/dir",
+                b"-rw-r--r-- 1 test test 4 Jan 01 12:00 other\r\n",
+            );
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client
+                .list_dir(Path::new("/dir/missing"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::NoSuchFileOrDirectory
+        );
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_accepts_already_open_and_keeps_control_connection_synchronized() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            let reply = |control: &mut BufReader<std::net::TcpStream>, response: &str| {
+                std::io::Write::write_all(control.get_mut(), response.as_bytes()).unwrap();
+            };
+            let command = |control: &mut BufReader<std::net::TcpStream>| {
+                let mut line = String::new();
+                std::io::BufRead::read_line(control, &mut line).unwrap();
+                line
+            };
+
+            reply(&mut control, "220 ready\r\n");
+            assert_eq!(command(&mut control), "USER anonymous\r\n");
+            reply(&mut control, "331 password\r\n");
+            assert_eq!(command(&mut control), "PASS \r\n");
+            reply(&mut control, "230 logged in\r\n");
+            assert_eq!(command(&mut control), "TYPE I\r\n");
+            reply(&mut control, "200 binary\r\n");
+
+            let data_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let data_port = data_listener.local_addr().unwrap().port();
+            assert_eq!(command(&mut control), "PASV\r\n");
+            reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    data_port / 256,
+                    data_port % 256
+                ),
+            );
+            assert_eq!(command(&mut control), "LIST /\r\n");
+            reply(&mut control, "125 data connection already open\r\n");
+            let (mut data, _) = data_listener.accept().unwrap();
+            std::io::Write::write_all(
+                &mut data,
+                b"-rw-r--r-- 1 1000 1000 0 Nov 5 2024 file.txt\r\n",
+            )
+            .unwrap();
+            drop(data);
+            reply(&mut control, "226 listing complete\r\n");
+
+            assert_eq!(command(&mut control), "SITE NOOP\r\n");
+            reply(&mut control, "200 noop\r\n");
+            assert_eq!(command(&mut control), "QUIT\r\n");
+            reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        let entries = client.list_dir(Path::new("/")).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(client.exec("NOOP").await.unwrap().exit_code, 200);
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_dir_succeeds_when_only_the_requested_directory_can_be_listed() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            let reply = |control: &mut BufReader<std::net::TcpStream>, response: &str| {
+                std::io::Write::write_all(control.get_mut(), response.as_bytes()).unwrap();
+            };
+            let command = |control: &mut BufReader<std::net::TcpStream>| {
+                let mut line = String::new();
+                std::io::BufRead::read_line(control, &mut line).unwrap();
+                line
+            };
+
+            reply(&mut control, "220 ready\r\n");
+            assert_eq!(command(&mut control), "USER anonymous\r\n");
+            reply(&mut control, "331 password\r\n");
+            assert_eq!(command(&mut control), "PASS \r\n");
+            reply(&mut control, "230 logged in\r\n");
+            assert_eq!(command(&mut control), "TYPE I\r\n");
+            reply(&mut control, "200 binary\r\n");
+
+            let data_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let data_port = data_listener.local_addr().unwrap().port();
+            assert_eq!(command(&mut control), "PASV\r\n");
+            reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    data_port / 256,
+                    data_port % 256
+                ),
+            );
+            assert_eq!(command(&mut control), "LIST /allowed\r\n");
+            reply(&mut control, "150 opening data\r\n");
+            let (mut data, _) = data_listener.accept().unwrap();
+            std::io::Write::write_all(
+                &mut data,
+                b"-rw-r--r-- 1 1000 1000 0 Nov 5 2024 child.txt\r\n",
+            )
+            .unwrap();
+            drop(data);
+            reply(&mut control, "226 listing complete\r\n");
+
+            assert_eq!(command(&mut control), "SITE NOOP\r\n");
+            reply(&mut control, "200 noop\r\n");
+            assert_eq!(command(&mut control), "QUIT\r\n");
+            reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        let entries = client.list_dir(Path::new("/allowed")).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].path(), Path::new("/allowed/child.txt"));
+        assert_eq!(client.exec("NOOP").await.unwrap().exit_code, 200);
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stat_rejects_children_beneath_a_regular_file_listing() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            complete_scripted_list(
+                &mut control,
+                "/file.txt",
+                b"-rw-r--r-- 1 1000 1000 0 Nov 5 2024 file.txt\r\n",
+            );
+            complete_scripted_list(
+                &mut control,
+                "/",
+                b"-rw-r--r-- 1 1000 1000 0 Nov 5 2024 file.txt\r\n",
+            );
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client
+                .stat(Path::new("/file.txt/file.txt"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::BadFile
+        );
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stat_keeps_a_child_when_parent_disambiguation_is_denied() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            complete_scripted_list(
+                &mut control,
+                "/pub",
+                b"-rw-r--r-- 1 1000 1000 0 Nov 5 2024 pub\r\n",
+            );
+            refuse_scripted_list(&mut control, "/");
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        let file = client.stat(Path::new("/pub/pub")).await.unwrap();
+        assert_eq!(file.path(), Path::new("/pub/pub"));
+        assert!(file.is_file());
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_dir_keeps_an_empty_directory_symlink_listing() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            complete_scripted_list(&mut control, "/link", b"");
+            complete_scripted_list(
+                &mut control,
+                "/",
+                b"lrwxrwxrwx 1 1000 1000 6 Nov 5 2024 link -> target\r\n",
+            );
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert!(
+            client
+                .list_dir(Path::new("/link"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ancestor_probe_lists_each_parent_at_most_once() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            for path in ["/a/b/c", "/a/b", "/a", "/"] {
+                refuse_scripted_list(&mut control, path);
+            }
+            assert_eq!(read_scripted_command(&mut control), "SITE NOOP\r\n");
+            write_scripted_reply(&mut control, "200 noop\r\n");
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client
+                .stat(Path::new("/a/b/c/file"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::PermissionDenied
+        );
+        assert_eq!(client.exec("NOOP").await.unwrap().exit_code, 200);
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_setup_421_allows_a_fresh_connection() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+
+            let data_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let data_port = data_listener.local_addr().unwrap().port();
+            assert_eq!(read_scripted_command(&mut control), "PASV\r\n");
+            write_scripted_reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    data_port / 256,
+                    data_port % 256
+                ),
+            );
+            assert_eq!(read_scripted_command(&mut control), "LIST /\r\n");
+            let (data, _) = data_listener.accept().unwrap();
+            write_scripted_reply(&mut control, "421 service closing\r\n");
+            drop(data);
+            drop(control);
+
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            assert_eq!(read_scripted_command(&mut control), "SITE NOOP\r\n");
+            write_scripted_reply(&mut control, "200 noop\r\n");
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client.list_dir(Path::new("/")).await.unwrap_err().kind(),
+            RemoteErrorType::ConnectionError
+        );
+        assert!(!client.is_connected());
+        client.connect().await.unwrap();
+        assert_eq!(client.exec("NOOP").await.unwrap().exit_code, 200);
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_list_completion_requires_reconnect_before_follow_up_commands() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            let reply = |control: &mut BufReader<std::net::TcpStream>, response: &str| {
+                std::io::Write::write_all(control.get_mut(), response.as_bytes()).unwrap();
+            };
+            let command = |control: &mut BufReader<std::net::TcpStream>| {
+                let mut line = String::new();
+                std::io::BufRead::read_line(control, &mut line).unwrap();
+                line
+            };
+
+            reply(&mut control, "220 ready\r\n");
+            assert_eq!(command(&mut control), "USER anonymous\r\n");
+            reply(&mut control, "331 password\r\n");
+            assert_eq!(command(&mut control), "PASS \r\n");
+            reply(&mut control, "230 logged in\r\n");
+            assert_eq!(command(&mut control), "TYPE I\r\n");
+            reply(&mut control, "200 binary\r\n");
+
+            let data_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let data_port = data_listener.local_addr().unwrap().port();
+            assert_eq!(command(&mut control), "PASV\r\n");
+            reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    data_port / 256,
+                    data_port % 256
+                ),
+            );
+            assert_eq!(command(&mut control), "LIST /\r\n");
+            reply(&mut control, "150 opening data\r\n");
+            let (mut data, _) = data_listener.accept().unwrap();
+            std::io::Write::write_all(
+                &mut data,
+                b"-rw-r--r-- 1 1000 1000 0 Nov 5 2024 file.txt\r\n",
+            )
+            .unwrap();
+            drop(data);
+            reply(&mut control, "426 transfer aborted\r\n");
+
+            control
+                .get_mut()
+                .set_read_timeout(Some(Duration::from_millis(500)))
+                .unwrap();
+            let mut follow_up = String::new();
+            if std::io::BufRead::read_line(&mut control, &mut follow_up).unwrap_or(0) > 0 {
+                assert_eq!(follow_up, "SITE NOOP\r\n");
+                reply(&mut control, "200 noop\r\n");
+                assert_eq!(command(&mut control), "QUIT\r\n");
+                reply(&mut control, "221 bye\r\n");
+            }
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client.list_dir(Path::new("/")).await.unwrap_err().kind(),
+            RemoteErrorType::ConnectionError
+        );
+        assert_eq!(
+            client.exec("NOOP").await.unwrap_err().kind(),
+            RemoteErrorType::ConnectionError
+        );
+        assert_eq!(
+            client.disconnect().await.unwrap_err().kind(),
+            RemoteErrorType::ConnectionError
+        );
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_after_successful_list_completion_keeps_connection_usable() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            let reply = |control: &mut BufReader<std::net::TcpStream>, response: &str| {
+                std::io::Write::write_all(control.get_mut(), response.as_bytes()).unwrap();
+            };
+            let command = |control: &mut BufReader<std::net::TcpStream>| {
+                let mut line = String::new();
+                std::io::BufRead::read_line(control, &mut line).unwrap();
+                line
+            };
+
+            reply(&mut control, "220 ready\r\n");
+            assert_eq!(command(&mut control), "USER anonymous\r\n");
+            reply(&mut control, "331 password\r\n");
+            assert_eq!(command(&mut control), "PASS \r\n");
+            reply(&mut control, "230 logged in\r\n");
+            assert_eq!(command(&mut control), "TYPE I\r\n");
+            reply(&mut control, "200 binary\r\n");
+
+            let data_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let data_port = data_listener.local_addr().unwrap().port();
+            assert_eq!(command(&mut control), "PASV\r\n");
+            reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    data_port / 256,
+                    data_port % 256
+                ),
+            );
+            assert_eq!(command(&mut control), "LIST /\r\n");
+            reply(&mut control, "150 opening data\r\n");
+            let (mut data, _) = data_listener.accept().unwrap();
+            std::io::Write::write_all(
+                &mut data,
+                b"-rw-r--r-- 1 1000 1000 1 Nov 5 2024 bad\xff\r\n",
+            )
+            .unwrap();
+            drop(data);
+            reply(&mut control, "226 listing complete\r\n");
+
+            assert_eq!(command(&mut control), "SITE NOOP\r\n");
+            reply(&mut control, "200 noop\r\n");
+            assert_eq!(command(&mut control), "QUIT\r\n");
+            reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        assert_eq!(
+            client.list_dir(Path::new("/")).await.unwrap_err().kind(),
+            RemoteErrorType::ProtocolError
+        );
+        assert_eq!(client.exec("NOOP").await.unwrap().exit_code, 200);
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
     }
 }
