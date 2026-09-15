@@ -3,9 +3,9 @@
 
 //! # remotefs-ftp
 //!
-//! remotefs-ftp is a client implementation for
-//! [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support
-//! for the FTP/FTPS protocols.
+//! remotefs-ftp provides synchronous and asynchronous client implementations
+//! for [remotefs](https://github.com/remotefs-rs/remotefs-rs), with support for
+//! the FTP/FTPS protocols.
 //!
 //! ## Get started
 //!
@@ -16,10 +16,11 @@
 //! remotefs-ftp = "1"
 //! ```
 //!
-//! [`FtpFs`] implements [`remotefs::RemoteFs`]. Every path is absolute; the
-//! client keeps no working directory. Operations take `&self`, so a connected
-//! client can be shared, but FTP allows a single data connection: while a
-//! stream returned by `open`, `create` or `append` is alive, managed
+//! [`FtpFs`] implements [`remotefs::RemoteFs`], and `TokioFtpFs` implements
+//! `remotefs::AsyncRemoteFs` when the `tokio` feature is enabled. Every path
+//! is absolute; the clients keep no working directory. Operations take `&self`,
+//! so a connected client can be shared, but FTP allows a single data connection:
+//! while a stream returned by `open`, `create` or `append` is alive, managed
 //! control-channel operations return `ProtocolError` until that stream is
 //! finished or dropped. The observational `is_connected`, `capabilities` and
 //! `welcome_message` methods remain available, while `stream` returns `None`.
@@ -29,14 +30,23 @@
 //!
 //! ## Feature flags
 //!
-//! | name                  | description                                              | default |
-//! | --------------------- | -------------------------------------------------------- | ------- |
-//! | `find`                | Enable the remotefs `find()` function.                   | ✔       |
-//! | `native-tls`          | Enable FTPS support using native-tls as backend.         |         |
-//! | `native-tls-vendored` | Statically link native-tls.                              |         |
-//! | `no-log`              | Disable logging; by default the `log` crate is used.     |         |
-//! | `rustls-aws-lc-rs`    | Enable FTPS support using rustls with aws-lc-rs backend. |         |
-//! | `rustls-ring`         | Enable FTPS support using rustls with ring backend.      |         |
+//! | name                        | description                                                          | default |
+//! | --------------------------- | -------------------------------------------------------------------- | ------- |
+//! | `find`                      | Enable the remotefs `find()` and `find_async()` functions.           | ✔       |
+//! | `native-tls`                | Enable FTPS for `FtpFs` using native-tls as backend.                 |         |
+//! | `native-tls-vendored`       | Statically link native-tls.                                          |         |
+//! | `no-log`                    | Disable logging; by default the `log` crate is used.                 |         |
+//! | `rustls-aws-lc-rs`          | Enable FTPS for `FtpFs` using rustls with aws-lc-rs backend.         |         |
+//! | `rustls-ring`               | Enable FTPS for `FtpFs` using rustls with ring backend.              |         |
+//! | `tokio`                     | Enable `TokioFtpFs`, the Tokio client implementing `AsyncRemoteFs`.  |         |
+//! | `tokio-native-tls`          | Enable FTPS for `TokioFtpFs` using async-native-tls as backend.      |         |
+//! | `tokio-native-tls-vendored` | Statically link native-tls for `TokioFtpFs`.                         |         |
+//! | `tokio-rustls-aws-lc-rs`    | Enable FTPS for `TokioFtpFs` using rustls with aws-lc-rs backend.    |         |
+//! | `tokio-rustls-ring`         | Enable FTPS for `TokioFtpFs` using rustls with ring backend.         |         |
+//!
+//! The sync TLS backends are mutually exclusive, and so are the tokio TLS
+//! backends. A sync backend and a tokio backend can be enabled together; the
+//! sync features never pull Tokio in.
 //!
 //! ### FTP client
 //!
@@ -72,6 +82,46 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! ### Tokio client
+//!
+//! With the `tokio` feature, `TokioFtpFs` implements
+//! `remotefs::AsyncRemoteFs` with the same builder, path rules and
+//! capabilities. Operations share the control connection through an async
+//! mutex, so concurrent callers wait for each other instead of failing.
+//!
+//! ```rust,no_run
+//! # #[cfg(feature = "tokio")]
+//! # async fn run() -> remotefs::RemoteResult<()> {
+//! use std::path::Path;
+//!
+//! use remotefs::AsyncRemoteFs;
+//! use remotefs::fs::ReadOptions;
+//! use remotefs_ftp::TokioFtpFs;
+//!
+//! let mut client = TokioFtpFs::new("127.0.0.1", 21)
+//!     .username("test")
+//!     .password("password");
+//! client.connect().await?;
+//! let mut destination = Vec::new();
+//! client
+//!     .read_file(
+//!         Path::new("/upload/hello.txt"),
+//!         &ReadOptions::default(),
+//!         &mut destination,
+//!     )
+//!     .await?;
+//! client.disconnect().await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Async streams cannot drain in `Drop`. Call `finish().await` on every
+//! stream: dropping a download before EOF marks the control connection
+//! unusable until the client reconnects, while dropped uploads and downloads
+//! at EOF let the next command consume the pending reply. Operation futures
+//! are not cancellation safe; cancelling one after its command was sent also
+//! requires a reconnect.
 //!
 //! ### Transfers
 //!

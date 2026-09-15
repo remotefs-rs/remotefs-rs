@@ -76,6 +76,42 @@ remotefs = "1"
 remotefs-ftp = "1"
 ```
 
+### Tokio client
+
+Enable the `tokio` feature to use `TokioFtpFs`, the asynchronous client
+implementing `remotefs::AsyncRemoteFs`:
+
+```rust,no_run
+use std::path::Path;
+
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::ReadOptions;
+use remotefs_ftp::TokioFtpFs;
+
+# async fn run() -> remotefs::RemoteResult<()> {
+let mut client = TokioFtpFs::new("127.0.0.1", 21)
+    .username("test")
+    .password("password");
+client.connect().await?;
+let mut destination = Vec::new();
+client
+    .read_file(
+        Path::new("/upload/hello.txt"),
+        &ReadOptions::default(),
+        &mut destination,
+    )
+    .await?;
+client.disconnect().await?;
+# Ok(())
+# }
+```
+
+Async streams cannot drain in `Drop`, so call `finish().await` on every
+stream. Dropping a download before EOF marks the control connection unusable
+until the client reconnects, while dropped uploads and downloads at EOF let
+the next command consume the pending reply. Cancelling an operation after its
+command was sent also requires a reconnect.
+
 ## Features
 
 these features are supported:
@@ -86,6 +122,11 @@ these features are supported:
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 - `rustls-aws-lc-rs`: enable FTPS support using rustls with aws-lc-rs as backend
 - `rustls-ring`: enable FTPS support using rustls with ring as backend
+- `tokio`: enable `TokioFtpFs`, the Tokio client implementing `AsyncRemoteFs`
+- `tokio-native-tls`: enable FTPS for `TokioFtpFs` using async-native-tls as backend
+- `tokio-native-tls-vendored`: statically link native-tls for `TokioFtpFs`
+- `tokio-rustls-aws-lc-rs`: enable FTPS for `TokioFtpFs` using rustls with aws-lc-rs as backend
+- `tokio-rustls-ring`: enable FTPS for `TokioFtpFs` using rustls with ring as backend
 
 The TLS feature suites verify backend configuration while using the plain FTP
 container for filesystem behavior. They do not claim FTPS transfer coverage:
@@ -118,6 +159,12 @@ cleanup failure makes the control connection unusable until the client is
 reconnected. Finishing or dropping a limited read drains the unread tail, so
 cleanup can block and download the rest of the file.
 
+`TokioFtpFs` implements the same filesystem behavior asynchronously through
+Tokio. Concurrent operations wait on an async control-channel mutex. Async
+streams must be finished with `finish().await`; dropping a partial download or
+cancelling an operation after its command was sent requires reconnecting the
+client.
+
 ---
 
 ### Client compatibility table ✔️
@@ -126,26 +173,26 @@ The following table states the compatibility for the client client and the remot
 
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be supported, and are so omitted in the table.
 
-| Client/Method  | Ftp |
-| -------------- | --- |
-| append_file    | Yes |
-| append         | Yes |
-| copy           | No  |
-| create_dir     | Yes |
-| create         | Yes |
-| exec           | Yes |
-| exists         | Yes |
-| list_dir       | Yes |
-| open           | Yes |
-| read_file      | Yes |
-| remove_dir_all | Yes |
-| remove_dir     | Yes |
-| remove_file    | Yes |
-| rename         | Yes |
-| set_metadata   | No  |
-| stat           | Yes |
-| symlink        | No  |
-| write_file     | Yes |
+| Client/Method  | FtpFs | TokioFtpFs |
+| -------------- | ----- | ---------- |
+| append_file    | Yes   | Yes        |
+| append         | Yes   | Yes        |
+| copy           | No    | No         |
+| create_dir     | Yes   | Yes        |
+| create         | Yes   | Yes        |
+| exec           | Yes   | Yes        |
+| exists         | Yes   | Yes        |
+| list_dir       | Yes   | Yes        |
+| open           | Yes   | Yes        |
+| read_file      | Yes   | Yes        |
+| remove_dir_all | Yes   | Yes        |
+| remove_dir     | Yes   | Yes        |
+| remove_file    | Yes   | Yes        |
+| rename         | Yes   | Yes        |
+| set_metadata   | No    | No         |
+| stat           | Yes   | Yes        |
+| symlink        | No    | No         |
+| write_file     | Yes   | Yes        |
 
 > `exec` is implemented via the FTP `SITE` command, so it only runs commands the server exposes as `SITE` subcommands (for example `CHMOD`), not arbitrary shell/console commands. `suppaftp` accepts only `200 CommandOk` for this operation.
 
