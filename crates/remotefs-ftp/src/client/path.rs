@@ -42,7 +42,7 @@ pub(crate) fn remote_path(path: &Path) -> RemoteResult<String> {
         if !path.starts_with('/')
             || path.starts_with("//")
             || path.bytes().any(|byte| byte.is_ascii_control())
-            || Path::new(&path)
+            || Path::new(path.as_ref())
                 .components()
                 .any(|component| component == Component::ParentDir)
         {
@@ -70,4 +70,21 @@ pub(crate) fn resolve(p: &Path) -> PathBuf {
 #[cfg(target_family = "unix")]
 pub(crate) fn resolve(p: &Path) -> PathBuf {
     p.to_path_buf()
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use std::path::Path;
+
+    use remotefs::fs::RemoteErrorType;
+
+    use super::remote_path;
+
+    #[test]
+    fn rejects_parent_components_after_slash_conversion() {
+        assert_eq!(
+            remote_path(Path::new(r"/dir\..\file")).unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+    }
 }
