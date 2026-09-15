@@ -22,41 +22,13 @@
 
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use remotefs::fs::{RemoteRead, RemoteWrite};
 use remotefs::{RemoteError, RemoteResult};
 use suppaftp::{FtpResult, TlsStream, TransferStream};
 
-use super::error::ftp_error;
-
-/// Marks a client as having an in-flight transfer until dropped.
-pub(crate) struct TransferGuard {
-    active: Arc<AtomicBool>,
-    connection_usable: Arc<AtomicBool>,
-}
-
-impl TransferGuard {
-    /// Takes ownership of an already-raised `active` flag.
-    pub(crate) fn new(active: Arc<AtomicBool>, connection_usable: Arc<AtomicBool>) -> Self {
-        Self {
-            active,
-            connection_usable,
-        }
-    }
-
-    /// Marks the control connection unusable until the client reconnects.
-    pub(crate) fn invalidate(&self) {
-        self.connection_usable.store(false, Ordering::SeqCst);
-    }
-}
-
-impl Drop for TransferGuard {
-    fn drop(&mut self) {
-        self.active.store(false, Ordering::SeqCst);
-    }
-}
+use super::super::error::ftp_error;
+use super::super::guard::TransferGuard;
 
 /// Reads up to `remaining` bytes from `inner`; `None` means no limit.
 ///
@@ -395,7 +367,8 @@ mod tests {
     use std::error::Error as _;
     use std::io::{BufRead, BufReader, Cursor};
     use std::net::TcpListener;
-    use std::sync::mpsc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -613,28 +586,6 @@ mod tests {
             0
         );
         assert_eq!(inner.position(), 0);
-    }
-
-    #[test]
-    fn should_release_the_transfer_flag_on_drop() {
-        let active = Arc::new(AtomicBool::new(true));
-        let guard = TransferGuard::new(Arc::clone(&active), Arc::new(AtomicBool::new(true)));
-        assert!(active.load(Ordering::SeqCst));
-        drop(guard);
-        assert!(!active.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn should_mark_the_connection_unusable_when_cleanup_fails() {
-        let active = Arc::new(AtomicBool::new(true));
-        let usable = Arc::new(AtomicBool::new(true));
-        let guard = TransferGuard::new(Arc::clone(&active), Arc::clone(&usable));
-
-        guard.invalidate();
-
-        assert!(!usable.load(Ordering::SeqCst));
-        drop(guard);
-        assert!(!active.load(Ordering::SeqCst));
     }
 
     #[test]

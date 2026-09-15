@@ -1,5 +1,8 @@
 //! Maps `suppaftp` failures onto typed [`RemoteError`] values.
 
+use std::error::Error as _;
+use std::fmt;
+
 use remotefs::{RemoteError, RemoteErrorType};
 use suppaftp::{FtpError, Status};
 
@@ -54,9 +57,94 @@ fn status_kind(status: &Status) -> RemoteErrorType {
     }
 }
 
+/// Returns whether a failed data-command setup may have left replies unsynchronized.
+pub(crate) fn transfer_setup_requires_reconnect(err: &FtpError) -> bool {
+    match err {
+        FtpError::ConnectionError(_) | FtpError::BadResponse => true,
+        #[cfg(any(
+            feature = "native-tls",
+            feature = "rustls-aws-lc-rs",
+            feature = "rustls-ring"
+        ))]
+        FtpError::SecureError(_) => true,
+        // A 421 closes the service. Other server replies have been consumed,
+        // including the preliminary refusal path in `data_command_with_response`.
+        FtpError::UnexpectedResponse(response) => response.status == Status::NotAvailable,
+        FtpError::InvalidAddress(_) | FtpError::DataConnectionAlreadyOpen => true,
+    }
+}
+
+/// Returns whether a mapped error means the control channel may be out of sync.
+pub(crate) fn remote_error_requires_reconnect(err: &RemoteError) -> bool {
+    let mut source = err.source();
+    while let Some(error) = source {
+        if let Some(ftp_error) = error.downcast_ref::<FtpError>() {
+            return transfer_setup_requires_reconnect(ftp_error);
+        }
+        source = error.source();
+    }
+    err.kind() == RemoteErrorType::ConnectionError
+}
+
+/// Returns whether an FTP reply used the ambiguous 550 refusal code.
+pub(crate) fn is_file_unavailable(err: &FtpError) -> bool {
+    matches!(
+        err,
+        FtpError::UnexpectedResponse(response) if response.status == Status::FileUnavailable
+    )
+}
+
+/// Returns whether a create or rename refusal can indicate a missing parent.
+pub(crate) fn is_creation_refusal(err: &FtpError) -> bool {
+    matches!(
+        err,
+        FtpError::UnexpectedResponse(response)
+            if matches!(response.status, Status::FileUnavailable | Status::BadFilename)
+    )
+}
+
+/// Returns whether an error preserves an ambiguous FTP 550 refusal.
+pub(crate) fn is_ambiguous_path_refusal(err: &RemoteError) -> bool {
+    let mut source = err.source();
+    while let Some(error) = source {
+        if let Some(FtpError::UnexpectedResponse(response)) = error.downcast_ref::<FtpError>() {
+            return response.status == Status::FileUnavailable;
+        }
+        source = error.source();
+    }
+    false
+}
+
+/// Preserves an ambiguous 550 refusal when probing cannot prove absence.
+pub(crate) fn ambiguous_path_permission(err: RemoteError) -> RemoteError {
+    RemoteError::with_source(RemoteErrorType::PermissionDenied, err)
+}
+
+/// Retains both failures from a raw LIST data read and its completion reply.
+#[derive(Debug)]
+pub(crate) struct ListCleanupFailure {
+    pub(crate) read: RemoteError,
+    pub(crate) finish: RemoteError,
+}
+
+impl fmt::Display for ListCleanupFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "LIST read failed: {}; completion failed: {}",
+            self.read, self.finish
+        )
+    }
+}
+
+impl std::error::Error for ListCleanupFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.finish)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::error::Error as _;
     use std::io;
 
     use pretty_assertions::assert_eq;
