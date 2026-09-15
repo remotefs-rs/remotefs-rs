@@ -1849,3 +1849,1031 @@ mod tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod container_tests {
+    use std::collections::HashMap;
+    use std::error::Error as _;
+    use std::future::Future;
+    use std::path::{Path, PathBuf};
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    use futures::io::Cursor;
+    use futures::{AsyncReadExt as _, AsyncWriteExt as _};
+    use pretty_assertions::assert_eq;
+    use remotefs::fs::UnixPex;
+
+    use super::*;
+    use crate::test_container::AsyncPureFtpRunner;
+
+    type TestFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+
+    /// Starts a container, connects, creates a scratch directory and hands
+    /// `(client, scratch_dir)` to `f`.
+    async fn with_client<F>(f: F)
+    where
+        F: for<'a> FnOnce(&'a mut TokioFtpFs, &'a Path) -> TestFuture<'a>,
+    {
+        crate::log_init();
+        let container = AsyncPureFtpRunner::start().await;
+        let (mut client, tempdir) = setup_client(&container).await;
+        f(&mut client, &tempdir).await;
+        finalize_client(client).await;
+        drop(container);
+    }
+
+    async fn setup_client(container: &AsyncPureFtpRunner) -> (TokioFtpFs, PathBuf) {
+        let port = container.get_ftp_port().await;
+        // Resolve every passive port up front: the builder future must be Sync.
+        let mut mapped = HashMap::new();
+        for passive in 30_000..=30_009 {
+            mapped.insert(passive, container.get_mapped_port(passive).await);
+        }
+        let mapped = Arc::new(mapped);
+        let mut client = TokioFtpFs::new("localhost", port)
+            .username("test")
+            .password("test")
+            .passive_stream_builder(move |mut addr| {
+                let mapped = Arc::clone(&mapped);
+                async move {
+                    let port = addr.port();
+                    let target = *mapped.get(&port).expect("unexpected passive port");
+                    addr.set_port(target);
+                    info!("mapped port {port} to {target} for PASV");
+                    TcpStream::connect(addr)
+                        .await
+                        .map_err(FtpError::ConnectionError)
+                }
+            });
+        client.connect().await.expect("connect failed");
+        let root = PathBuf::from(client.stream().unwrap().pwd().await.expect("pwd failed"));
+        let tempdir = root.join(generate_tempdir());
+        client
+            .create_dir(&tempdir, Some(UnixPex::from(0o755)))
+            .await
+            .expect("create scratch dir failed");
+        (client, tempdir)
+    }
+
+    async fn finalize_client(mut client: TokioFtpFs) {
+        assert!(client.disconnect().await.is_ok());
+    }
+
+    fn generate_tempdir() -> String {
+        use rand::distr::Alphanumeric;
+        use rand::{RngExt as _, rng};
+
+        let mut rand = rng();
+        let name: String = std::iter::repeat_with(|| rand.sample(Alphanumeric) as char)
+            .take(8)
+            .collect();
+        format!("temp_{name}")
+    }
+
+    #[test]
+    fn should_initialize_ftp_filesystem() {
+        let client = TokioFtpFs::new("127.0.0.1", 21);
+        assert!(!client.is_connected());
+        assert_eq!(client.hostname.as_str(), "127.0.0.1");
+        assert_eq!(client.port, 21);
+        assert_eq!(client.username.as_str(), "anonymous");
+        assert!(client.password.is_none());
+        assert_eq!(client.mode, Mode::Passive);
+        #[cfg(any(
+            feature = "tokio-native-tls",
+            feature = "tokio-rustls-aws-lc-rs",
+            feature = "tokio-rustls-ring"
+        ))]
+        assert!(!client.secure);
+        #[cfg(feature = "tokio-native-tls")]
+        assert!(!client.accept_invalid_certs);
+        #[cfg(feature = "tokio-native-tls")]
+        assert!(!client.accept_invalid_hostnames);
+    }
+
+    #[test]
+    fn should_build_ftp_filesystem() {
+        let client = TokioFtpFs::new("127.0.0.1", 21)
+            .username("test")
+            .password("omar")
+            .passive_mode()
+            .active_mode();
+        assert!(!client.is_connected());
+        assert_eq!(client.username.as_str(), "test");
+        assert_eq!(client.password.as_deref().unwrap(), "omar");
+        assert_eq!(client.mode, Mode::Active);
+    }
+
+    #[test]
+    #[cfg(any(
+        feature = "tokio-native-tls",
+        feature = "tokio-rustls-aws-lc-rs",
+        feature = "tokio-rustls-ring"
+    ))]
+    fn should_build_secure_ftp_filesystem() {
+        #[cfg(feature = "tokio-native-tls")]
+        let client = TokioFtpFs::new("127.0.0.1", 21).secure(true, true);
+        #[cfg(any(feature = "tokio-rustls-aws-lc-rs", feature = "tokio-rustls-ring"))]
+        let client = TokioFtpFs::new("127.0.0.1", 21).secure();
+        assert!(client.secure);
+        #[cfg(feature = "tokio-native-tls")]
+        assert!(client.accept_invalid_certs);
+        #[cfg(feature = "tokio-native-tls")]
+        assert!(client.accept_invalid_hostnames);
+    }
+
+    #[test]
+    fn should_advertise_capabilities() {
+        let caps = TokioFtpFs::new("127.0.0.1", 21).capabilities();
+        for cap in [
+            Capabilities::STREAM_READ,
+            Capabilities::STREAM_WRITE,
+            Capabilities::APPEND,
+            Capabilities::RANGE_READ,
+            Capabilities::EXEC,
+        ] {
+            assert!(caps.contains(cap), "missing {cap:?}");
+        }
+        for cap in [
+            Capabilities::SEEK_READ,
+            Capabilities::SEEK_WRITE,
+            Capabilities::COPY,
+            Capabilities::SYMLINK,
+            Capabilities::SET_METADATA,
+            Capabilities::POSIX_MODE,
+        ] {
+            assert!(!caps.contains(cap), "unexpected {cap:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn should_reject_relative_paths_before_checking_the_connection() {
+        let client = TokioFtpFs::new("127.0.0.1", 21);
+        let relative = Path::new("a.txt");
+        assert_eq!(
+            client.stat(relative).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.list_dir(relative).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.exists(relative).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client
+                .open(relative, &ReadOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client
+                .create(relative, &WriteOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.create_dir(relative, None).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client
+                .rename(relative, Path::new("/b.txt"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
+        );
+    }
+
+    #[tokio::test]
+    async fn should_return_not_connected_error() {
+        let mut client = TokioFtpFs::new("127.0.0.1", 21);
+        let p = Path::new("/tmp/pippo.txt");
+        for error in [
+            client.copy(p, Path::new("/culonia")).await.unwrap_err(),
+            client.symlink(p, Path::new("/b")).await.unwrap_err(),
+            client
+                .set_metadata(p, &SetMetadata::default())
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        }
+        for error in [
+            client.exec("HELP").await.unwrap_err(),
+            client.list_dir(Path::new("/tmp")).await.unwrap_err(),
+            client
+                .create_dir(Path::new("/tmp"), None)
+                .await
+                .unwrap_err(),
+            client
+                .remove_dir_all(Path::new("/nowhere"))
+                .await
+                .unwrap_err(),
+            client.rename(p, Path::new("/culonia")).await.unwrap_err(),
+            client.stat(p).await.unwrap_err(),
+            client.open(p, &ReadOptions::default()).await.unwrap_err(),
+            client
+                .create(p, &WriteOptions::default())
+                .await
+                .unwrap_err(),
+            client
+                .append(p, &WriteOptions::default())
+                .await
+                .unwrap_err(),
+            client.disconnect().await.unwrap_err(),
+        ] {
+            assert_eq!(error.kind(), RemoteErrorType::NotConnected);
+        }
+        assert!(client.welcome_message().is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_connect_twice_and_should_expose_banner() {
+        crate::log_init();
+        let container = AsyncPureFtpRunner::start().await;
+        let (mut client, _) = setup_client(&container).await;
+        assert!(client.welcome_message().is_some());
+        assert_eq!(
+            client.connect().await.unwrap_err().kind(),
+            RemoteErrorType::AlreadyConnected
+        );
+        finalize_client(client).await;
+        drop(container);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reuse_the_passive_builder_after_reconnect() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                client.disconnect().await.unwrap();
+                client.connect().await.unwrap();
+                assert!(client.list_dir(dir).await.is_ok());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_write_and_read_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let file_data = b"test data\n";
+                let mut reader = Cursor::new(file_data.to_vec());
+                assert_eq!(
+                    client
+                        .write_file(
+                            &p,
+                            &WriteOptions::default().size_hint(file_data.len() as u64),
+                            &mut reader,
+                        )
+                        .await
+                        .unwrap(),
+                    10
+                );
+                assert_eq!(client.stat(&p).await.unwrap().metadata().size, Some(10));
+                let mut dest = Vec::new();
+                assert_eq!(
+                    client
+                        .read_file(&p, &ReadOptions::default(), &mut dest)
+                        .await
+                        .unwrap(),
+                    10
+                );
+                assert_eq!(dest, file_data);
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_stream_write_flush_and_finish() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("stream.txt");
+                let mut stream = client.create(&p, &WriteOptions::default()).await.unwrap();
+                assert!(!stream.seekable());
+                stream.write_all(b"hello, world!").await.unwrap();
+                stream.finish().await.unwrap();
+                assert_eq!(client.stat(&p).await.unwrap().metadata().size, Some(13));
+
+                let mut stream = client.open(&p, &ReadOptions::default()).await.unwrap();
+                let mut buf = String::new();
+                stream.read_to_string(&mut buf).await.unwrap();
+                stream.finish().await.unwrap();
+                assert_eq!(buf, "hello, world!");
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_honor_read_offset_and_length() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("range.bin");
+                let mut src = Cursor::new(b"0123456789".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut src)
+                    .await
+                    .unwrap();
+
+                let mut out = Vec::new();
+                client
+                    .read_file(&p, &ReadOptions::default().offset(2).length(3), &mut out)
+                    .await
+                    .unwrap();
+                assert_eq!(out, b"234");
+                assert!(client.exists(&p).await.unwrap());
+
+                let mut out = Vec::new();
+                client
+                    .read_file(&p, &ReadOptions::default().offset(7), &mut out)
+                    .await
+                    .unwrap();
+                assert_eq!(out, b"789");
+
+                let mut out = Vec::new();
+                client
+                    .read_file(&p, &ReadOptions::default().offset(2).length(0), &mut out)
+                    .await
+                    .unwrap();
+                assert!(out.is_empty());
+                assert!(client.exists(&p).await.unwrap());
+
+                let mut out = Vec::new();
+                client
+                    .read_file(&p, &ReadOptions::default().offset(100), &mut out)
+                    .await
+                    .unwrap();
+                assert!(out.is_empty());
+                assert!(client.exists(&p).await.unwrap());
+
+                let mut out = Vec::new();
+                client
+                    .read_file(&p, &ReadOptions::default().length(100), &mut out)
+                    .await
+                    .unwrap();
+                assert_eq!(out, b"0123456789");
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_a_second_transfer_while_one_is_alive() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let a = dir.join("a.txt");
+                let b = dir.join("b.txt");
+                let mut src = Cursor::new(b"aaaa".to_vec());
+                client
+                    .write_file(&a, &WriteOptions::default(), &mut src)
+                    .await
+                    .unwrap();
+
+                let stream = client.open(&a, &ReadOptions::default()).await.unwrap();
+                assert_eq!(
+                    client
+                        .create(&b, &WriteOptions::default())
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::ProtocolError
+                );
+                assert_eq!(
+                    client.remove_file(&a).await.unwrap_err().kind(),
+                    RemoteErrorType::ProtocolError
+                );
+                assert_eq!(
+                    client.list_dir(dir).await.unwrap_err().kind(),
+                    RemoteErrorType::ProtocolError
+                );
+                stream.finish().await.unwrap();
+
+                let mut stream = client.create(&b, &WriteOptions::default()).await.unwrap();
+                stream.write_all(b"bb").await.unwrap();
+                stream.finish().await.unwrap();
+                assert_eq!(client.stat(&b).await.unwrap().metadata().size, Some(2));
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_release_the_client_when_a_stream_is_dropped() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let a = dir.join("a.txt");
+                let mut src = Cursor::new(b"aaaa".to_vec());
+                client
+                    .write_file(&a, &WriteOptions::default(), &mut src)
+                    .await
+                    .unwrap();
+                let stream = client.create(&a, &WriteOptions::default()).await.unwrap();
+                drop(stream);
+                assert!(client.list_dir(dir).await.is_ok());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_require_reconnect_when_a_partial_read_is_dropped() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("partial.txt");
+                let mut src = Cursor::new(b"0123456789".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut src)
+                    .await
+                    .unwrap();
+                let mut stream = client.open(&p, &ReadOptions::default()).await.unwrap();
+                let mut prefix = [0; 2];
+                stream.read_exact(&mut prefix).await.unwrap();
+                drop(stream);
+                assert_eq!(
+                    client.list_dir(dir).await.unwrap_err().kind(),
+                    RemoteErrorType::ConnectionError
+                );
+                client.connect().await.unwrap();
+                assert!(client.list_dir(dir).await.is_ok());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_append_to_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                assert_eq!(
+                    client
+                        .write_file(&p, &WriteOptions::default(), &mut reader)
+                        .await
+                        .unwrap(),
+                    10
+                );
+                let mut reader = Cursor::new(b"Hello, world!\n".to_vec());
+                assert_eq!(
+                    client
+                        .append_file(&p, &WriteOptions::default(), &mut reader)
+                        .await
+                        .unwrap(),
+                    14
+                );
+                assert_eq!(client.stat(&p).await.unwrap().metadata().size, Some(24));
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_append_to_file() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
+                let mut reader = Cursor::new(b"Hello, world!\n".to_vec());
+                assert!(
+                    client
+                        .append_file(p, &WriteOptions::default(), &mut reader)
+                        .await
+                        .is_err()
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_copy_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                assert_eq!(
+                    client
+                        .copy(&dir.join("a.txt"), &dir.join("b.txt"))
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::UnsupportedFeature
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_create_directory() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let path = dir.join("mydir");
+                assert!(
+                    client
+                        .create_dir(&path, Some(UnixPex::from(0o755)))
+                        .await
+                        .is_ok()
+                );
+                assert!(client.stat(&path).await.unwrap().is_dir());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_create_directory_cause_already_exists() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("mydir");
+                assert!(client.create_dir(&p, None).await.is_ok());
+                assert_eq!(
+                    client.create_dir(&p, None).await.unwrap_err().kind(),
+                    RemoteErrorType::AlreadyExists
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_create_directory() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                assert!(
+                    client
+                        .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None,)
+                        .await
+                        .is_err()
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_create_file() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                assert!(
+                    client
+                        .write_file(p, &WriteOptions::default(), &mut reader)
+                        .await
+                        .is_err()
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_open_file() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                let mut dest = Vec::new();
+                assert_eq!(
+                    client
+                        .read_file(
+                            Path::new("/tmp/aashafb/hhh"),
+                            &ReadOptions::default(),
+                            &mut dest,
+                        )
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_report_bad_file_for_wrong_type_operations() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let directory = dir.join("directory");
+                client.create_dir(&directory, None).await.unwrap();
+
+                let error = client
+                    .open(&directory, &ReadOptions::default())
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.kind(), RemoteErrorType::BadFile);
+                assert!(error.source().is_some_and(|source| source.is::<FtpError>()));
+
+                let error = client.remove_file(&directory).await.unwrap_err();
+                assert_eq!(error.kind(), RemoteErrorType::BadFile);
+                assert!(error.source().is_some_and(|source| source.is::<FtpError>()));
+
+                let file = dir.join("file.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&file, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                let error = client.remove_dir(&file).await.unwrap_err();
+                assert_eq!(error.kind(), RemoteErrorType::BadFile);
+                assert!(error.source().is_some_and(|source| source.is::<FtpError>()));
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_exec_command() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                let output = client
+                    .exec(&format!("CHMOD 777 {}", p.display()))
+                    .await
+                    .unwrap();
+                assert_eq!(output.exit_code, 200);
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_exec_command() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                assert!(client.exec("echo 5").await.is_err());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_tell_whether_file_exists() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert!(client.exists(&p).await.unwrap());
+                assert!(!client.exists(&dir.join("b.txt")).await.unwrap());
+                assert!(!client.exists(Path::new("/tmp/ppppp/bhhrhu")).await.unwrap());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_list_dir() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                let entries = client.list_dir(dir).await.unwrap();
+                assert_eq!(entries.len(), 1);
+                let file = &entries[0];
+                assert_eq!(file.name().as_str(), "a.txt");
+                assert_eq!(file.path(), p.as_path());
+                assert_eq!(file.extension().as_deref(), Some("txt"));
+                assert!(file.is_file());
+                assert_eq!(file.metadata().size, Some(10));
+                assert_eq!(file.metadata().mode.unwrap(), UnixPex::from(0o644));
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_reject_listing_a_regular_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    client.list_dir(&p).await.unwrap_err().kind(),
+                    RemoteErrorType::BadFile
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_classify_missing_creation_parents_as_missing() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let missing = dir.join("missing");
+                let create_path = missing.join("create.txt");
+                let append_path = missing.join("append.txt");
+                let dir_path = missing.join("child");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+
+                assert_eq!(
+                    client
+                        .write_file(&create_path, &WriteOptions::default(), &mut reader)
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                assert_eq!(
+                    client
+                        .append_file(&append_path, &WriteOptions::default(), &mut reader)
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+                assert_eq!(
+                    client.create_dir(&dir_path, None).await.unwrap_err().kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_classify_missing_rename_destination_parent_as_missing() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let source = dir.join("source.txt");
+                let destination = dir.join("missing").join("destination.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&source, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    client
+                        .rename(&source, &destination)
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_rename_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let dest = dir.join("b.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert!(client.rename(&p, &dest).await.is_ok());
+                assert!(!client.exists(&p).await.unwrap());
+                assert!(client.exists(&dest).await.unwrap());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_rename_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
+                assert!(client.rename(&p, dest).await.is_err());
+                assert_eq!(
+                    client.rename(dest, &p).await.unwrap_err().kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_remove_dir_all() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let sub = dir.join("test");
+                client
+                    .create_dir(&sub, Some(UnixPex::from(0o775)))
+                    .await
+                    .unwrap();
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&sub.join("a.txt"), &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert!(client.remove_dir_all(&sub).await.is_ok());
+                assert!(!client.exists(&sub).await.unwrap());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_remove_dir_all() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                assert!(
+                    client
+                        .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                        .await
+                        .is_err()
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_remove_dir() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let sub = dir.join("test");
+                client.create_dir(&sub, None).await.unwrap();
+                assert!(client.remove_dir(&sub).await.is_ok());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_remove_dir() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let sub = dir.join("test");
+                client.create_dir(&sub, None).await.unwrap();
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&sub.join("a.txt"), &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert!(client.remove_dir(&sub).await.is_err());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_remove_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.txt");
+                let mut reader = Cursor::new(b"test data\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                assert!(client.remove_file(&p).await.is_ok());
+                assert_eq!(
+                    client.remove_file(&p).await.unwrap_err().kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_set_metadata() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                assert_eq!(
+                    client
+                        .set_metadata(
+                            &dir.join("a.sh"),
+                            &SetMetadata::default().mode(UnixPex::from(0o755)),
+                        )
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::UnsupportedFeature
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_stat_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let p = dir.join("a.sh");
+                let mut reader = Cursor::new(b"echo 5\n".to_vec());
+                client
+                    .write_file(&p, &WriteOptions::default(), &mut reader)
+                    .await
+                    .unwrap();
+                let entry = client.stat(&p).await.unwrap();
+                assert_eq!(entry.name(), "a.sh");
+                assert_eq!(entry.path(), p.as_path());
+                assert_eq!(entry.metadata().mode.unwrap(), UnixPex::from(0o644));
+                assert_eq!(entry.metadata().size, Some(7));
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_stat_root() {
+        with_client(|client, _| {
+            Box::pin(async move {
+                let entry = client.stat(Path::new("/")).await.unwrap();
+                assert_eq!(entry.name(), "/");
+                assert_eq!(entry.path(), Path::new("/"));
+                assert!(entry.is_dir());
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_stat_file() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                assert_eq!(
+                    client.stat(&dir.join("a.sh")).await.unwrap_err().kind(),
+                    RemoteErrorType::NoSuchFileOrDirectory
+                );
+            })
+        })
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_not_make_symlink() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                assert_eq!(
+                    client
+                        .symlink(&dir.join("b.sh"), &dir.join("a.sh"))
+                        .await
+                        .unwrap_err()
+                        .kind(),
+                    RemoteErrorType::UnsupportedFeature
+                );
+            })
+        })
+        .await;
+    }
+
+    #[cfg(feature = "find")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn should_find_files_from_an_absolute_root() {
+        with_client(|client, dir| {
+            Box::pin(async move {
+                let sub = dir.join("nested");
+                client.create_dir(&sub, None).await.unwrap();
+                for p in [dir.join("a.txt"), sub.join("b.txt"), sub.join("c.log")] {
+                    let mut reader = Cursor::new(b"x".to_vec());
+                    client
+                        .write_file(&p, &WriteOptions::default(), &mut reader)
+                        .await
+                        .unwrap();
+                }
+                let found = remotefs::find_async(client, dir, "*.txt").await.unwrap();
+                assert_eq!(found.len(), 2);
+                assert!(
+                    found
+                        .iter()
+                        .all(|file| file.extension().as_deref() == Some("txt"))
+                );
+            })
+        })
+        .await;
+    }
+}

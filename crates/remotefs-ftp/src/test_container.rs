@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::borrow::Cow;
 
 use testcontainers::core::{CmdWaitFor, ContainerPort, ExecCommand, WaitFor};
