@@ -1,23 +1,27 @@
 //! # `remotefs-gcs`
 //!
-//! A synchronous [`remotefs::RemoteFs`] client backed by Google Cloud Storage.
-//! It owns the Tokio runtime supplied by the caller and blocks only while
-//! crossing into the asynchronous Google Cloud SDK.
+//! An asynchronous [`remotefs::AsyncRemoteFs`] client backed by Google Cloud
+//! Storage. Every path is absolute and rooted at the bucket (`/` is the
+//! bucket root); trailing-slash marker objects and implicit object prefixes
+//! are presented as directories.
 //!
 //! ## Installation
 //!
-//! Add the crate to the application that owns the runtime:
-//!
 //! ```toml
 //! [dependencies]
-//! remotefs = "0.3"
-//! remotefs-gcs = "0.1"
-//! tokio = { version = "1", features = ["rt-multi-thread"] }
+//! remotefs = "1"
+//! remotefs-gcs = "1"
+//! futures = "0.3"
+//! tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 //! ```
 //!
-//! The optional `find` feature is enabled by default. `no-log` disables the
-//! `log` crate output, while `with-containers` and `with-gcs-ci` enable the
-//! corresponding test suites.
+//! | Feature           | Default | Purpose                                                     |
+//! | ----------------- | :-----: | ----------------------------------------------------------- |
+//! | `find`            |   yes   | Enables `remotefs::find_async`                              |
+//! | `no-log`          |   no    | Disables logging from this crate                            |
+//! | `tokio`            |   no    | Enables `BlockingGoogleCloudStorageFs` for blocking callers |
+//! | `with-containers` |   no    | Enables the local testbench integration suite               |
+//! | `with-gcs-ci`     |   no    | Enables the optional live smoke test                        |
 //!
 //! ## Application Default Credentials
 //!
@@ -25,19 +29,32 @@
 //!
 //! ```rust,no_run
 //! use std::path::Path;
-//! use std::sync::Arc;
 //!
-//! use remotefs::RemoteFs;
+//! use remotefs::AsyncRemoteFs;
+//! use remotefs::fs::{ReadOptions, WriteOptions};
 //! use remotefs_gcs::GoogleCloudStorageFs;
-//! use tokio::runtime::Runtime;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let runtime = Arc::new(Runtime::new()?);
-//! let mut client = GoogleCloudStorageFs::new("my-bucket", &runtime);
-//! client.connect()?;
-//! println!("working directory: {}", client.pwd()?.display());
-//! let _root = client.list_dir(Path::new("/"))?;
-//! client.disconnect()?;
+//! # async fn run() -> remotefs::RemoteResult<()> {
+//! let mut client = GoogleCloudStorageFs::new("my-bucket");
+//! client.connect().await?;
+//! let mut source = futures::io::Cursor::new(b"hello".to_vec());
+//! client
+//!     .write_file(
+//!         Path::new("/docs/hello.txt"),
+//!         &WriteOptions::default().size_hint(5),
+//!         &mut source,
+//!     )
+//!     .await?;
+//! let mut destination = futures::io::Cursor::new(Vec::new());
+//! client
+//!     .read_file(
+//!         Path::new("/docs/hello.txt"),
+//!         &ReadOptions::default().offset(1).length(3),
+//!         &mut destination,
+//!     )
+//!     .await?;
+//! assert_eq!(destination.into_inner(), b"ell");
+//! client.disconnect().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -48,50 +65,76 @@
 //! provider supported by `google-cloud-auth`:
 //!
 //! ```rust,no_run
-//! use std::sync::Arc;
-//!
-//! use remotefs::RemoteFs;
+//! use remotefs::AsyncRemoteFs;
 //! use remotefs_gcs::credentials::Builder;
 //! use remotefs_gcs::{GoogleCloudStorageCredentials, GoogleCloudStorageFs};
-//! use tokio::runtime::Runtime;
 //!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let credentials = Builder::default().build()?;
-//! let runtime = Arc::new(Runtime::new()?);
 //! let mut client = GoogleCloudStorageFs::with_credentials(
 //!     "my-bucket",
 //!     GoogleCloudStorageCredentials::custom(credentials),
-//!     &runtime,
 //! );
-//! client.connect()?;
-//! client.disconnect()?;
+//! client.connect().await?;
+//! client.disconnect().await?;
 //! # Ok(())
 //! # }
 //! ```
 //!
 //! [`GoogleCloudStorageCredentials::anonymous`] is useful for public buckets
 //! and local emulators. Pair it with [`GoogleCloudStorageFs::endpoint`] when
-//! the service is not running at Google's default endpoint.
-//! Emulators with separate object-data and metadata endpoints can additionally
-//! use [`GoogleCloudStorageFs::control_endpoint`] for the latter.
+//! the service is not running at Google's default endpoint, and
+//! [`GoogleCloudStorageFs::control_endpoint`] for emulators with separate
+//! object-data and metadata endpoints.
+//!
+//! ## Blocking usage
+//!
+//! Enable the `tokio` feature and call [`GoogleCloudStorageFs::into_blocking`]
+//! to get a [`BlockingGoogleCloudStorageFs`], which implements
+//! [`remotefs::RemoteFs`] and can be stored as `Box<dyn RemoteFs>`. It must
+//! not be called from inside an async context. The supplied handle must belong
+//! to a multi-thread Tokio runtime.
+//!
+//! ```rust,no_run
+//! use remotefs::RemoteFs;
+//! use remotefs_gcs::GoogleCloudStorageFs;
+//!
+//! # #[cfg(feature = "tokio")]
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let runtime = tokio::runtime::Runtime::new()?;
+//! let mut client: Box<dyn RemoteFs> = Box::new(
+//!     GoogleCloudStorageFs::new("my-bucket").into_blocking(runtime.handle().clone()),
+//! );
+//! client.connect()?;
+//! client.disconnect()?;
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "tokio"))]
+//! # fn main() {}
+//! ```
 //!
 //! ## Filesystem semantics
 //!
-//! Google Cloud Storage has a flat object namespace. This crate presents
-//! trailing-slash marker objects and implicit object prefixes as directories.
-//! The root directory `/` always exists, `list_dir` consumes all pages and
-//! merges objects with prefixes, and `remove_dir_all` removes every object
-//! below its path.
+//! The root directory `/` always exists and is never an object. `list_dir`
+//! consumes every page and merges objects with prefixes. `remove_dir_all`
+//! removes every object below its path with one flat listing.
 //!
-//! Blocking `create_file` and `open_file` are supported. Streaming `create`,
-//! `open`, and `append`, plus `setstat`, `symlink`, and `exec`, return
-//! [`remotefs::RemoteErrorType::UnsupportedFeature`]. `copy` uses GCS rewrite
-//! requests until completion; `mov` copies and then deletes the source.
+//! `open` returns an owned read stream over a ranged `ReadObject` request;
+//! offsets and lengths are honored natively (`Capabilities::RANGE_READ`).
+//! `create` returns an owned write stream that feeds a resumable upload; the
+//! object is committed only when `finish` succeeds, and a dropped stream
+//! creates nothing. `copy` uses rewrite requests until completion; `rename`
+//! copies and then deletes the source and is not atomic. `append`,
+//! `set_metadata`, `symlink`, and `exec` return
+//! [`remotefs::RemoteErrorType::UnsupportedFeature`].
 //!
 //! [`GoogleCloudStorageFs::new`]: client::GoogleCloudStorageFs::new
 //! [`GoogleCloudStorageFs::endpoint`]: client::GoogleCloudStorageFs::endpoint
 //! [`GoogleCloudStorageFs::control_endpoint`]:
 //!     client::GoogleCloudStorageFs::control_endpoint
+//! [`GoogleCloudStorageFs::into_blocking`]:
+//!     client::GoogleCloudStorageFs::into_blocking
+//! [`BlockingGoogleCloudStorageFs`]: client::BlockingGoogleCloudStorageFs
 //! [`GoogleCloudStorageCredentials::anonymous`]:
 //!     credentials::GoogleCloudStorageCredentials::anonymous
 //! [`GoogleCloudStorageCredentials::custom`]:
@@ -112,12 +155,15 @@ pub mod backoff_policy;
 mod client;
 pub mod credentials;
 mod error;
+mod key;
 mod object;
-mod reader;
 pub mod retry_policy;
 pub mod retry_throttler;
+mod stream;
+#[cfg(feature = "tokio")]
+#[doc(inline)]
+pub use client::BlockingGoogleCloudStorageFs;
 #[doc(inline)]
 pub use client::GoogleCloudStorageFs;
 #[doc(inline)]
 pub use credentials::GoogleCloudStorageCredentials;
-mod utils;

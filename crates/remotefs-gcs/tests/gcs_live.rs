@@ -1,15 +1,12 @@
 #![cfg(feature = "with-gcs-ci")]
 
 use std::env;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use remotefs::RemoteFs;
-use remotefs::fs::Metadata;
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::{ReadOptions, WriteOptions};
 use remotefs_gcs::GoogleCloudStorageFs;
-use tokio::runtime::Runtime;
 
 fn unique_name(prefix: &str) -> String {
     let timestamp = SystemTime::now()
@@ -19,50 +16,51 @@ fn unique_name(prefix: &str) -> String {
     format!("{prefix}-{timestamp}")
 }
 
-#[test]
-fn live_gcs_smoke_test() {
+#[tokio::test]
+async fn live_gcs_smoke_test() {
     let Some(bucket) = env::var_os("GCS_TEST_BUCKET") else {
         eprintln!("skipping live GCS test: GCS_TEST_BUCKET is not set");
         return;
     };
-    let runtime = Arc::new(Runtime::new().expect("failed to create Tokio runtime"));
-    let mut client = GoogleCloudStorageFs::new(bucket.to_string_lossy(), &runtime);
-    client.connect().expect("failed to connect to live GCS");
+    let mut client = GoogleCloudStorageFs::new(bucket.to_string_lossy());
+    client
+        .connect()
+        .await
+        .expect("failed to connect to live GCS");
 
-    let prefix = unique_name("remotefs-gcs-live");
-    let result = (|| {
-        client.create_dir(Path::new(&prefix), remotefs::fs::UnixPex::from(0o755))?;
-        let path = Path::new(&prefix).join("smoke.txt");
+    let prefix = Path::new("/").join(unique_name("remotefs-gcs-live"));
+    let result = async {
+        client.create_dir(&prefix, None).await?;
+        let path = prefix.join("smoke.txt");
         let bytes = b"live GCS smoke test";
-        let metadata = Metadata {
-            size: bytes.len() as u64,
-            ..Metadata::default()
-        };
-        client.create_file(
-            &path,
-            &metadata,
-            Box::new(std::io::Cursor::new(bytes.to_vec())),
-        )?;
-        if !client.stat(&path)?.is_file() {
+        let mut source = futures::io::Cursor::new(bytes.to_vec());
+        client
+            .write_file(
+                &path,
+                &WriteOptions::default().size_hint(bytes.len() as u64),
+                &mut source,
+            )
+            .await?;
+        if !client.stat(&path).await?.is_file() {
             return Err("live object was not reported as a file".into());
         }
-        if client.list_dir(Path::new(&prefix))?.len() != 1 {
+        if client.list_dir(&prefix).await?.len() != 1 {
             return Err("live directory listing had an unexpected length".into());
         }
-
-        let mut output = tempfile::tempfile()?;
-        client.open_file(&path, Box::new(output.try_clone()?))?;
-        output.seek(SeekFrom::Start(0))?;
-        let mut downloaded = Vec::new();
-        output.read_to_end(&mut downloaded)?;
-        if downloaded != bytes {
+        let mut downloaded = futures::io::Cursor::new(Vec::new());
+        client
+            .read_file(&path, &ReadOptions::default(), &mut downloaded)
+            .await?;
+        if downloaded.into_inner() != bytes {
             return Err("live object contents differed after download".into());
         }
         Ok::<_, Box<dyn std::error::Error>>(())
-    })();
-    let cleanup = client.remove_dir_all(Path::new(&prefix));
+    }
+    .await;
+    let cleanup = client.remove_dir_all(&prefix).await;
     client
         .disconnect()
+        .await
         .expect("failed to disconnect from live GCS");
 
     if let Err(error) = result {

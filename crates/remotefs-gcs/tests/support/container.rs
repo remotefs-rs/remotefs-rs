@@ -2,8 +2,8 @@
 
 use testcontainers::core::wait::HttpWaitStrategy;
 use testcontainers::core::{ContainerPort, WaitFor};
-use testcontainers::runners::SyncRunner;
-use testcontainers::{Container, GenericImage, ImageExt};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 const GCS_GRPC_PORT: ContainerPort = ContainerPort::Tcp(8888);
 const GCS_HTTP_PORT: ContainerPort = ContainerPort::Tcp(9000);
@@ -27,7 +27,7 @@ const GCS_COMMAND: [&str; 2] = [
 #[derive(Debug)]
 /// A running Google Cloud Storage testbench.
 pub struct GcsContainer {
-    container: Container<GenericImage>,
+    container: ContainerAsync<GenericImage>,
 }
 
 impl GcsContainer {
@@ -38,7 +38,7 @@ impl GcsContainer {
     /// Panics if Docker cannot start the container or the server port cannot
     /// be mapped.
     #[must_use]
-    pub fn start() -> Self {
+    pub async fn start() -> Self {
         let wait_for = WaitFor::http(
             HttpWaitStrategy::new("/start_grpc?port=8888")
                 .with_port(GCS_HTTP_PORT)
@@ -51,6 +51,7 @@ impl GcsContainer {
             .with_entrypoint("sh")
             .with_cmd(GCS_COMMAND)
             .start()
+            .await
             .expect("failed to start GCS testbench");
         Self { container }
     }
@@ -61,10 +62,11 @@ impl GcsContainer {
     ///
     /// Panics if the exposed server port cannot be mapped.
     #[must_use]
-    pub fn endpoint(&self) -> String {
+    pub async fn endpoint(&self) -> String {
         let port = self
             .container
             .get_host_port_ipv4(GCS_GRPC_PORT)
+            .await
             .expect("failed to map GCS testbench gRPC port");
         format!("http://127.0.0.1:{port}")
     }
@@ -75,11 +77,25 @@ impl GcsContainer {
     ///
     /// Panics if the exposed HTTP port cannot be mapped.
     #[must_use]
-    pub fn http_endpoint(&self) -> String {
+    pub async fn http_endpoint(&self) -> String {
         let port = self
             .container
             .get_host_port_ipv4(GCS_HTTP_PORT)
+            .await
             .expect("failed to map GCS testbench HTTP port");
         format!("http://127.0.0.1:{port}")
+    }
+
+    /// Removes the container while an async runtime is active.
+    #[cfg(feature = "tokio")]
+    ///
+    /// # Panics
+    ///
+    /// Panics if Docker cannot remove the testbench.
+    pub async fn remove(self) {
+        self.container
+            .rm()
+            .await
+            .expect("failed to remove GCS testbench");
     }
 }

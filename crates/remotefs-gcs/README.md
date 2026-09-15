@@ -6,31 +6,34 @@
 [![Coverage](https://codecov.io/gh/remotefs-rs/remotefs-rs-gcs/branch/main/graph/badge.svg)](https://codecov.io/gh/remotefs-rs/remotefs-rs-gcs)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`remotefs-gcs` is a synchronous [`remotefs`] client for Google Cloud Storage.
-It owns the Tokio runtime provided by the caller and uses the Google Cloud
-Storage Rust SDK for object bytes, metadata, listing, deletion, and rewrites.
+`remotefs-gcs` is an asynchronous [`remotefs`] client backed by Google Cloud
+Storage. It uses the Google Cloud Storage Rust SDK for object bytes, metadata,
+listing, deletion, and rewrites. Every remote path is absolute and rooted at
+the bucket.
 
 [`remotefs`]: https://github.com/remotefs-rs/remotefs-rs
 
 ## Installation
 
-Add the library and a Tokio runtime to `Cargo.toml`:
+Add the library to `Cargo.toml`:
 
 ```toml
 [dependencies]
-remotefs = "0.3"
-remotefs-gcs = "0.1"
-tokio = { version = "1", features = ["rt-multi-thread"] }
+remotefs = "1"
+remotefs-gcs = "1"
+futures = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 The crate exposes these features:
 
-| Feature           | Default | Purpose                                           |
-| ----------------- | :-----: | ------------------------------------------------- |
-| `find`            |   yes   | Enables `RemoteFs::find`                          |
-| `no-log`          |   no    | Disables logging from this crate                  |
-| `with-containers` |   no    | Enables the local GCS testbench integration suite |
-| `with-gcs-ci`     |   no    | Enables the optional live GCS smoke test          |
+| Feature           | Default | Purpose                                                     |
+| ----------------- | :-----: | ----------------------------------------------------------- |
+| `find`            |   yes   | Enables `remotefs::find_async`                              |
+| `no-log`          |   no    | Disables logging from this crate                            |
+| `tokio`           |   no    | Enables `BlockingGoogleCloudStorageFs` for blocking callers |
+| `with-containers` |   no    | Enables the local GCS testbench integration suite           |
+| `with-gcs-ci`     |   no    | Enables the optional live GCS smoke test                    |
 
 ## Application Default Credentials
 
@@ -40,20 +43,36 @@ appropriate to its deployment:
 
 ```rust,no_run
 use std::path::Path;
-use std::sync::Arc;
 
-use remotefs::RemoteFs;
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::{ReadOptions, WriteOptions};
 use remotefs_gcs::GoogleCloudStorageFs;
-use tokio::runtime::Runtime;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = Arc::new(Runtime::new()?);
-    let mut client = GoogleCloudStorageFs::new("my-bucket", &runtime);
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = GoogleCloudStorageFs::new("my-bucket");
+    client.connect().await?;
 
-    client.connect()?;
-    println!("working directory: {}", client.pwd()?.display());
-    let _entries = client.list_dir(Path::new("/"))?;
-    client.disconnect()?;
+    let mut source = futures::io::Cursor::new(b"hello".to_vec());
+    client
+        .write_file(
+            Path::new("/docs/hello.txt"),
+            &WriteOptions::default().size_hint(5),
+            &mut source,
+        )
+        .await?;
+
+    let mut destination = futures::io::Cursor::new(Vec::new());
+    client
+        .read_file(
+            Path::new("/docs/hello.txt"),
+            &ReadOptions::default().offset(1).length(3),
+            &mut destination,
+        )
+        .await?;
+    assert_eq!(destination.into_inner(), b"ell");
+
+    client.disconnect().await?;
     Ok(())
 }
 ```
@@ -64,24 +83,20 @@ Pass any `google-cloud-auth` credential provider supported by the SDK. This
 example builds the SDK's ADC credentials explicitly:
 
 ```rust,no_run
-use std::sync::Arc;
-
-use remotefs::RemoteFs;
+use remotefs::AsyncRemoteFs;
 use remotefs_gcs::credentials::Builder;
 use remotefs_gcs::{GoogleCloudStorageCredentials, GoogleCloudStorageFs};
-use tokio::runtime::Runtime;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let credentials = Builder::default().build()?;
-    let runtime = Arc::new(Runtime::new()?);
     let mut client = GoogleCloudStorageFs::with_credentials(
         "my-bucket",
         GoogleCloudStorageCredentials::custom(credentials),
-        &runtime,
     );
 
-    client.connect()?;
-    client.disconnect()?;
+    client.connect().await?;
+    client.disconnect().await?;
     Ok(())
 }
 ```
@@ -89,23 +104,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Anonymous and emulator access
 
 Use `anonymous` for public buckets or an emulator that does not require
-authentication. `endpoint` applies to both Google SDK clients:
+authentication. `endpoint` applies to both SDK clients, while
+`control_endpoint` can override the metadata client with a separate endpoint:
 
 ```rust,no_run
-use std::sync::Arc;
-
-use remotefs::RemoteFs;
+use remotefs::AsyncRemoteFs;
 use remotefs_gcs::{GoogleCloudStorageCredentials, GoogleCloudStorageFs};
-use tokio::runtime::Runtime;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = Arc::new(Runtime::new()?);
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = GoogleCloudStorageFs::with_credentials(
         "test-bucket",
         GoogleCloudStorageCredentials::anonymous(),
-        &runtime,
     )
     .endpoint("http://localhost:4443");
+
+    client.connect().await?;
+    client.disconnect().await?;
+    Ok(())
+}
+```
+
+## Blocking usage
+
+Enable the `tokio` feature when a blocking `remotefs::RemoteFs` trait object is
+needed. Create a multi-thread runtime, pass its handle to `into_blocking`, and
+use the resulting `BlockingGoogleCloudStorageFs` from synchronous code:
+
+```rust,no_run
+use remotefs::RemoteFs;
+use remotefs_gcs::GoogleCloudStorageFs;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let mut client: Box<dyn RemoteFs> =
+        Box::new(GoogleCloudStorageFs::new("my-bucket").into_blocking(runtime.handle().clone()));
 
     client.connect()?;
     client.disconnect()?;
@@ -113,28 +146,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Do not call the blocking adapter from inside an async context.
+
 ## Filesystem behavior
 
-The bucket is presented as a rooted filesystem. Google Cloud Storage has a
-flat object namespace, so this crate treats both trailing-slash marker objects
-and returned object prefixes as directories.
+Google Cloud Storage has a flat object namespace, so this crate treats both
+trailing-slash marker objects and returned object prefixes as directories. The
+root directory `/` always exists and is never represented by an object.
 
-| Operation                    | Support | Notes                                        |
-| ---------------------------- | :-----: | -------------------------------------------- |
-| `connect`, `disconnect`      |   yes   | Builds both SDK clients                      |
-| `pwd`, `change_dir`          |   yes   | Paths are rooted at `/`                      |
-| `list_dir`, `stat`, `exists` |   yes   | Listings consume every SDK page              |
-| `create_dir`                 |   yes   | Creates a zero-byte trailing-slash marker    |
-| `remove_dir`                 |   yes   | Rejects non-empty directories                |
-| `remove_dir_all`             |   yes   | Deletes every object below the path          |
-| `create_file`, `open_file`   |   yes   | Blocking upload and download                 |
-| `copy`, `mov`                |   yes   | Rewrite; move is copy followed by delete     |
-| `setstat`, `symlink`, `exec` |   no    | Returns `UnsupportedFeature`                 |
-| `create`, `open`, `append`   |   no    | Streaming `remotefs` methods are unsupported |
+| Operation                         | Support | Notes                                                        |
+| --------------------------------- | :-----: | ------------------------------------------------------------ |
+| `connect`, `disconnect`           |   yes   | Builds both SDK clients                                      |
+| `list_dir`, `stat`, `exists`      |   yes   | Absolute paths rooted at `/`; listings consume every page    |
+| `create_dir`                      |   yes   | Creates a zero-byte trailing-slash marker; mode is ignored   |
+| `remove_dir`                      |   yes   | Rejects non-empty directories                                |
+| `remove_dir_all`                  |   yes   | Deletes every object below the path                          |
+| `open`, `read_file`               |   yes   | Owned ranged read stream; offsets and lengths are native     |
+| `create`, `write_file`            |   yes   | Owned resumable-upload stream committed by `finish`          |
+| `copy`, `rename`                  |   yes   | Rewrite; rename is copy followed by delete and is not atomic |
+| `append`, `append_file`           |   no    | Returns `UnsupportedFeature`                                 |
+| `set_metadata`, `symlink`, `exec` |   no    | Returns `UnsupportedFeature`                                 |
 
-The root directory always exists and is never represented by an object. An
-implicit directory exists when an object has the corresponding prefix, even if
-there is no marker object.
+`open` and `create` return owned streams. A writer must be completed with
+`finish` for the object to be committed; dropping an unfinished writer creates
+nothing. `copy` uses GCS rewrite requests until completion. `rename` copies and
+then deletes the source, so it is not atomic.
 
 ## Development and testing
 
@@ -150,8 +186,8 @@ Run the Storage testbench integration suite with Docker available:
 just integration
 ```
 
-The integration recipe starts a pinned testbench container and runs one test
-for every supported or intentionally unsupported `RemoteFs` capability.
+This runs the asynchronous testbench suite and the blocking adapter suite with
+`--features with-containers,tokio`.
 
 The live smoke test is opt-in. Set `GCS_TEST_BUCKET` and provide ADC before
 running it:

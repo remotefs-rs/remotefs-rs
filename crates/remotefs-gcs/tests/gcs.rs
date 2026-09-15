@@ -3,139 +3,213 @@
 mod support;
 
 use std::collections::BTreeSet;
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use remotefs::RemoteFs;
-use remotefs::fs::{Metadata, RemoteErrorType, UnixPex};
-use remotefs_gcs::GoogleCloudStorageFs;
-use support::TestContext;
+use futures::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use pretty_assertions::assert_eq;
+use remotefs::AsyncRemoteFs;
+use remotefs::fs::{Capabilities, ReadOptions, RemoteErrorType, SetMetadata, WriteOptions};
+use support::{TestContext, download, upload};
 
-#[test]
-fn connect_establishes_the_client_once() {
-    let mut context = TestContext::new();
+const READ_CHUNK_SIZE: usize = 256 * 1024;
 
+struct ChunkedSource {
+    bytes: Vec<u8>,
+    offset: usize,
+    chunk_size: usize,
+}
+
+struct FailingSource {
+    emitted: bool,
+}
+
+impl futures::io::AsyncRead for FailingSource {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.emitted {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "source failed after emitting data",
+            )))
+        } else {
+            let bytes = b"partial";
+            buf[..bytes.len()].copy_from_slice(bytes);
+            self.emitted = true;
+            Poll::Ready(Ok(bytes.len()))
+        }
+    }
+}
+
+impl futures::io::AsyncRead for ChunkedSource {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.offset == self.bytes.len() {
+            return Poll::Ready(Ok(0));
+        }
+        let count = self
+            .chunk_size
+            .min(self.bytes.len() - self.offset)
+            .min(buf.len());
+        buf[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+        self.offset += count;
+        Poll::Ready(Ok(count))
+    }
+}
+
+#[tokio::test]
+async fn connect_establishes_the_client_once() {
+    let mut context = TestContext::new().await;
     assert!(!context.client.is_connected());
-    context
-        .client
-        .connect()
-        .expect("failed to connect filesystem");
+    context.client.connect().await.expect("failed to connect");
     assert!(context.client.is_connected());
     assert_eq!(
-        context.client.connect().unwrap_err().kind,
+        context.client.connect().await.unwrap_err().kind(),
         RemoteErrorType::AlreadyConnected
     );
 }
 
-#[test]
-fn disconnect_closes_the_client_once() {
-    let mut context = TestContext::connected();
-
-    context.client.disconnect().expect("failed to disconnect");
+#[tokio::test]
+async fn disconnect_closes_the_client_once() {
+    let mut context = TestContext::connected().await;
+    context
+        .client
+        .disconnect()
+        .await
+        .expect("failed to disconnect");
     assert!(!context.client.is_connected());
     assert_eq!(
-        context.client.disconnect().unwrap_err().kind,
+        context.client.disconnect().await.unwrap_err().kind(),
         RemoteErrorType::NotConnected
     );
 }
 
-#[test]
-fn is_connected_tracks_connection_state() {
-    let mut context = TestContext::new();
-
-    assert!(!context.client.is_connected());
-    context.client.connect().expect("failed to connect");
-    assert!(context.client.is_connected());
-    context.client.disconnect().expect("failed to disconnect");
-    assert!(!context.client.is_connected());
+#[tokio::test]
+async fn capabilities_match_the_supported_operations() {
+    let context = TestContext::connected().await;
+    let capabilities = context.client.capabilities();
+    assert!(capabilities.contains(
+        Capabilities::STREAM_READ
+            | Capabilities::STREAM_WRITE
+            | Capabilities::RANGE_READ
+            | Capabilities::COPY
+    ));
+    assert!(!capabilities.contains(Capabilities::APPEND));
 }
 
-#[test]
-fn pwd_returns_the_root_working_directory() {
-    let mut context = TestContext::connected();
-    assert_eq!(context.client.pwd().unwrap(), Path::new("/"));
-}
-
-#[test]
-fn change_dir_resolves_directories_and_rejects_files() {
-    let mut context = TestContext::connected();
-    context
-        .client
-        .create_dir(Path::new("docs"), UnixPex::from(0o755))
-        .unwrap();
-    upload(&mut context.client, Path::new("file.txt"), b"file");
-
+#[tokio::test]
+async fn relative_paths_are_rejected() {
+    let context = TestContext::connected().await;
     assert_eq!(
-        context.client.change_dir(Path::new("docs")).unwrap(),
-        Path::new("/docs")
+        context
+            .client
+            .stat(Path::new("docs"))
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
     assert_eq!(
         context
             .client
-            .change_dir(Path::new("/file.txt"))
+            .create_dir(Path::new("docs"), None)
+            .await
             .unwrap_err()
-            .kind,
-        RemoteErrorType::BadFile
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
 }
 
-#[test]
-fn list_dir_returns_only_direct_children() {
-    let mut context = TestContext::connected();
+#[tokio::test]
+async fn list_dir_returns_only_direct_children() {
+    let context = TestContext::connected().await;
     context
         .client
-        .create_dir(Path::new("docs"), UnixPex::from(0o755))
+        .create_dir(Path::new("/docs"), None)
+        .await
         .unwrap();
-    upload(&mut context.client, Path::new("root.txt"), b"root");
-    upload(&mut context.client, Path::new("docs/nested.txt"), b"nested");
-
-    let entries = context.client.list_dir(Path::new("/")).unwrap();
-    let names: BTreeSet<_> = entries.iter().map(remotefs::fs::File::name).collect();
+    upload(&context.client, Path::new("/root.txt"), b"root").await;
+    upload(&context.client, Path::new("/docs/nested.txt"), b"nested").await;
+    let entries = context.client.list_dir(Path::new("/")).await.unwrap();
+    let names: BTreeSet<_> = entries.iter().map(remotefs::File::name).collect();
     assert_eq!(
         names,
         BTreeSet::from([String::from("docs"), String::from("root.txt")])
     );
+    assert_eq!(
+        context
+            .client
+            .list_dir(Path::new("/root.txt"))
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
 }
 
-#[test]
-fn stat_reports_root_directory_file_and_missing_path() {
-    let mut context = TestContext::connected();
-    upload(&mut context.client, Path::new("file.bin"), b"bytes");
-
-    assert!(context.client.stat(Path::new("/")).unwrap().is_dir());
-    let file = context.client.stat(Path::new("file.bin")).unwrap();
+#[tokio::test]
+async fn stat_reports_root_directory_file_and_missing_path() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/file.bin"), b"bytes").await;
+    let root = context.client.stat(Path::new("/")).await.unwrap();
+    assert!(root.is_dir());
+    assert_eq!(root.metadata().size, None);
+    let file = context.client.stat(Path::new("/file.bin")).await.unwrap();
     assert!(file.is_file());
-    assert_eq!(file.metadata().size, 5);
+    assert_eq!(file.metadata().size, Some(5));
     assert_eq!(
-        context.client.stat(Path::new("missing")).unwrap_err().kind,
+        context
+            .client
+            .stat(Path::new("/missing"))
+            .await
+            .unwrap_err()
+            .kind(),
         RemoteErrorType::NoSuchFileOrDirectory
     );
 }
 
-#[test]
-fn exists_distinguishes_present_and_missing_paths() {
-    let mut context = TestContext::connected();
-    upload(&mut context.client, Path::new("present.txt"), b"present");
-
-    assert!(context.client.exists(Path::new("present.txt")).unwrap());
-    assert!(!context.client.exists(Path::new("missing.txt")).unwrap());
+#[tokio::test]
+async fn exists_distinguishes_present_and_missing_paths() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/present.txt"), b"present").await;
+    assert!(
+        context
+            .client
+            .exists(Path::new("/present.txt"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !context
+            .client
+            .exists(Path::new("/missing.txt"))
+            .await
+            .unwrap()
+    );
 }
 
 #[cfg(feature = "find")]
-#[test]
-fn find_recurses_and_filters_with_wildcards() {
-    let mut context = TestContext::connected();
+#[tokio::test]
+async fn find_recurses_from_an_explicit_root() {
+    let context = TestContext::connected().await;
     context
         .client
-        .create_dir(Path::new("docs"), UnixPex::from(0o755))
+        .create_dir(Path::new("/docs"), None)
+        .await
         .unwrap();
-    upload(&mut context.client, Path::new("root.txt"), b"root");
-    upload(&mut context.client, Path::new("docs/nested.txt"), b"nested");
-    upload(&mut context.client, Path::new("docs/image.bin"), b"image");
-
-    let paths: BTreeSet<_> = context
-        .client
-        .find("*.txt")
+    upload(&context.client, Path::new("/root.txt"), b"root").await;
+    upload(&context.client, Path::new("/docs/nested.txt"), b"nested").await;
+    upload(&context.client, Path::new("/docs/image.bin"), b"image").await;
+    let paths: BTreeSet<_> = remotefs::find_async(&context.client, Path::new("/"), "*.txt")
+        .await
         .unwrap()
         .into_iter()
         .map(|file| file.path().to_path_buf())
@@ -149,303 +223,488 @@ fn find_recurses_and_filters_with_wildcards() {
     );
 }
 
-#[test]
-fn create_dir_creates_a_directory_and_rejects_duplicates() {
-    let mut context = TestContext::connected();
-
+#[tokio::test]
+async fn create_dir_creates_a_directory_and_rejects_duplicates() {
+    let context = TestContext::connected().await;
     context
         .client
-        .create_dir(Path::new("docs"), UnixPex::from(0o755))
+        .create_dir(Path::new("/docs"), None)
+        .await
         .unwrap();
-    assert!(context.client.stat(Path::new("docs")).unwrap().is_dir());
+    assert!(
+        context
+            .client
+            .stat(Path::new("/docs"))
+            .await
+            .unwrap()
+            .is_dir()
+    );
     assert_eq!(
         context
             .client
-            .create_dir(Path::new("docs"), UnixPex::from(0o755))
+            .create_dir(Path::new("/docs"), None)
+            .await
             .unwrap_err()
-            .kind,
-        RemoteErrorType::DirectoryAlreadyExists
+            .kind(),
+        RemoteErrorType::AlreadyExists
+    );
+    assert_eq!(
+        context
+            .client
+            .create_dir(Path::new("/"), None)
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
 }
 
-#[test]
-fn remove_file_deletes_only_files() {
-    let mut context = TestContext::connected();
-    upload(&mut context.client, Path::new("file.txt"), b"file");
+#[tokio::test]
+async fn create_rejects_directory_destinations() {
+    let context = TestContext::connected().await;
     context
         .client
-        .create_dir(Path::new("docs"), UnixPex::from(0o755))
+        .create_dir(Path::new("/docs"), None)
+        .await
         .unwrap();
-
-    context.client.remove_file(Path::new("file.txt")).unwrap();
-    assert!(!context.client.exists(Path::new("file.txt")).unwrap());
     assert_eq!(
         context
             .client
-            .remove_file(Path::new("docs"))
+            .create(Path::new("/docs"), &WriteOptions::default())
+            .await
             .unwrap_err()
-            .kind,
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+
+    upload(&context.client, Path::new("/tree/leaf"), b"leaf").await;
+    let Err(error) = context
+        .client
+        .create(Path::new("/tree"), &WriteOptions::default())
+        .await
+    else {
+        panic!("a directory destination must be rejected");
+    };
+    assert_eq!(error.kind(), RemoteErrorType::BadFile, "{error}");
+
+    upload(&context.client, Path::new("/file"), b"file").await;
+    assert_eq!(
+        context
+            .client
+            .create(Path::new("/file/child"), &WriteOptions::default())
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert_eq!(
+        context
+            .client
+            .create_dir(Path::new("/file/directory"), None)
+            .await
+            .unwrap_err()
+            .kind(),
         RemoteErrorType::BadFile
     );
 }
 
-#[test]
-fn remove_dir_deletes_empty_directories_and_rejects_non_empty_ones() {
-    let mut context = TestContext::connected();
+#[tokio::test]
+async fn remove_file_deletes_only_files() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/file.txt"), b"file").await;
     context
         .client
-        .create_dir(Path::new("empty"), UnixPex::from(0o755))
+        .create_dir(Path::new("/docs"), None)
+        .await
         .unwrap();
     context
         .client
-        .create_dir(Path::new("full"), UnixPex::from(0o755))
+        .remove_file(Path::new("/file.txt"))
+        .await
         .unwrap();
-    upload(&mut context.client, Path::new("full/file.txt"), b"file");
-
-    context.client.remove_dir(Path::new("empty")).unwrap();
-    assert!(!context.client.exists(Path::new("empty")).unwrap());
+    assert!(!context.client.exists(Path::new("/file.txt")).await.unwrap());
     assert_eq!(
         context
             .client
-            .remove_dir(Path::new("full"))
+            .remove_file(Path::new("/docs"))
+            .await
             .unwrap_err()
-            .kind,
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+}
+
+#[tokio::test]
+async fn remove_dir_deletes_empty_directories_and_rejects_non_empty_ones() {
+    let context = TestContext::connected().await;
+    context
+        .client
+        .create_dir(Path::new("/empty"), None)
+        .await
+        .unwrap();
+    context
+        .client
+        .create_dir(Path::new("/full"), None)
+        .await
+        .unwrap();
+    upload(&context.client, Path::new("/full/file.txt"), b"file").await;
+    context
+        .client
+        .remove_dir(Path::new("/empty"))
+        .await
+        .unwrap();
+    assert!(!context.client.exists(Path::new("/empty")).await.unwrap());
+    assert_eq!(
+        context
+            .client
+            .remove_dir(Path::new("/full"))
+            .await
+            .unwrap_err()
+            .kind(),
         RemoteErrorType::DirectoryNotEmpty
     );
 }
 
-#[test]
-fn remove_dir_all_deletes_nested_content_and_the_marker() {
-    let mut context = TestContext::connected();
+#[tokio::test]
+async fn remove_dir_all_deletes_nested_content_and_the_marker() {
+    let context = TestContext::connected().await;
     context
         .client
-        .create_dir(Path::new("tree"), UnixPex::from(0o755))
+        .create_dir(Path::new("/tree"), None)
+        .await
         .unwrap();
     context
         .client
-        .create_dir(Path::new("tree/nested"), UnixPex::from(0o755))
+        .create_dir(Path::new("/tree/nested"), None)
+        .await
         .unwrap();
-    upload(&mut context.client, Path::new("tree/root.txt"), b"root");
-    upload(
-        &mut context.client,
-        Path::new("tree/nested/leaf.txt"),
-        b"leaf",
-    );
-
-    context.client.remove_dir_all(Path::new("tree")).unwrap();
-    assert!(!context.client.exists(Path::new("tree")).unwrap());
+    upload(&context.client, Path::new("/tree/root.txt"), b"root").await;
+    upload(&context.client, Path::new("/tree/nested/leaf.txt"), b"leaf").await;
+    context
+        .client
+        .remove_dir_all(Path::new("/tree"))
+        .await
+        .unwrap();
+    assert!(!context.client.exists(Path::new("/tree")).await.unwrap());
     assert!(
         !context
             .client
-            .exists(Path::new("tree/nested/leaf.txt"))
+            .exists(Path::new("/tree/nested/leaf.txt"))
+            .await
             .unwrap()
     );
 }
 
-#[test]
-fn create_file_uploads_small_and_multi_chunk_objects() {
-    let mut context = TestContext::connected();
+#[tokio::test]
+async fn write_file_uploads_small_and_multi_chunk_objects() {
+    let context = TestContext::connected().await;
     let large = vec![7_u8; READ_CHUNK_SIZE + 13];
-
-    upload(&mut context.client, Path::new("small.txt"), b"small");
-    upload(&mut context.client, Path::new("large.bin"), &large);
+    upload(&context.client, Path::new("/small.txt"), b"small").await;
+    upload(&context.client, Path::new("/large.bin"), &large).await;
     assert_eq!(
         context
             .client
-            .stat(Path::new("small.txt"))
+            .stat(Path::new("/small.txt"))
+            .await
             .unwrap()
             .metadata()
             .size,
-        5
+        Some(5)
     );
     assert_eq!(
         context
             .client
-            .stat(Path::new("large.bin"))
+            .stat(Path::new("/large.bin"))
+            .await
             .unwrap()
             .metadata()
             .size,
-        large.len() as u64
+        Some(large.len() as u64)
+    );
+    assert_eq!(
+        download(&context.client, Path::new("/large.bin")).await,
+        large
     );
 }
 
-#[test]
-fn open_file_downloads_exact_multi_chunk_contents() {
-    let mut context = TestContext::connected();
-    let expected = vec![9_u8; READ_CHUNK_SIZE + 13];
-    upload(&mut context.client, Path::new("large.bin"), &expected);
-
+#[tokio::test]
+async fn write_file_without_a_size_hint_uploads_the_whole_source() {
+    let context = TestContext::connected().await;
+    let mut source = futures::io::Cursor::new(b"no hint".to_vec());
+    let written = context
+        .client
+        .write_file(
+            Path::new("/nohint.txt"),
+            &WriteOptions::default(),
+            &mut source,
+        )
+        .await
+        .unwrap();
+    assert_eq!(written, 7);
     assert_eq!(
-        download(&mut context.client, Path::new("large.bin")),
+        download(&context.client, Path::new("/nohint.txt")).await,
+        b"no hint"
+    );
+}
+
+#[tokio::test]
+async fn write_file_without_a_size_hint_accepts_more_than_the_channel_capacity() {
+    let context = TestContext::connected().await;
+    let expected = b"abcdefghijklmnopqrstuvwxyz".to_vec();
+    let mut source = ChunkedSource {
+        bytes: expected.clone(),
+        offset: 0,
+        chunk_size: 1,
+    };
+    let written = context
+        .client
+        .write_file(
+            Path::new("/many-chunks.txt"),
+            &WriteOptions::default(),
+            &mut source,
+        )
+        .await
+        .unwrap();
+    assert_eq!(written, expected.len() as u64);
+    assert_eq!(
+        download(&context.client, Path::new("/many-chunks.txt")).await,
         expected
     );
 }
 
-#[test]
-fn copy_duplicates_a_file_and_preserves_the_source() {
-    let mut context = TestContext::connected();
-    upload(&mut context.client, Path::new("source.txt"), b"source");
-
-    context
+#[tokio::test]
+async fn size_hint_mismatch_fails_on_finish() {
+    let context = TestContext::connected().await;
+    let mut stream = context
         .client
-        .copy(Path::new("source.txt"), Path::new("copy.txt"))
-        .unwrap();
-    assert_eq!(
-        download(&mut context.client, Path::new("source.txt")).as_slice(),
-        b"source"
-    );
-    assert_eq!(
-        download(&mut context.client, Path::new("copy.txt")).as_slice(),
-        b"source"
-    );
-}
-
-#[test]
-fn mov_transfers_a_file_and_removes_the_source() {
-    let mut context = TestContext::connected();
-    upload(&mut context.client, Path::new("source.txt"), b"source");
-
-    context
-        .client
-        .mov(Path::new("source.txt"), Path::new("moved.txt"))
-        .unwrap();
-    assert!(!context.client.exists(Path::new("source.txt")).unwrap());
-    assert_eq!(
-        download(&mut context.client, Path::new("moved.txt")).as_slice(),
-        b"source"
-    );
-}
-
-#[test]
-fn setstat_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context
-            .client
-            .setstat(Path::new("file"), Metadata::default())
-            .unwrap_err()
-            .kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-#[test]
-fn symlink_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context
-            .client
-            .symlink(Path::new("link"), Path::new("target"))
-            .unwrap_err()
-            .kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-#[test]
-fn exec_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context.client.exec("true").unwrap_err().kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-#[test]
-fn append_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context
-            .client
-            .append(Path::new("file"), &Metadata::default())
-            .err()
-            .expect("append unexpectedly returned a stream")
-            .kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-#[test]
-fn append_file_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context
-            .client
-            .append_file(
-                Path::new("file"),
-                &metadata(b"bytes"),
-                Box::new(Cursor::new(b"bytes".to_vec())),
-            )
-            .unwrap_err()
-            .kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-#[test]
-fn create_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context
-            .client
-            .create(Path::new("file"), &Metadata::default())
-            .err()
-            .expect("create unexpectedly returned a stream")
-            .kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-#[test]
-fn open_reports_unsupported_feature() {
-    let mut context = TestContext::connected();
-    assert_eq!(
-        context
-            .client
-            .open(Path::new("file"))
-            .err()
-            .expect("open unexpectedly returned a stream")
-            .kind,
-        RemoteErrorType::UnsupportedFeature
-    );
-}
-
-fn metadata(bytes: &[u8]) -> Metadata {
-    Metadata {
-        size: bytes.len() as u64,
-        ..Metadata::default()
-    }
-}
-
-fn upload(client: &mut GoogleCloudStorageFs, path: &Path, bytes: &[u8]) {
-    assert_eq!(
-        client
-            .create_file(
-                path,
-                &metadata(bytes),
-                Box::new(Cursor::new(bytes.to_vec())),
-            )
-            .expect("failed to upload test object"),
-        bytes.len() as u64
-    );
-}
-
-fn download(client: &mut GoogleCloudStorageFs, path: &Path) -> Vec<u8> {
-    let mut output = tempfile::tempfile().expect("failed to create output file");
-    client
-        .open_file(
-            path,
-            Box::new(output.try_clone().expect("failed to clone output file")),
+        .create(
+            Path::new("/short.txt"),
+            &WriteOptions::default().size_hint(10),
         )
-        .expect("failed to download test object");
-    output
-        .seek(SeekFrom::Start(0))
-        .expect("failed to rewind output file");
-    let mut bytes = Vec::new();
-    output
-        .read_to_end(&mut bytes)
-        .expect("failed to read downloaded object");
-    bytes
+        .await
+        .unwrap();
+    stream.write_all(b"abc").await.unwrap();
+    assert_eq!(
+        stream.close().await.unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    let error = stream.finish().await.unwrap_err();
+    assert_eq!(error.kind(), RemoteErrorType::ProtocolError);
+    assert!(
+        !context
+            .client
+            .exists(Path::new("/short.txt"))
+            .await
+            .unwrap()
+    );
 }
 
-const READ_CHUNK_SIZE: usize = 256 * 1024;
+#[tokio::test]
+async fn failed_source_does_not_commit_a_partial_object() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/stable.txt"), b"stable").await;
+    let mut source = FailingSource { emitted: false };
+    assert_eq!(
+        context
+            .client
+            .write_file(
+                Path::new("/stable.txt"),
+                &WriteOptions::default(),
+                &mut source,
+            )
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::IoError
+    );
+    assert_eq!(
+        download(&context.client, Path::new("/stable.txt")).await,
+        b"stable"
+    );
+}
+
+#[tokio::test]
+async fn a_dropped_write_stream_does_not_create_the_object() {
+    let context = TestContext::connected().await;
+    let mut stream = context
+        .client
+        .create(Path::new("/abandoned.txt"), &WriteOptions::default())
+        .await
+        .unwrap();
+    stream.write_all(b"partial").await.unwrap();
+    drop(stream);
+    assert!(
+        !context
+            .client
+            .exists(Path::new("/abandoned.txt"))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn open_streams_exact_multi_chunk_contents() {
+    let context = TestContext::connected().await;
+    let expected = vec![9_u8; READ_CHUNK_SIZE + 13];
+    upload(&context.client, Path::new("/large.bin"), &expected).await;
+    let mut stream = context
+        .client
+        .open(Path::new("/large.bin"), &ReadOptions::default())
+        .await
+        .unwrap();
+    assert!(!stream.seekable());
+    let mut output = Vec::new();
+    stream.read_to_end(&mut output).await.unwrap();
+    stream.finish().await.unwrap();
+    assert_eq!(output, expected);
+}
+
+#[tokio::test]
+async fn ranged_reads_honor_offset_length_zero_and_beyond_eof() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/range.txt"), b"abcdef").await;
+    let read = |opts: ReadOptions| {
+        let client = &context.client;
+        async move {
+            let mut output = futures::io::Cursor::new(Vec::new());
+            client
+                .read_file(Path::new("/range.txt"), &opts, &mut output)
+                .await
+                .unwrap();
+            output.into_inner()
+        }
+    };
+    assert_eq!(read(ReadOptions::default().offset(2)).await, b"cdef");
+    assert_eq!(
+        read(ReadOptions::default().offset(2).length(2)).await,
+        b"cd"
+    );
+    assert_eq!(read(ReadOptions::default().length(3)).await, b"abc");
+    assert_eq!(read(ReadOptions::default().offset(2).length(0)).await, b"");
+    assert_eq!(read(ReadOptions::default().offset(100)).await, b"");
+    assert_eq!(
+        read(ReadOptions::default().offset(100).length(5)).await,
+        b""
+    );
+    assert_eq!(
+        context
+            .client
+            .open(Path::new("/missing.txt"), &ReadOptions::default().length(0),)
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    assert_eq!(
+        context
+            .client
+            .open(Path::new("/missing.txt"), &ReadOptions::default())
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+}
+
+#[tokio::test]
+async fn copy_duplicates_a_file_and_preserves_the_source() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/source.txt"), b"source").await;
+    context
+        .client
+        .copy(Path::new("/source.txt"), Path::new("/copy.txt"))
+        .await
+        .unwrap();
+    assert_eq!(
+        download(&context.client, Path::new("/source.txt")).await,
+        b"source"
+    );
+    assert_eq!(
+        download(&context.client, Path::new("/copy.txt")).await,
+        b"source"
+    );
+}
+
+#[tokio::test]
+async fn rename_transfers_a_file_and_removes_the_source() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/source.txt"), b"source").await;
+    context
+        .client
+        .rename(Path::new("/source.txt"), Path::new("/moved.txt"))
+        .await
+        .unwrap();
+    assert!(
+        !context
+            .client
+            .exists(Path::new("/source.txt"))
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        download(&context.client, Path::new("/moved.txt")).await,
+        b"source"
+    );
+}
+
+#[tokio::test]
+async fn rename_of_a_file_to_itself_is_a_noop() {
+    let context = TestContext::connected().await;
+    upload(&context.client, Path::new("/same.txt"), b"same").await;
+    context
+        .client
+        .rename(Path::new("/same.txt"), Path::new("/same.txt"))
+        .await
+        .unwrap();
+    assert_eq!(
+        download(&context.client, Path::new("/same.txt")).await,
+        b"same"
+    );
+}
+
+#[tokio::test]
+async fn unsupported_operations_report_unsupported_feature() {
+    let context = TestContext::connected().await;
+    let path = Path::new("/file");
+    assert_eq!(
+        context
+            .client
+            .set_metadata(path, &SetMetadata::default())
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::UnsupportedFeature
+    );
+    assert_eq!(
+        context
+            .client
+            .symlink(Path::new("/link"), path)
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::UnsupportedFeature
+    );
+    assert_eq!(
+        context.client.exec("true").await.unwrap_err().kind(),
+        RemoteErrorType::UnsupportedFeature
+    );
+    assert_eq!(
+        context
+            .client
+            .append(path, &WriteOptions::default())
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::UnsupportedFeature
+    );
+    let mut source = futures::io::Cursor::new(b"bytes".to_vec());
+    assert_eq!(
+        context
+            .client
+            .append_file(path, &WriteOptions::default(), &mut source)
+            .await
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::UnsupportedFeature
+    );
+}
