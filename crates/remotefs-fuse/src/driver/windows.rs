@@ -6,7 +6,7 @@ mod security;
 #[cfg(test)]
 mod test;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::UNIX_EPOCH;
 
@@ -21,12 +21,11 @@ use remotefs::fs::{SetMetadata, UnixPex};
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 use widestring::{U16CStr, U16CString, U16Str, U16String};
 use winapi::shared::ntstatus::{
-    self, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_CANNOT_DELETE,
-    STATUS_DELETE_PENDING, STATUS_DIRECTORY_NOT_EMPTY, STATUS_FILE_IS_A_DIRECTORY,
-    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY,
-    STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_NOT_FOUND,
+    self, STATUS_ACCESS_DENIED, STATUS_CANNOT_DELETE, STATUS_DELETE_PENDING,
+    STATUS_DIRECTORY_NOT_EMPTY, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER,
+    STATUS_NOT_A_DIRECTORY, STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_COLLISION,
 };
-use winapi::um::winnt::{self, ACCESS_MASK, FILE_CASE_PRESERVED_NAMES, FILE_CASE_SENSITIVE_SEARCH};
+use winapi::um::winnt::{ACCESS_MASK, FILE_CASE_PRESERVED_NAMES, FILE_CASE_SENSITIVE_SEARCH};
 
 use self::common::CreatePlan;
 pub use self::entry::Stat;
@@ -134,12 +133,7 @@ where
     }
 
     /// Find files at path with the optional pattern.
-    fn find_files<F>(
-        &self,
-        ctx: &File,
-        pattern: Option<&U16CStr>,
-        mut fill: F,
-    ) -> OperationResult<()>
+    fn find_files<F>(&self, ctx: &File, pattern: Option<&U16CStr>, fill: F) -> OperationResult<()>
     where
         F: FnMut(&FindData) -> FillDataResult,
     {
@@ -963,13 +957,12 @@ where
             pending.take();
         }
 
-        self.remote(|remote| {
-            transfer::truncate_file(remote, &file, common::nonnegative_offset(offset)?)
-        })
-        .map_err(|err| {
-            error!("truncate failed: {err}");
-            STATUS_INVALID_DEVICE_REQUEST
-        })
+        let offset = common::nonnegative_offset(offset)?;
+        self.remote(|remote| transfer::truncate_file(remote, &file, offset))
+            .map_err(|err| {
+                error!("truncate failed: {err}");
+                STATUS_INVALID_DEVICE_REQUEST
+            })
     }
 
     /// Sets allocation size of the file.

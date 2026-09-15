@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use remotefs_fuse::{Mount, MountOption, Unmount};
+use remotefs_fuse::{Mount, Unmount};
 use serial_test::serial;
 
 use crate::driver::mounted_file_path;
@@ -115,15 +115,13 @@ where
     F: FnOnce(PathBuf) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
-    use remotefs::RemoteFs;
     use remotefs::adapters::r#async::Unblock;
     use remotefs_fuse::AsyncMount;
 
     let _ = env_logger::try_init();
     let mnt = next_driver();
-    let mut remote = crate::driver::setup_driver();
-    remote.disconnect().expect("disconnect");
-    let mut mount = AsyncMount::mount(Unblock::new(remote), &mnt, &[MountOption::RW])
+    let remote = crate::driver::setup_driver();
+    let mut mount = AsyncMount::mount(Unblock::new(remote), &mnt, &[])
         .await
         .expect("failed to mount");
     let unmount = mount.unmounter();

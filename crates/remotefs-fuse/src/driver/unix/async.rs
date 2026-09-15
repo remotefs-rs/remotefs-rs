@@ -269,13 +269,6 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[cfg_attr(
-        target_os = "linux",
-        expect(
-            clippy::unnecessary_cast,
-            reason = "mode_t is u32 on Linux but narrower on macOS and BSD"
-        )
-    )]
     fn mknod(
         &self,
         req: &Request,
@@ -753,6 +746,13 @@ where
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[cfg_attr(
+        target_os = "linux",
+        expect(
+            clippy::unnecessary_cast,
+            reason = "mode_t is u32 on Linux but narrower on macOS and BSD"
+        )
+    )]
     async fn mknod(
         &self,
         request: RequestMeta,

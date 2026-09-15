@@ -33,7 +33,7 @@ use self::memory::MemoryArgs;
 #[cfg(feature = "smb")]
 use self::smb::SmbArgs;
 #[cfg(feature = "ssh")]
-use self::ssh::{ScpArgs, SftpArgs};
+use self::ssh::SshArgs;
 #[cfg(feature = "ssh")]
 use self::ssh::{ScpClient, SftpClient};
 #[cfg(feature = "webdav")]
@@ -102,9 +102,9 @@ pub enum RemoteArgs {
     Gcs(GcsArgs),
     Memory(MemoryArgs),
     #[cfg(feature = "ssh")]
-    Scp(ScpArgs),
+    Scp(SshArgs),
     #[cfg(feature = "ssh")]
-    Sftp(SftpArgs),
+    Sftp(SshArgs),
     #[cfg(feature = "smb")]
     Smb(SmbArgs),
     #[cfg(feature = "webdav")]

@@ -10,6 +10,8 @@ mod transfer;
 use remotefs::RemoteFs;
 #[cfg(all(unix, feature = "tokio"))]
 pub(crate) use unix::r#async::AsyncDriver;
+#[cfg(all(windows, feature = "tokio"))]
+pub(crate) use windows::r#async::AsyncDriver;
 
 use crate::MountOption;
 

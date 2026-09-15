@@ -12,7 +12,7 @@ use remotefs::File;
 use remotefs::adapters::r#async::Unblock;
 use remotefs::fs::{FileType, Metadata, UnixPex};
 #[cfg(feature = "tokio")]
-use remotefs_memory::{Inode, MemoryFs, Tree, node};
+use remotefs_memory::{Inode, MemoryFs, Node, Tree, node};
 #[cfg(feature = "tokio")]
 use tokio::sync::RwLock as AsyncRwLock;
 use widestring::U16CString;
@@ -110,11 +110,6 @@ fn test_should_get_path_info() {
     let path_info = common::path_info(&p);
 
     assert_eq!(path_info.path, PathBuf::from("/dev/null"));
-    assert_eq!(
-        path_info.file_name,
-        U16CString::from_str("/dev/null").unwrap().to_ucstring()
-    );
-    assert_eq!(path_info.parent, PathBuf::from("/dev"));
 }
 
 #[test]
@@ -177,7 +172,7 @@ async fn test_should_finalize_pending_write_before_delete() {
     let remote = Arc::new(AsyncRwLock::new(remote));
     let driver = AsyncDriver::new(
         Arc::clone(&remote),
-        vec![MountOption::RW],
+        vec![],
         tokio::runtime::Handle::current(),
     );
     let path = Path::new("/file");

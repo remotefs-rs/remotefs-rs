@@ -25,12 +25,10 @@ use winapi::um::winnt::{self, ACCESS_MASK};
 use super::entry::{EntryName, Stat, StatHandle};
 use super::security::SecurityDescriptor;
 
-/// Path, parent, and original wide-string name for a Dokany request.
+/// Normalized path for a Dokany request.
 #[derive(Debug)]
 pub(crate) struct PathInfo {
     pub path: PathBuf,
-    pub file_name: U16CString,
-    pub parent: PathBuf,
 }
 
 /// Return the stable index Dokany uses for a remote file.
@@ -95,18 +93,10 @@ pub(crate) fn is_readonly(file: &File) -> bool {
 /// Convert a Dokany name to a normalized remote path.
 pub(crate) fn path_info(file_name: &U16CStr) -> PathInfo {
     let path = PathBuf::from(file_name.to_string_lossy());
-    let parent = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/"));
     let slash_path = PathBuf::from(path.to_slash_lossy().to_string());
     debug!("PathInfo: {path:?} -> {slash_path:?}");
 
-    PathInfo {
-        path: slash_path,
-        parent,
-        file_name: file_name.to_ucstring(),
-    }
+    PathInfo { path: slash_path }
 }
 
 /// Convert a remote file into Dokany directory enumeration data.
@@ -170,9 +160,7 @@ where
             return Some(Err(STATUS_INVALID_DEVICE_REQUEST));
         }
     };
-    let Some(alt_stream) = alt_stream else {
-        return None;
-    };
+    let alt_stream = alt_stream?;
     match alt_stream.write() {
         Ok(mut stream) => Some(f(&mut stream)),
         Err(_) => {

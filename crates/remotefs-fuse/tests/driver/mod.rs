@@ -26,6 +26,7 @@ pub fn setup_driver() -> MemoryFs {
     fs.connect().expect("Failed to connect to fs");
 
     make_file_at(&fs, mounted_file_path(), b"Hello, world!");
+    fs.disconnect().expect("Failed to disconnect from fs");
 
     fs
 }
@@ -41,7 +42,8 @@ pub fn setup_driver() -> MemoryFs {
 
     fs.connect().expect("Failed to connect to fs");
 
-    make_file_at(&mut fs, mounted_file_path(), b"Hello, world!");
+    make_file_at(&fs, mounted_file_path(), b"Hello, world!");
+    fs.disconnect().expect("Failed to disconnect from fs");
 
     fs
 }

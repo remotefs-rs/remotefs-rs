@@ -14,22 +14,17 @@ use dokan::{
     CreateFileInfo, DiskSpaceInfo, FileInfo, FileSystemHandler, FileTimeOperation, FillDataResult,
     FindData, FindStreamData, OperationInfo, OperationResult, VolumeInfo,
 };
-use dokan_sys::win32::{
-    FILE_CREATE, FILE_DELETE_ON_CLOSE, FILE_DIRECTORY_FILE, FILE_MAXIMUM_DISPOSITION,
-    FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_OPEN_IF, FILE_OVERWRITE, FILE_OVERWRITE_IF,
-    FILE_SUPERSEDE,
-};
+use dokan_sys::win32::FILE_DELETE_ON_CLOSE;
 use remotefs::fs::{SetMetadata, UnixPex};
 use remotefs::{AsyncRemoteFs, File, RemoteResult};
 use tokio::runtime::Handle;
 use widestring::{U16CStr, U16CString, U16Str, U16String};
 use winapi::shared::ntstatus::{
-    self, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_CANNOT_DELETE,
-    STATUS_DELETE_PENDING, STATUS_DIRECTORY_NOT_EMPTY, STATUS_FILE_IS_A_DIRECTORY,
-    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY,
-    STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_NOT_FOUND,
+    self, STATUS_ACCESS_DENIED, STATUS_CANNOT_DELETE, STATUS_DELETE_PENDING,
+    STATUS_DIRECTORY_NOT_EMPTY, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER,
+    STATUS_NOT_A_DIRECTORY, STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_COLLISION,
 };
-use winapi::um::winnt::{self, ACCESS_MASK, FILE_CASE_PRESERVED_NAMES, FILE_CASE_SENSITIVE_SEARCH};
+use winapi::um::winnt::{ACCESS_MASK, FILE_CASE_PRESERVED_NAMES, FILE_CASE_SENSITIVE_SEARCH};
 
 use super::AltStream;
 use super::common::{self, CreatePlan};
@@ -308,17 +303,16 @@ where
     ) {
         self.block_on(async {
             debug!("cleanup({file_name:?}, {context:?})");
-            let stat = match context.stat.read() {
-                Ok(stat) => stat,
-                Err(_) => {
-                    error!("mutex poisoned");
-                    return;
-                }
+            let (file, stat_delete_on_close, stat_delete_pending) = {
+                let stat = match context.stat.read() {
+                    Ok(stat) => stat,
+                    Err(_) => {
+                        error!("mutex poisoned");
+                        return;
+                    }
+                };
+                (stat.file.clone(), stat.delete_on_close, stat.delete_pending)
             };
-            let file = stat.file.clone();
-            let stat_delete_on_close = stat.delete_on_close;
-            let stat_delete_pending = stat.delete_pending;
-            drop(stat);
 
             let alt_stream_delete =
                 common::try_alt_stream(context, |alt_stream| Ok(alt_stream.delete_pending))

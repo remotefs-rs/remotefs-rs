@@ -129,14 +129,12 @@ where
     F: FnOnce(PathBuf) -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
-    use remotefs::RemoteFs;
     use remotefs::adapters::r#async::Unblock;
     use remotefs_fuse::AsyncMount;
 
     let _ = env_logger::try_init();
     let mnt = TempDir::new().expect("Failed to create tempdir");
-    let mut remote = crate::driver::setup_driver();
-    remote.disconnect().expect("disconnect");
+    let remote = crate::driver::setup_driver();
     let mut mount = AsyncMount::mount(
         Unblock::new(remote),
         mnt.path(),
@@ -236,14 +234,12 @@ async fn test_should_truncate_through_async_mount() {
 #[cfg(feature = "tokio")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_should_unmount_from_a_cloned_handle_while_running() {
-    use remotefs::RemoteFs;
     use remotefs::adapters::r#async::Unblock;
     use remotefs_fuse::AsyncMount;
 
     let _ = env_logger::try_init();
     let mnt = TempDir::new().expect("Failed to create tempdir");
-    let mut remote = crate::driver::setup_driver();
-    remote.disconnect().expect("disconnect");
+    let remote = crate::driver::setup_driver();
     let mut mount = AsyncMount::mount(
         Unblock::new(remote),
         mnt.path(),

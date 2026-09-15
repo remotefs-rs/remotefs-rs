@@ -14,7 +14,7 @@ use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 /// Staging lets many kernel `write` calls against one handle share a single
 /// remote write (one streaming upload, or one buffered `write_file`), instead
 /// of each call re-creating (and truncating) the remote file.
-pub(crate) enum PendingWriteState {
+pub enum PendingWriteState {
     /// The remote streams writes; the stream stays open across writes.
     /// `next_offset` is the stream cursor, used to seek only on a
     /// non-sequential write.

@@ -155,9 +155,9 @@ where protocol options are
     `Smb3`; default: `Auto`)
 - scp / sftp
   - `--hostname <hostname>`
-  - `--port <port>` (default `22`)
-  - `--username <username>`
-  - `--password <password>`
+  - `--port <port>` (optional; falls back to `22` if not resolved from configuration)
+  - `--username <username>` (optional)
+  - `--password <password>` (optional)
   - `--ssh-config <path>` (optional; default: `~/.ssh/config`)
 - webdav
   - `--url <url>`
@@ -201,19 +201,6 @@ Windows version.
 
 I suggest you to first test it on test filesystems to see whether it behaves correctly with your
 system.
-
----
-
-## Support the developer ☕
-
-If you like `fusibile` and you're grateful for the work I've done, please consider a little
-donation 🥳
-
-You can make a donation with one of these platforms:
-
-[![ko-fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/veeso)
-[![PayPal](https://img.shields.io/badge/PayPal-00457C?style=for-the-badge&logo=paypal&logoColor=white)](https://www.paypal.me/chrisintin)
-[![bitcoin](https://img.shields.io/badge/Bitcoin-ff9416?style=for-the-badge&logo=bitcoin&logoColor=white)](https://btc.com/bc1qvlmykjn7htz0vuprmjrlkwtv9m9pan6kylsr8w)
 
 ---
 

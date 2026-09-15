@@ -120,10 +120,11 @@ where
     }
 
     /// Run the filesystem event loop until unmounted, then disconnect the client.
-    pub async fn run(mut self) -> Result<(), std::io::Error> {
+    pub async fn run(self) -> Result<(), std::io::Error> {
         #[cfg(unix)]
         {
-            let session = self.session.take().ok_or_else(|| {
+            let mut session = self.session;
+            let session = session.take().ok_or_else(|| {
                 std::io::Error::other("filesystem session has already been started")
             })?;
             let task = spawn_blocking_with_disconnect(
@@ -144,9 +145,9 @@ where
             let task = spawn_blocking_with_disconnect(Handle::current(), remote, move || {
                 let options = MountOption::into_dokan_options(driver.options());
                 let mut mounter = dokan::FileSystemMounter::new(&driver, &mountpoint, &options);
-                mounter.mount().map_err(std::io::Error::other)
+                mounter.mount().map(|_| ()).map_err(std::io::Error::other)
             });
-            return task.await.map_err(join_error)?;
+            task.await.map_err(join_error)?
         }
     }
 }

@@ -111,13 +111,14 @@ pub(crate) struct OpenMode {
 
 /// Parse `open(2)` flags into access permissions.
 pub(crate) fn parse_open_flags(flags: i32) -> Result<OpenMode, fuser::Errno> {
+    let execute = flags & FMODE_EXEC != 0;
     let flags = OFlag::from_bits_truncate(flags);
     match flags & OFlag::O_ACCMODE {
         OFlag::O_RDONLY => {
             if flags.intersects(OFlag::O_TRUNC) {
                 return Err(fuser::Errno::EACCES);
             }
-            let access_mask = if flags.intersects(OFlag::from_bits_retain(FMODE_EXEC)) {
+            let access_mask = if execute {
                 AccessFlags::X_OK
             } else {
                 AccessFlags::R_OK

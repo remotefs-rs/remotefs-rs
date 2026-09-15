@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::Args;
 use remotefs_ssh::{
@@ -10,104 +11,67 @@ pub type ScpClient = RusshScpFs<NoCheckServerKey>;
 /// The SFTP client `fusibile` mounts.
 pub type SftpClient = RusshSftpFs<NoCheckServerKey>;
 
-/// Mount a SCP server filesystem
+/// Mount a SSH server filesystem
 #[derive(Args)]
-pub struct ScpArgs {
-    /// hostname of the SCP server
+pub struct SshArgs {
+    /// hostname of the SSH server
     #[arg(long)]
     hostname: String,
-    /// port of the SCP server
-    #[arg(long, default_value_t = 22)]
-    port: u16,
+    /// port of the SSH server
+    #[arg(long)]
+    port: Option<u16>,
     /// username to authenticate with
     #[arg(long)]
-    username: String,
+    username: Option<String>,
     /// password to authenticate with
     #[arg(long)]
-    password: String,
+    password: Option<String>,
     /// path to the SSH config file
     #[arg(long, default_value_os_t = default_ssh_config_path())]
     ssh_config: PathBuf,
+    /// connection timeout (seconds)
+    #[arg(long)]
+    timeout: Option<u64>,
 }
 
-impl std::fmt::Debug for ScpArgs {
+impl std::fmt::Debug for SshArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ScpArgs")
+        f.debug_struct("SshArgs")
             .field("hostname", &self.hostname)
             .field("port", &self.port)
             .field("username", &self.username)
             .field("password", &"[REDACTED]")
             .field("ssh_config", &self.ssh_config)
+            .field("timeout", &self.timeout)
             .finish()
     }
 }
 
-impl TryFrom<ScpArgs> for ScpClient {
+impl TryFrom<SshArgs> for ScpClient {
     type Error = anyhow::Error;
 
-    fn try_from(args: ScpArgs) -> Result<Self, Self::Error> {
-        Ok(RusshScpFs::new(build_ssh_opts(
-            &args.hostname,
-            args.port,
-            &args.username,
-            &args.password,
-            &args.ssh_config,
-        )?))
+    fn try_from(args: SshArgs) -> Result<Self, Self::Error> {
+        Ok(RusshScpFs::new(build_ssh_opts(args)?))
     }
 }
 
-/// Mount a SFTP server filesystem
-#[derive(Args)]
-pub struct SftpArgs {
-    /// hostname of the SCP server
-    #[arg(long)]
-    hostname: String,
-    /// port of the SCP server
-    #[arg(long, default_value_t = 22)]
-    port: u16,
-    /// username to authenticate with
-    #[arg(long)]
-    username: String,
-    /// password to authenticate with
-    #[arg(long)]
-    password: String,
-    /// path to the SSH config file
-    #[arg(long, default_value_os_t = default_ssh_config_path())]
-    ssh_config: PathBuf,
-}
-
-impl std::fmt::Debug for SftpArgs {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SftpArgs")
-            .field("hostname", &self.hostname)
-            .field("port", &self.port)
-            .field("username", &self.username)
-            .field("password", &"[REDACTED]")
-            .field("ssh_config", &self.ssh_config)
-            .finish()
-    }
-}
-
-impl TryFrom<SftpArgs> for SftpClient {
+impl TryFrom<SshArgs> for SftpClient {
     type Error = anyhow::Error;
 
-    fn try_from(args: SftpArgs) -> Result<Self, Self::Error> {
-        Ok(RusshSftpFs::new(build_ssh_opts(
-            &args.hostname,
-            args.port,
-            &args.username,
-            &args.password,
-            &args.ssh_config,
-        )?))
+    fn try_from(args: SshArgs) -> Result<Self, Self::Error> {
+        Ok(RusshSftpFs::new(build_ssh_opts(args)?))
     }
 }
 
 fn build_ssh_opts(
-    hostname: &str,
-    port: u16,
-    username: &str,
-    password: &str,
-    ssh_config_path: &Path,
+    SshArgs {
+        hostname,
+        port,
+        username,
+        password,
+        ssh_config: ssh_config_path,
+        timeout,
+    }: SshArgs,
 ) -> anyhow::Result<SshOpts> {
     let is_ssh_config_path_default = ssh_config_path == default_ssh_config_path().as_path();
     let ssh_config_path_exists = ssh_config_path.exists();
@@ -118,11 +82,23 @@ fn build_ssh_opts(
         );
     }
 
-    let opts = SshOpts::new(hostname)
-        .port(port)
-        .username(username)
-        .password(password)
-        .ssh_agent_identity(Some(SshAgentIdentity::All));
+    let mut opts = SshOpts::new(hostname).ssh_agent_identity(Some(SshAgentIdentity::All));
+    if let Some(port) = port {
+        log::debug!("port argument is specified; setting port to {port}");
+        opts = opts.port(port);
+    }
+    if let Some(username) = username {
+        log::debug!("username argument is specified; setting username to {username}");
+        opts = opts.username(username);
+    }
+    if let Some(password) = password {
+        log::debug!("password argument is specified; setting password");
+        opts = opts.password(password);
+    }
+    if let Some(timeout) = timeout {
+        log::debug!("timeout argument is specified; setting timeout to {timeout}");
+        opts = opts.connection_timeout(Duration::from_secs(timeout));
+    }
 
     if ssh_config_path_exists {
         Ok(opts.config_file(ssh_config_path, SshConfigParseRule::ALLOW_UNKNOWN_FIELDS))
@@ -148,7 +124,7 @@ mod tests {
 
     use clap::{Args, Command, FromArgMatches};
 
-    use super::{ScpArgs, SftpArgs};
+    use super::SshArgs;
 
     #[test]
     fn ssh_config_defaults_to_platform_home_directory() {
@@ -157,7 +133,7 @@ mod tests {
             .join(".ssh")
             .join("config");
 
-        let scp_matches = ScpArgs::augment_args(Command::new("scp"))
+        let scp_matches = SshArgs::augment_args(Command::new("scp"))
             .try_get_matches_from([
                 "scp",
                 "--hostname",
@@ -166,12 +142,14 @@ mod tests {
                 "user",
                 "--password",
                 "password",
+                "--timeout",
+                "30",
             ])
             .expect("valid SCP arguments should parse");
         let scp_args =
-            ScpArgs::from_arg_matches(&scp_matches).expect("valid SCP arguments should parse");
+            SshArgs::from_arg_matches(&scp_matches).expect("valid SCP arguments should parse");
 
-        let sftp_matches = SftpArgs::augment_args(Command::new("sftp"))
+        let sftp_matches = SshArgs::augment_args(Command::new("sftp"))
             .try_get_matches_from([
                 "sftp",
                 "--hostname",
@@ -180,38 +158,32 @@ mod tests {
                 "user",
                 "--password",
                 "password",
+                "--timeout",
+                "30",
             ])
             .expect("valid SFTP arguments should parse");
         let sftp_args =
-            SftpArgs::from_arg_matches(&sftp_matches).expect("valid SFTP arguments should parse");
+            SshArgs::from_arg_matches(&sftp_matches).expect("valid SFTP arguments should parse");
 
         assert_eq!(scp_args.ssh_config, expected);
+        assert_eq!(scp_args.timeout, Some(30));
         assert_eq!(sftp_args.ssh_config, expected);
+        assert_eq!(sftp_args.timeout, Some(30));
     }
 
     #[test]
     fn debug_should_redact_password() {
         let secret = "super-secret-password";
 
-        let scp_args = ScpArgs {
+        let args = SshArgs {
             hostname: "localhost".to_string(),
-            port: 22,
-            username: "user".to_string(),
-            password: secret.to_string(),
+            port: Some(22),
+            username: Some("user".to_string()),
+            password: Some(secret.to_string()),
             ssh_config: PathBuf::from("/dev/null"),
+            timeout: Some(30),
         };
-        let rendered = format!("{scp_args:?}");
-        assert!(!rendered.contains(secret));
-        assert!(rendered.contains("[REDACTED]"));
-
-        let sftp_args = SftpArgs {
-            hostname: "localhost".to_string(),
-            port: 22,
-            username: "user".to_string(),
-            password: secret.to_string(),
-            ssh_config: PathBuf::from("/dev/null"),
-        };
-        let rendered = format!("{sftp_args:?}");
+        let rendered = format!("{args:?}");
         assert!(!rendered.contains(secret));
         assert!(rendered.contains("[REDACTED]"));
     }
