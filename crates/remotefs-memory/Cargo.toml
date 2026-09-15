@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-memory"
-version = "0.1.6"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["simulation"]
 documentation = "https://docs.rs/remotefs-memory"
@@ -10,13 +10,13 @@ keywords = ["remotefs", "memory"]
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs-memory"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "remotefs implementation for volatile memory. Good for testing and simulation."
 
 [dependencies]
 log = "0.4"
 orange-trees = "0.1"
-remotefs = "0.3"
+remotefs = "1"
 
 [dev-dependencies]
 pretty_assertions = "1"

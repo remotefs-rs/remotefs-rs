@@ -1,624 +1,953 @@
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use pretty_assertions::assert_eq;
+use remotefs::fs::{Capabilities, FileType, ReadOptions, SetMetadata, UnixPex, WriteOptions};
+use remotefs::{RemoteErrorType, RemoteFs};
 
 use super::*;
 
+const TMP: &str = "/tmp";
+
+fn setup_client() -> MemoryFs {
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(0, 0, UnixPex::from(0o755)),
+        node!(PathBuf::from(TMP), Inode::dir(0, 0, UnixPex::from(0o755)))
+    ));
+    let mut client = MemoryFs::new(tree);
+    client.connect().expect("connect must succeed");
+    client
+}
+
+fn finalize_client(mut client: MemoryFs) {
+    client
+        .remove_dir_all(Path::new(TMP))
+        .expect("remove_dir_all must succeed");
+    client.disconnect().expect("disconnect must succeed");
+}
+
 #[test]
-fn should_append_to_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
+fn should_connect_and_disconnect_once() {
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(0, 0, UnixPex::from(0o755))
+    ));
+    let mut client = MemoryFs::new(tree);
+    assert!(!client.is_connected());
+    assert_eq!(
+        client.disconnect().unwrap_err().kind(),
+        RemoteErrorType::NotConnected
+    );
+    client.connect().unwrap();
+    assert!(client.is_connected());
+    assert_eq!(
+        client.connect().unwrap_err().kind(),
+        RemoteErrorType::AlreadyConnected
+    );
+    client.disconnect().unwrap();
+    assert!(!client.is_connected());
+}
+
+#[test]
+fn should_reject_relative_paths_before_checking_connection() {
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(0, 0, UnixPex::from(0o755))
+    ));
+    let client = MemoryFs::new(tree);
+    assert_eq!(
+        client.stat(Path::new("relative.txt")).unwrap_err().kind(),
+        RemoteErrorType::InvalidPath
+    );
+    assert_eq!(
+        client.stat(Path::new("/absolute.txt")).unwrap_err().kind(),
+        RemoteErrorType::NotConnected
+    );
+}
+
+#[test]
+fn should_validate_all_paths_before_checking_connection() {
+    let tree = Tree::new(node!(
+        PathBuf::from("/"),
+        Inode::dir(0, 0, UnixPex::from(0o755))
+    ));
+    let client = MemoryFs::new(tree);
     assert_eq!(
         client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .ok()
-            .unwrap(),
-        10
+            .rename(Path::new("/source"), Path::new("relative"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
-    // Verify size
-    assert_eq!(client.stat(p).unwrap().metadata().size, 10);
-    // Append to file
-    let file_data = "Hello, world!\n";
-    let reader = Cursor::new(file_data.as_bytes());
     assert_eq!(
         client
-            .append_file(p, &Metadata::default().size(14), Box::new(reader))
-            .ok()
-            .unwrap(),
-        14
+            .copy(Path::new("/source"), Path::new("relative"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
-    assert_eq!(client.stat(p).unwrap().metadata().size, 24);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_append_to_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
-    // Append to file
-    let file_data = "Hello, world!\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
+    assert_eq!(
         client
-            .append_file(p, &Metadata::default(), Box::new(reader))
-            .is_err()
+            .symlink(Path::new("/link"), Path::new("relative"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
-    finalize_client(client);
 }
 
 #[test]
-fn should_change_directory() {
-    let mut client = setup_client();
-    let pwd = client.pwd().unwrap();
-    assert!(client.change_dir(Path::new("/tmp")).is_ok());
-    assert!(client.change_dir(pwd.as_path()).is_ok());
-    finalize_client(client);
-}
+fn should_reject_root_mutations() {
+    let client = setup_client();
 
-#[test]
-fn should_not_change_directory() {
-    let mut client = setup_client();
-    assert!(
+    assert_eq!(
+        client.create_dir(Path::new("/"), None).unwrap_err().kind(),
+        RemoteErrorType::InvalidPath
+    );
+    assert_eq!(
         client
-            .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-            .is_err()
+            .create(Path::new("/"), &WriteOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
     );
+    assert_eq!(
+        client
+            .append(Path::new("/"), &WriteOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
+    );
+    assert_eq!(
+        client
+            .symlink(Path::new("/"), Path::new("/"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
+    );
+    assert!(client.stat(Path::new("/")).unwrap().is_dir());
+    assert_eq!(client.list_dir(Path::new("/")).unwrap().len(), 1);
     finalize_client(client);
 }
 
 #[test]
-fn should_copy_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.copy(p, Path::new("b.txt")).is_ok());
-    assert!(client.stat(p).is_ok());
-    assert!(client.stat(Path::new("b.txt")).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_copy_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
+fn should_advertise_capabilities() {
+    let client = setup_client();
+    let capabilities = client.capabilities();
+    for expected in [
+        Capabilities::STREAM_READ,
+        Capabilities::STREAM_WRITE,
+        Capabilities::APPEND,
+        Capabilities::RANGE_READ,
+        Capabilities::SEEK_READ,
+        Capabilities::SEEK_WRITE,
+        Capabilities::COPY,
+        Capabilities::SYMLINK,
+        Capabilities::SET_METADATA,
+        Capabilities::POSIX_MODE,
+    ] {
+        assert!(capabilities.contains(expected), "missing {expected:?}");
+    }
+    assert!(!capabilities.contains(Capabilities::EXEC));
     finalize_client(client);
 }
 
 #[test]
 fn should_create_directory() {
-    let mut client = setup_client();
-    // create directory
-    assert!(
+    let client = setup_client();
+    let dir = Path::new("/tmp/mydir");
+    client.create_dir(dir, Some(UnixPex::from(0o700))).unwrap();
+    let entry = client.stat(dir).unwrap();
+    assert!(entry.is_dir());
+    assert_eq!(entry.metadata().mode, Some(UnixPex::from(0o700)));
+    client.create_dir(Path::new("/tmp/default"), None).unwrap();
+    assert_eq!(
         client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok()
+            .stat(Path::new("/tmp/default"))
+            .unwrap()
+            .metadata()
+            .mode,
+        Some(UnixPex::from(0o755))
     );
     finalize_client(client);
 }
 
 #[test]
 fn should_not_create_directory_cause_already_exists() {
-    let mut client = setup_client();
-    // create directory
-    assert!(
-        client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .is_ok()
+    let client = setup_client();
+    let dir = Path::new("/tmp/mydir");
+    client.create_dir(dir, None).unwrap();
+    assert_eq!(
+        client.create_dir(dir, None).unwrap_err().kind(),
+        RemoteErrorType::AlreadyExists
     );
+    finalize_client(client);
+}
+
+#[test]
+fn should_not_create_directory_without_parent() {
+    let client = setup_client();
     assert_eq!(
         client
-            .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-            .err()
-            .unwrap()
-            .kind,
-        RemoteErrorType::DirectoryAlreadyExists
+            .create_dir(Path::new("/tmp/missing/child"), None)
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
     );
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_create_directory() {
-    let mut client = setup_client();
-    // create directory
-    assert!(
-        client
-            .create_dir(
-                Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                UnixPex::from(0o755)
-            )
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_create_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert_eq!(
-        client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .ok()
-            .unwrap(),
-        10
-    );
-    // Verify size
-    assert_eq!(client.stat(p).unwrap().metadata().size, 10);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_create_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_exec_command() {
-    let mut client = setup_client();
-    // Create file
-    assert!(client.exec("echo 5").is_err());
     finalize_client(client);
 }
 
 #[test]
 fn should_tell_whether_file_exists() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    // Verify size
-    assert_eq!(client.exists(p).unwrap(), true);
-    assert_eq!(client.exists(Path::new("b.txt")).unwrap(), false);
-    assert_eq!(
-        client.exists(Path::new("/tmp/ppppp/bhhrhu")).unwrap(),
-        false
-    );
-    assert_eq!(client.exists(Path::new("/tmp")).unwrap(), true);
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/mydir"), None).unwrap();
+    assert!(client.exists(Path::new("/tmp/mydir")).unwrap());
+    assert!(!client.exists(Path::new("/tmp/nope")).unwrap());
     finalize_client(client);
 }
 
 #[test]
 fn should_list_dir() {
-    let mut client = setup_client();
-    // Create file
-    let wrkdir = client.pwd().unwrap();
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .is_ok()
-    );
-    // Verify size
-    let file = client
-        .list_dir(wrkdir.as_path())
-        .ok()
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/a"), None).unwrap();
+    client.create_dir(Path::new("/tmp/b"), None).unwrap();
+    let mut names: Vec<String> = client
+        .list_dir(Path::new(TMP))
         .unwrap()
-        .first()
-        .unwrap()
-        .clone();
-    assert_eq!(file.name().as_str(), "a.txt");
-    let mut expected_path = wrkdir;
-    expected_path.push(p);
-    assert_eq!(file.path.as_path(), expected_path.as_path());
-    assert_eq!(file.extension().as_deref().unwrap(), "txt");
-    assert_eq!(file.metadata.size, 10);
-    assert_eq!(file.metadata.mode.unwrap(), UnixPex::from(0o755));
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_list_dir() {
-    let mut client = setup_client();
-    // Create file
-    assert!(client.list_dir(Path::new("/tmp/auhhfh/hfhjfhf/")).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_move_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    // Verify size
-    let dest = Path::new("b.txt");
-    assert!(client.mov(p, dest).is_ok());
-    assert_eq!(client.exists(p).unwrap(), false);
-    assert_eq!(client.exists(dest).unwrap(), true);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_move_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    // Verify size
-    let dest = Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt");
-    assert!(client.mov(p, dest).is_err());
-    assert!(
-        client
-            .mov(Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"), p)
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_open_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default().size(10), Box::new(reader))
-            .is_ok()
-    );
-    // Verify size
-    let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-    assert_eq!(client.open_file(p, buffer).unwrap(), 10);
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_open_file() {
-    let mut client = setup_client();
-    // Verify size
-    let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-    assert!(
-        client
-            .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_print_working_directory() {
-    let mut client = setup_client();
-    assert!(client.pwd().is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_remove_dir_all() {
-    let mut client = setup_client();
-    // Create dir
-    let mut dir_path = client.pwd().unwrap();
-    dir_path.push(Path::new("test/"));
-    assert!(
-        client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    // Create file
-    let mut file_path = dir_path.clone();
-    file_path.push(Path::new("a.txt"));
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    // Remove dir
-    assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_remove_dir_all() {
-    let mut client = setup_client();
-    // Remove dir
-    assert!(
-        client
-            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-            .is_err()
-    );
-    finalize_client(client);
-}
-
-#[test]
-fn should_remove_dir() {
-    let mut client = setup_client();
-    // Create dir
-    let mut dir_path = client.pwd().unwrap();
-    dir_path.push(Path::new("test/"));
-    assert!(
-        client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    assert!(client.remove_dir(dir_path.as_path()).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_remove_dir() {
-    let mut client = setup_client();
-    // Create dir
-    let mut dir_path = client.pwd().unwrap();
-    dir_path.push(Path::new("test/"));
-    assert!(
-        client
-            .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-            .is_ok()
-    );
-    // Create file
-    let mut file_path = dir_path.clone();
-    file_path.push(Path::new("a.txt"));
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(file_path.as_path(), &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    // Remove dir
-    assert!(client.remove_dir(dir_path.as_path()).is_err());
-    finalize_client(client);
-}
-
-#[test]
-fn should_remove_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.txt");
-    let file_data = "test data\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.remove_file(p).is_ok());
-    finalize_client(client);
-}
-
-#[test]
-fn should_setstat_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-
-    assert!(
-        client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: Some(SystemTime::UNIX_EPOCH),
-                    created: None,
-                    file_type: FileType::File,
-                    gid: Some(1000),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: Some(SystemTime::UNIX_EPOCH),
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1000),
-                }
-            )
-            .is_ok()
-    );
-    let entry = client.stat(p).unwrap();
-    let stat = entry.metadata();
-    assert_eq!(stat.accessed, Some(SystemTime::UNIX_EPOCH));
-    assert_eq!(stat.created, None);
-    assert_eq!(stat.gid.unwrap(), 1000);
-    assert_eq!(stat.modified, Some(SystemTime::UNIX_EPOCH));
-    assert_eq!(stat.mode.unwrap(), UnixPex::from(0o755));
-    assert_eq!(stat.size, 7);
-    assert_eq!(stat.uid.unwrap(), 1000);
-
-    finalize_client(client);
-}
-
-#[test]
-fn should_not_setstat_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("bbbbb/cccc/a.sh");
-    assert!(
-        client
-            .setstat(
-                p,
-                Metadata {
-                    accessed: None,
-                    created: None,
-                    file_type: FileType::File,
-                    gid: Some(1),
-                    mode: Some(UnixPex::from(0o755)),
-                    modified: None,
-                    size: 7,
-                    symlink: None,
-                    uid: Some(1),
-                }
-            )
-            .is_err()
+        .iter()
+        .map(|entry| entry.name())
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(
+        client.list_dir(Path::new("/tmp/nope")).unwrap_err().kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
     );
     finalize_client(client);
 }
 
 #[test]
 fn should_stat_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(
-                p,
-                &Metadata::default().size(7).mode(UnixPex::from(0o644)),
-                Box::new(reader)
-            )
-            .is_ok()
+    let client = setup_client();
+    let dir = Path::new("/tmp/mydir");
+    client.create_dir(dir, Some(UnixPex::from(0o755))).unwrap();
+    let entry = client.stat(dir).unwrap();
+    assert_eq!(entry.name(), "mydir");
+    assert_eq!(entry.path(), dir);
+    assert_eq!(entry.metadata().file_type, FileType::Directory);
+    assert_eq!(
+        client.stat(Path::new("/tmp/nope")).unwrap_err().kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
     );
-    let entry = client.stat(p).unwrap();
-    assert_eq!(entry.name(), "a.sh");
-    let mut expected_path = client.pwd().unwrap();
-    expected_path.push("a.sh");
-    assert_eq!(entry.path(), expected_path.as_path());
-    let meta = entry.metadata();
-    assert_eq!(meta.mode.unwrap(), UnixPex::from(0o644));
-    assert_eq!(meta.size, 7);
     finalize_client(client);
 }
 
 #[test]
-fn should_not_stat_file() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.sh");
-    assert!(client.stat(p).is_err());
+fn should_set_metadata_partially() {
+    let client = setup_client();
+    let dir = Path::new("/tmp/mydir");
+    client.create_dir(dir, Some(UnixPex::from(0o755))).unwrap();
+    let before = client.stat(dir).unwrap().metadata().clone();
+    client
+        .set_metadata(
+            dir,
+            &SetMetadata::default()
+                .uid(1000)
+                .gid(1000)
+                .modified(SystemTime::UNIX_EPOCH),
+        )
+        .unwrap();
+    let after = client.stat(dir).unwrap();
+    let metadata = after.metadata();
+    assert_eq!(metadata.uid, Some(1000));
+    assert_eq!(metadata.gid, Some(1000));
+    assert_eq!(metadata.modified, Some(SystemTime::UNIX_EPOCH));
+    assert_eq!(metadata.mode, before.mode);
+    assert_eq!(metadata.accessed, before.accessed);
+    assert_eq!(metadata.file_type, FileType::Directory);
+    assert_eq!(
+        client
+            .set_metadata(Path::new("/tmp/nope"), &SetMetadata::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_remove_dir() {
+    let client = setup_client();
+    let dir = Path::new("/tmp/mydir");
+    client.create_dir(dir, None).unwrap();
+    client
+        .create_dir(Path::new("/tmp/mydir/child"), None)
+        .unwrap();
+    assert_eq!(
+        client.remove_dir(dir).unwrap_err().kind(),
+        RemoteErrorType::DirectoryNotEmpty
+    );
+    client.remove_dir(Path::new("/tmp/mydir/child")).unwrap();
+    client.remove_dir(dir).unwrap();
+    assert!(!client.exists(dir).unwrap());
+    assert_eq!(
+        client.remove_dir(dir).unwrap_err().kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_remove_dir_all_without_following_symlinks() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/keep"), None).unwrap();
+    client.create_dir(Path::new("/tmp/tree"), None).unwrap();
+    client
+        .create_dir(Path::new("/tmp/tree/nested"), None)
+        .unwrap();
+    client
+        .symlink(Path::new("/tmp/tree/nested/link"), Path::new("/tmp/keep"))
+        .unwrap();
+    client.remove_dir_all(Path::new("/tmp/tree")).unwrap();
+    assert!(!client.exists(Path::new("/tmp/tree")).unwrap());
+    assert!(client.exists(Path::new("/tmp/keep")).unwrap());
+    assert_eq!(
+        client
+            .remove_dir_all(Path::new("/tmp/tree"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
     finalize_client(client);
 }
 
 #[test]
 fn should_make_symlink() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/target"), None).unwrap();
+    let link = Path::new("/tmp/link");
+    client.symlink(link, Path::new("/tmp/target")).unwrap();
+    let entry = client.stat(link).unwrap();
+    assert!(entry.is_symlink());
+    assert_eq!(
+        entry.metadata().symlink.as_deref(),
+        Some(Path::new("/tmp/target"))
     );
-    let symlink = Path::new("b.sh");
-    // making b.sh -> a.sh
-    assert!(client.symlink(symlink, p).is_ok());
-    assert!(client.remove_file(symlink).is_ok());
+    assert_eq!(
+        client
+            .symlink(link, Path::new("/tmp/target"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::AlreadyExists
+    );
+    assert_eq!(
+        client
+            .symlink(Path::new("/tmp/other"), Path::new("/tmp/nope"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    assert_eq!(
+        client
+            .symlink(Path::new("/tmp/other"), Path::new("target"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
+    );
+    client.remove_file(link).unwrap();
+    assert!(client.exists(Path::new("/tmp/target")).unwrap());
     finalize_client(client);
 }
 
 #[test]
-fn should_not_make_symlink() {
-    let mut client = setup_client();
-    // Create file
-    let p = Path::new("a.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
+fn should_not_remove_directory_as_file() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/mydir"), None).unwrap();
+    assert_eq!(
         client
-            .create_file(p, &Metadata::default(), Box::new(reader))
-            .is_ok()
+            .remove_file(Path::new("/tmp/mydir"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::CouldNotRemoveFile
     );
-    let symlink = Path::new("b.sh");
-    let file_data = "echo 5\n";
-    let reader = Cursor::new(file_data.as_bytes());
-    assert!(
-        client
-            .create_file(symlink, &Metadata::default(), Box::new(reader))
-            .is_ok()
-    );
-    assert!(client.symlink(symlink, p).is_err());
-    assert!(client.remove_file(symlink).is_ok());
-    assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
     finalize_client(client);
 }
 
 #[test]
-fn test_should_set_gid_and_uid() {
-    let mut fs = setup_client().with_get_gid(|| 1000).with_get_uid(|| 100);
-
-    // create dir
-    let dir_path = Path::new("test");
-    assert!(fs.create_dir(dir_path, UnixPex::from(0o775)).is_ok());
-
-    // stat
-    let entry = fs.stat(dir_path).unwrap();
-    let stat = entry.metadata();
-    assert_eq!(stat.gid.unwrap(), 1000);
-    assert_eq!(stat.uid.unwrap(), 100);
-}
-
-fn setup_client() -> MemoryFs {
-    let tempdir = PathBuf::from("/tmp");
+fn should_not_exec_command() {
     let tree = Tree::new(node!(
         PathBuf::from("/"),
-        Inode::dir(0, 0, UnixPex::from(0o755)),
-        node!(tempdir.clone(), Inode::dir(0, 0, UnixPex::from(0o755)))
+        Inode::dir(0, 0, UnixPex::from(0o755))
     ));
+    let disconnected = MemoryFs::new(tree);
+    assert_eq!(
+        disconnected.exec("echo 5").unwrap_err().kind(),
+        RemoteErrorType::NotConnected
+    );
 
-    let mut client = MemoryFs::new(tree);
-
-    assert!(client.connect().is_ok());
-    // Create wrkdir
-    // Change directory
-    assert!(client.change_dir(tempdir.as_path()).is_ok());
-    client
+    let client = setup_client();
+    assert_eq!(
+        client.exec("echo 5").unwrap_err().kind(),
+        RemoteErrorType::UnsupportedFeature
+    );
+    finalize_client(client);
 }
 
-fn finalize_client(mut client: MemoryFs) {
-    // Get working directory
-    let wrkdir = client.pwd().unwrap();
-    // Remove directory
-    assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
-    assert!(client.disconnect().is_ok());
+#[test]
+fn should_set_gid_and_uid() {
+    let client = setup_client().with_get_gid(|| 1000).with_get_uid(|| 100);
+    let dir = Path::new("/tmp/test");
+    client.create_dir(dir, None).unwrap();
+    let entry = client.stat(dir).unwrap();
+    assert_eq!(entry.metadata().gid, Some(1000));
+    assert_eq!(entry.metadata().uid, Some(100));
+    finalize_client(client);
+}
+
+#[test]
+fn should_be_shareable_across_threads() {
+    let client = Arc::new(setup_client());
+    let handles: Vec<_> = (0..4)
+        .map(|index| {
+            let client = Arc::clone(&client);
+            std::thread::spawn(move || {
+                let dir = PathBuf::from(format!("/tmp/dir{index}"));
+                client.create_dir(&dir, None).unwrap();
+                assert!(client.exists(&dir).unwrap());
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(client.list_dir(Path::new(TMP)).unwrap().len(), 4);
+}
+
+#[test]
+fn should_create_file_and_commit_on_finish() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut stream = client
+        .create(path, &WriteOptions::default().mode(UnixPex::from(0o644)))
+        .unwrap();
+    assert!(stream.seekable());
+    stream.write_all(b"test data\n").unwrap();
+    stream.flush().unwrap();
+    // The inode exists but no bytes are committed yet.
+    assert_eq!(client.stat(path).unwrap().metadata().size, Some(0));
+    stream.finish().unwrap();
+    let entry = client.stat(path).unwrap();
+    assert_eq!(entry.metadata().size, Some(10));
+    assert_eq!(entry.metadata().mode, Some(UnixPex::from(0o644)));
+    assert!(entry.metadata().modified.is_some());
+    finalize_client(client);
+}
+
+#[test]
+fn should_write_file_and_read_file_one_shot() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"hello world".to_vec());
+    assert_eq!(
+        client
+            .write_file(path, &WriteOptions::default(), &mut input)
+            .unwrap(),
+        11
+    );
+    let mut output = Vec::new();
+    assert_eq!(
+        client
+            .read_file(path, &ReadOptions::default(), &mut output)
+            .unwrap(),
+        11
+    );
+    assert_eq!(output, b"hello world");
+    finalize_client(client);
+}
+
+#[test]
+fn should_truncate_on_create_and_preserve_on_append() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"old".to_vec());
+    client
+        .write_file(path, &WriteOptions::default(), &mut input)
+        .unwrap();
+    let mut input = Cursor::new(b"new".to_vec());
+    client
+        .write_file(path, &WriteOptions::default(), &mut input)
+        .unwrap();
+    let mut input = Cursor::new(b"!".to_vec());
+    assert_eq!(
+        client
+            .append_file(path, &WriteOptions::default(), &mut input)
+            .unwrap(),
+        1
+    );
+    let mut output = Vec::new();
+    client
+        .read_file(path, &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(output, b"new!");
+    assert_eq!(client.stat(path).unwrap().metadata().size, Some(4));
+    finalize_client(client);
+}
+
+#[test]
+fn should_apply_modified_from_write_options() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"x".to_vec());
+    client
+        .write_file(
+            path,
+            &WriteOptions::default().modified(SystemTime::UNIX_EPOCH),
+            &mut input,
+        )
+        .unwrap();
+    assert_eq!(
+        client.stat(path).unwrap().metadata().modified,
+        Some(SystemTime::UNIX_EPOCH)
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_append_to_missing_file() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"abc".to_vec());
+    client
+        .append_file(path, &WriteOptions::default(), &mut input)
+        .unwrap();
+    assert_eq!(client.stat(path).unwrap().metadata().size, Some(3));
+    finalize_client(client);
+}
+
+#[test]
+fn should_not_create_file_without_parent_or_over_directory() {
+    let client = setup_client();
+    assert_eq!(
+        client
+            .create(Path::new("/tmp/missing/a.txt"), &WriteOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    client.create_dir(Path::new("/tmp/dir"), None).unwrap();
+    assert_eq!(
+        client
+            .create(Path::new("/tmp/dir"), &WriteOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert_eq!(
+        client
+            .append(Path::new("/tmp/dir"), &WriteOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_discard_staged_bytes_when_stream_is_dropped() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"keep".to_vec());
+    client
+        .write_file(path, &WriteOptions::default(), &mut input)
+        .unwrap();
+    {
+        let mut stream = client.append(path, &WriteOptions::default()).unwrap();
+        stream.write_all(b" dropped").unwrap();
+    }
+    let mut output = Vec::new();
+    client
+        .read_file(path, &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(output, b"keep");
+    finalize_client(client);
+}
+
+#[test]
+fn should_preserve_append_metadata_when_stream_is_dropped() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"keep".to_vec());
+    client
+        .write_file(
+            path,
+            &WriteOptions::default().mode(UnixPex::from(0o640)),
+            &mut input,
+        )
+        .unwrap();
+    {
+        let _stream = client
+            .append(path, &WriteOptions::default().mode(UnixPex::from(0o600)))
+            .unwrap();
+    }
+    assert_eq!(
+        client.stat(path).unwrap().metadata().mode,
+        Some(UnixPex::from(0o640))
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_reject_append_to_symlink() {
+    let client = setup_client();
+    let target = Path::new("/tmp/target");
+    let link = Path::new("/tmp/link");
+    client.create_dir(target, None).unwrap();
+    client.symlink(link, target).unwrap();
+
+    assert_eq!(
+        client
+            .append(link, &WriteOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    let entry = client.stat(link).unwrap();
+    assert!(entry.is_symlink());
+    assert_eq!(entry.metadata().symlink.as_deref(), Some(target));
+    finalize_client(client);
+}
+
+#[test]
+fn should_reject_stale_append_streams() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"base".to_vec());
+    client
+        .write_file(path, &WriteOptions::default(), &mut input)
+        .unwrap();
+
+    let mut first = client.append(path, &WriteOptions::default()).unwrap();
+    first.write_all(b" first").unwrap();
+    let mut second = client.append(path, &WriteOptions::default()).unwrap();
+    second.write_all(b" second").unwrap();
+    second.finish().unwrap();
+    assert_eq!(
+        first.finish().unwrap_err().kind(),
+        RemoteErrorType::ProtocolError
+    );
+
+    let mut output = Vec::new();
+    client
+        .read_file(path, &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(output, b"base second");
+    finalize_client(client);
+}
+
+#[test]
+fn should_honor_read_offset_and_length() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut input = Cursor::new(b"abcdef".to_vec());
+    client
+        .write_file(path, &WriteOptions::default(), &mut input)
+        .unwrap();
+
+    let mut output = Vec::new();
+    client
+        .read_file(
+            path,
+            &ReadOptions::default().offset(2).length(2),
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(output, b"cd");
+
+    let mut output = Vec::new();
+    client
+        .read_file(
+            path,
+            &ReadOptions::default().offset(2).length(0),
+            &mut output,
+        )
+        .unwrap();
+    assert!(output.is_empty());
+
+    let mut output = Vec::new();
+    client
+        .read_file(path, &ReadOptions::default().offset(100), &mut output)
+        .unwrap();
+    assert!(output.is_empty());
+
+    let mut output = Vec::new();
+    client
+        .read_file(
+            path,
+            &ReadOptions::default().offset(4).length(100),
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(output, b"ef");
+    finalize_client(client);
+}
+
+#[test]
+fn should_seek_read_and_write_streams() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut stream = client.create(path, &WriteOptions::default()).unwrap();
+    stream.write_all(b"xxxxxx").unwrap();
+    stream.seek(SeekFrom::Start(2)).unwrap();
+    stream.write_all(b"yy").unwrap();
+    stream.finish().unwrap();
+
+    let mut stream = client.open(path, &ReadOptions::default()).unwrap();
+    assert!(stream.seekable());
+    stream.seek(SeekFrom::Start(2)).unwrap();
+    let mut output = String::new();
+    stream.read_to_string(&mut output).unwrap();
+    stream.finish().unwrap();
+    assert_eq!(output, "yyxx");
+    finalize_client(client);
+}
+
+#[test]
+fn should_not_open_directory_or_missing_file() {
+    let client = setup_client();
+    assert_eq!(
+        client
+            .open(Path::new(TMP), &ReadOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert_eq!(
+        client
+            .open(Path::new("/tmp/nope"), &ReadOptions::default())
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_open_symlink_content() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/target"), None).unwrap();
+    client
+        .symlink(Path::new("/tmp/link"), Path::new("/tmp/target"))
+        .unwrap();
+    let mut output = Vec::new();
+    client
+        .read_file(Path::new("/tmp/link"), &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(output, b"/tmp/target");
+    finalize_client(client);
+}
+
+#[test]
+fn should_fail_finish_when_file_was_removed() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut stream = client.create(path, &WriteOptions::default()).unwrap();
+    stream.write_all(b"data").unwrap();
+    client.remove_file(path).unwrap();
+    assert_eq!(
+        stream.finish().unwrap_err().kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    finalize_client(client);
+}
+
+#[test]
+fn should_fail_finish_when_file_was_replaced() {
+    let client = setup_client();
+    let path = Path::new("/tmp/a.txt");
+    let mut stream = client.create(path, &WriteOptions::default()).unwrap();
+    stream.write_all(b"stale").unwrap();
+    client.remove_file(path).unwrap();
+    let mut replacement = Cursor::new(b"replacement".to_vec());
+    client
+        .write_file(path, &WriteOptions::default(), &mut replacement)
+        .unwrap();
+    assert_eq!(
+        stream.finish().unwrap_err().kind(),
+        RemoteErrorType::ProtocolError
+    );
+    let mut output = Vec::new();
+    client
+        .read_file(path, &ReadOptions::default(), &mut output)
+        .unwrap();
+    assert_eq!(output, b"replacement");
+    finalize_client(client);
+}
+
+#[test]
+fn should_rename_directory_with_children() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/src"), None).unwrap();
+    client.create_dir(Path::new("/tmp/src/sub"), None).unwrap();
+    let mut input = Cursor::new(b"data".to_vec());
+    client
+        .write_file(
+            Path::new("/tmp/src/sub/file.txt"),
+            &WriteOptions::default(),
+            &mut input,
+        )
+        .unwrap();
+    client
+        .rename(Path::new("/tmp/src"), Path::new("/tmp/dest"))
+        .unwrap();
+    assert!(!client.exists(Path::new("/tmp/src")).unwrap());
+    assert!(client.exists(Path::new("/tmp/dest/sub")).unwrap());
+    let entry = client.stat(Path::new("/tmp/dest/sub/file.txt")).unwrap();
+    assert_eq!(entry.path(), Path::new("/tmp/dest/sub/file.txt"));
+    let listed: Vec<PathBuf> = client
+        .list_dir(Path::new("/tmp/dest/sub"))
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.path)
+        .collect();
+    assert_eq!(listed, vec![PathBuf::from("/tmp/dest/sub/file.txt")]);
+    let mut output = Vec::new();
+    client
+        .read_file(
+            Path::new("/tmp/dest/sub/file.txt"),
+            &ReadOptions::default(),
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(output, b"data");
+    finalize_client(client);
+}
+
+#[test]
+fn should_rename_file_over_existing_destination() {
+    let client = setup_client();
+    let mut input = Cursor::new(b"new".to_vec());
+    client
+        .write_file(
+            Path::new("/tmp/a.txt"),
+            &WriteOptions::default(),
+            &mut input,
+        )
+        .unwrap();
+    let mut input = Cursor::new(b"old".to_vec());
+    client
+        .write_file(
+            Path::new("/tmp/b.txt"),
+            &WriteOptions::default(),
+            &mut input,
+        )
+        .unwrap();
+    client
+        .rename(Path::new("/tmp/a.txt"), Path::new("/tmp/b.txt"))
+        .unwrap();
+    let mut output = Vec::new();
+    client
+        .read_file(
+            Path::new("/tmp/b.txt"),
+            &ReadOptions::default(),
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(output, b"new");
+    assert_eq!(client.list_dir(Path::new(TMP)).unwrap().len(), 1);
+    finalize_client(client);
+}
+
+#[test]
+fn should_not_rename_into_itself_or_without_parent() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/src"), None).unwrap();
+    client
+        .create_dir(Path::new("/tmp/src/child"), None)
+        .unwrap();
+    assert_eq!(
+        client
+            .rename(Path::new("/tmp/src"), Path::new("/tmp/src/inner"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert_eq!(
+        client
+            .rename(Path::new("/tmp/src"), Path::new("/tmp/missing/dest"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    assert_eq!(
+        client
+            .rename(Path::new("/tmp/nope"), Path::new("/tmp/dest"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::NoSuchFileOrDirectory
+    );
+    assert_eq!(
+        client
+            .rename(Path::new("/tmp/src/child"), Path::new("/tmp/src"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert!(client.exists(Path::new("/tmp/src")).unwrap());
+    assert!(client.exists(Path::new("/tmp/src/child")).unwrap());
+    finalize_client(client);
+}
+
+#[test]
+fn should_copy_directory_with_children() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/src"), None).unwrap();
+    let mut input = Cursor::new(b"data".to_vec());
+    client
+        .write_file(
+            Path::new("/tmp/src/file.txt"),
+            &WriteOptions::default(),
+            &mut input,
+        )
+        .unwrap();
+    client
+        .copy(Path::new("/tmp/src"), Path::new("/tmp/dest"))
+        .unwrap();
+    assert!(client.exists(Path::new("/tmp/src/file.txt")).unwrap());
+    assert!(client.exists(Path::new("/tmp/dest/file.txt")).unwrap());
+    // The copy is independent from the source.
+    let mut input = Cursor::new(b"changed".to_vec());
+    client
+        .write_file(
+            Path::new("/tmp/dest/file.txt"),
+            &WriteOptions::default(),
+            &mut input,
+        )
+        .unwrap();
+    let mut output = Vec::new();
+    client
+        .read_file(
+            Path::new("/tmp/src/file.txt"),
+            &ReadOptions::default(),
+            &mut output,
+        )
+        .unwrap();
+    assert_eq!(output, b"data");
+    assert_eq!(
+        client
+            .copy(Path::new("/tmp/src"), Path::new("/tmp/src/copy"))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert_eq!(
+        client
+            .copy(Path::new("/tmp/src"), Path::new(TMP))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::BadFile
+    );
+    assert!(client.exists(Path::new("/tmp/src/file.txt")).unwrap());
+    finalize_client(client);
 }

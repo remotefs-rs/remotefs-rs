@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use remotefs::fs::{FileType, Metadata, UnixPex};
@@ -10,6 +11,7 @@ pub struct Inode {
     pub(crate) metadata: Metadata,
     /// File content; if the node is a directory, this field is `None`.
     pub(crate) content: Option<Vec<u8>>,
+    identity: Arc<()>,
 }
 
 impl Inode {
@@ -24,6 +26,7 @@ impl Inode {
                 .accessed(SystemTime::now())
                 .mode(mode),
             content: None,
+            identity: Arc::new(()),
         }
     }
 
@@ -39,6 +42,7 @@ impl Inode {
                 .mode(mode)
                 .size(data.len() as u64),
             content: Some(data),
+            identity: Arc::new(()),
         }
     }
 
@@ -54,6 +58,7 @@ impl Inode {
                 .mode(UnixPex::from(0o777))
                 .symlink(target.clone()),
             content: Some(target.to_string_lossy().as_bytes().to_vec()),
+            identity: Arc::new(()),
         }
     }
 
@@ -65,5 +70,24 @@ impl Inode {
     /// Return the content of the file.
     pub fn content(&self) -> Option<&[u8]> {
         self.content.as_deref()
+    }
+
+    /// Returns a token that identifies this inode instance.
+    pub(crate) fn identity(&self) -> Arc<()> {
+        Arc::clone(&self.identity)
+    }
+
+    /// Clone this inode as an independent filesystem entry.
+    pub(crate) fn clone_with_new_identity(&self) -> Self {
+        Self {
+            metadata: self.metadata.clone(),
+            content: self.content.clone(),
+            identity: Arc::new(()),
+        }
+    }
+
+    /// Returns whether `identity` identifies this inode instance.
+    pub(crate) fn has_identity(&self, identity: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.identity, identity)
     }
 }
