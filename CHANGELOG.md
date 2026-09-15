@@ -2,16 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## 1.0.1
+
+Released on 2026-09-15
+
+### Fixed
+
+- expose feature-gated types on docs.rs with correct cfg
+
+> Enable nightly doc_cfg behind the docsrs cfg and build every feature
+> on docs.rs so feature-gated items like Unblock and BlockOn render
+> with their "available on crate feature" badges.
+
 ## 1.0.0
 
 Released on 2026-09-15
 
 ### Breaking changes
-
-- remove `Welcome` from the connection contract
-
-> both filesystem traits now return `RemoteResult<()>` from `connect`.
-> Server banners belong to backend-specific APIs.
 
 - move to edition 2024 and refresh the dependency set
 
@@ -32,10 +39,13 @@ Released on 2026-09-15
 
 > replace the mutable blocking trait, legacy transfer methods, and marker stream types with shared-receiver operations and consuming stream finalizers.
 
-- require absolute paths for every filesystem operation
+- enforce absolute paths and harden transfer adapters
 
-> remove working-directory methods and relative-path resolution. Validate remote
-> POSIX, Windows drive, and UNC roots independently of the client platform.
+> remove WorkingDir, AsyncWorkingDir, and the working_dir module; callers must supply absolute remote paths.
+
+- remove welcome from the connection contract
+
+> remove Welcome and change RemoteFs::connect and AsyncRemoteFs::connect to return RemoteResult<()>.
 
 ### Added
 
@@ -44,6 +54,7 @@ Released on 2026-09-15
 - Breaking: replace blocking transfers with owned streams
 - add runtime-neutral async transfer streams
 - add the object-safe async filesystem contract
+- add working-directory wrappers for both filesystem traits
 - support explicit-root sync and async search
 - bridge async backends into blocking clients with tokio
 - offload blocking filesystem clients and transfers with tokio
@@ -67,6 +78,16 @@ Released on 2026-09-15
 > - drop `#![crate_name]`/`#![crate_type]` and `#[macro_use] extern crate log`,
 >   importing `log::{debug, trace}` where they are used
 > - name every format placeholder instead of relying on argument position
+
+- Breaking: remove welcome from the connection contract
+
+> Return unit on successful connection in both filesystem traits and update adapters, mocks, and migration guidance. Keep server banners in backend-specific APIs.
+
+### Fixed
+
+- Breaking: enforce absolute paths and harden transfer adapters
+
+> Validate remote path syntax independently of the client platform and remove working-directory wrappers. Preserve buffered data and transfer errors across cancellation, complete bounded uploads correctly, and reuse workers for blocking I/O.
 
 ### Build
 
