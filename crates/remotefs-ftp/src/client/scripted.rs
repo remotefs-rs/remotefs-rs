@@ -10,6 +10,7 @@ pub(crate) fn read_scripted_command(control: &mut BufReader<TcpStream>) -> Strin
 }
 
 /// Reads one line, returning the byte count (0 means the peer closed).
+#[cfg(feature = "tokio")]
 pub(crate) fn read_scripted_command_opt(
     control: &mut BufReader<TcpStream>,
     line: &mut String,

@@ -1,7 +1,9 @@
 use std::borrow::Cow;
 
+#[cfg(feature = "tokio")]
+use testcontainers::ContainerAsync;
 use testcontainers::core::{CmdWaitFor, ContainerPort, ExecCommand, WaitFor};
-use testcontainers::{Container, ContainerAsync, Image};
+use testcontainers::{Container, Image};
 
 #[derive(Debug, Default, Clone)]
 struct PureFtpImage {
@@ -49,10 +51,12 @@ impl Image for PureFtpImage {
     }
 }
 
+#[cfg(feature = "tokio")]
 pub struct AsyncPureFtpRunner {
     container: ContainerAsync<PureFtpImage>,
 }
 
+#[cfg(feature = "tokio")]
 impl AsyncPureFtpRunner {
     pub async fn start() -> Self {
         use testcontainers::runners::AsyncRunner;
