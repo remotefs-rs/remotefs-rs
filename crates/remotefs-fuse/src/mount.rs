@@ -13,6 +13,57 @@ pub use self::r#async::{AsyncMount, AsyncUnmount};
 pub use self::option::MountOption;
 use crate::driver::Driver;
 
+#[cfg(unix)]
+#[derive(Debug)]
+struct MountFailure {
+    mountpoint: std::path::PathBuf,
+    source: std::io::Error,
+}
+
+#[cfg(unix)]
+impl std::fmt::Display for MountFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(target_os = "macos")]
+        if self.source.kind() == std::io::ErrorKind::Other
+            && self.source.raw_os_error().is_none()
+            && self.source.to_string() == "Unspecified Error"
+        {
+            return write!(
+                f,
+                "failed to mount filesystem at {mountpoint}: macFUSE returned an unspecified \
+                 error; verify that the installed macFUSE version supports this macOS version \
+                 and that its extension is enabled",
+                mountpoint = self.mountpoint.display(),
+            );
+        }
+
+        write!(
+            f,
+            "failed to mount filesystem at {mountpoint}: {source}",
+            mountpoint = self.mountpoint.display(),
+            source = self.source,
+        )
+    }
+}
+
+#[cfg(unix)]
+impl std::error::Error for MountFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+#[cfg(unix)]
+fn mount_error(mountpoint: &Path, source: std::io::Error) -> std::io::Error {
+    std::io::Error::new(
+        source.kind(),
+        MountFailure {
+            mountpoint: mountpoint.to_path_buf(),
+            source,
+        },
+    )
+}
+
 /// A struct to mount the filesystem.
 #[derive(Debug)]
 pub struct Mount<T>
@@ -49,7 +100,10 @@ where
         let options = option::into_fuser_config(&driver.options());
 
         Ok(Self {
-            session: Some(fuser::Session::new(driver, mountpoint, &options)?),
+            session: Some(
+                fuser::Session::new(driver, mountpoint, &options)
+                    .map_err(|err| mount_error(mountpoint, err))?,
+            ),
         })
     }
 
@@ -139,5 +193,52 @@ impl Unmount {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod test {
+    #[test]
+    fn test_mount_error_should_preserve_kind_and_source() {
+        let err = super::mount_error(
+            std::path::Path::new("/tmp/example"),
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        );
+
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        let context = err.get_ref().expect("mount error should contain context");
+        assert_eq!(
+            context
+                .source()
+                .expect("mount context should retain its source")
+                .to_string(),
+            "permission denied"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_mount_error_should_explain_unspecified_macfuse_failure() {
+        let err = super::mount_error(
+            std::path::Path::new("/tmp/example"),
+            std::io::Error::other("Unspecified Error"),
+        );
+
+        let message = err.to_string();
+        assert!(message.contains("macFUSE returned an unspecified error"));
+        assert!(message.contains("supports this macOS version"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_mount_error_should_not_add_macfuse_hint_to_other_failures() {
+        let err = super::mount_error(
+            std::path::Path::new("/tmp/example"),
+            std::io::Error::other("another mount failure"),
+        );
+
+        let message = err.to_string();
+        assert!(message.contains("another mount failure"));
+        assert!(!message.contains("macFUSE returned an unspecified error"));
     }
 }

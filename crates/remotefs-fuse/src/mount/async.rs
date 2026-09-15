@@ -63,6 +63,7 @@ where
             let mountpoint = mountpoint.to_path_buf();
             let session_result = tokio::task::spawn_blocking(move || {
                 fuser::Session::new(driver, &mountpoint, &config)
+                    .map_err(|err| super::mount_error(&mountpoint, err))
             })
             .await
             .map_err(join_error)?;
@@ -224,14 +225,13 @@ mod test {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_mount_should_connect_then_fail_on_missing_mountpoint() {
-        let err = AsyncMount::mount(
-            Unblock::new(memory_fs()),
-            Path::new("/nonexistent/remotefs-fuse/mountpoint"),
-            &[],
-        )
-        .await
-        .expect_err("mounting on a missing directory must fail");
-        assert_ne!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let mountpoint = Path::new("/nonexistent/remotefs-fuse/mountpoint");
+        let err = AsyncMount::mount(Unblock::new(memory_fs()), mountpoint, &[])
+            .await
+            .expect_err("mounting on a missing directory must fail");
+        let message = err.to_string();
+        assert!(message.contains("failed to mount filesystem"));
+        assert!(message.contains(&mountpoint.display().to_string()));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
