@@ -1,9 +1,11 @@
 //! ## Mock
 //!
-//! Contains mock for test units
+//! Contains mock support for test units.
 
+#[cfg(any(feature = "with-containers", feature = "with-s3-ci"))]
 pub mod container;
 
+/// Initialize the test logger once.
 pub fn logger() {
     use std::sync::Once;
 

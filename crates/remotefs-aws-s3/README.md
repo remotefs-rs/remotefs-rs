@@ -77,17 +77,22 @@ remotefs-aws-s3 is a client implementation for [remotefs](https://github.com/rem
 
 ## Get started 🚀
 
-First of all, add `remotefs-aws-s3` to your project dependencies:
+First of all, add `remotefs` and `remotefs-aws-s3` to your project dependencies:
 
 ```toml
-remotefs = "0.3"
-remotefs-aws-s3 = "^0.4"
+remotefs = "1"
+remotefs-aws-s3 = "1"
 ```
 
 these features are supported:
 
-- `find`: enable `find()` method on client (_enabled by default_)
+- `find`: enable the remotefs `find_async()` function (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
+- `tokio`: enable the remotefs Tokio adapters (`BlockOn`) for blocking callers.
+
+`AwsS3Fs` implements `remotefs::AsyncRemoteFs`. Paths are absolute and rooted
+at the bucket; there is no working directory. Blocking callers wrap the client
+in `remotefs::adapters::blocking::BlockOn`.
 
 ---
 
@@ -101,26 +106,26 @@ Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be suppor
 | -------------- | ------ |
 | append_file    | No     |
 | append         | No     |
-| change_dir     | Yes    |
 | copy           | No     |
 | create_dir     | Yes    |
-| create_file    | Yes    |
-| create         | No     |
+| create         | Yes    |
 | exec           | No     |
 | exists         | Yes    |
 | list_dir       | Yes    |
-| mov            | No     |
-| open_file      | Yes    |
-| open           | No     |
-| pwd            | Yes    |
+| open           | Yes    |
+| read_file      | Yes    |
 | remove_dir_all | Yes    |
 | remove_dir     | Yes    |
 | remove_file    | Yes    |
-| setstat        | No     |
+| rename         | No     |
+| set_metadata   | No     |
 | stat           | Yes    |
 | symlink        | No     |
+| write_file     | Yes    |
 
 ---
+
+Capabilities: `STREAM_READ`, `STREAM_WRITE`, `RANGE_READ`.
 
 ## Support the developer ☕
 
@@ -152,7 +157,7 @@ View remotefs' changelog [HERE](CHANGELOG.md)
 
 remotefs-aws-s3 is powered by these aweseome projects:
 
-- [rust-s3](https://github.com/durch/rust-s3)
+- [aws-sdk-s3](https://github.com/awslabs/aws-sdk-rust)
 
 ---
 

@@ -1,60 +1,64 @@
-//! # Aws s3
+//! # Aws S3
 //!
-//! Aws s3 client for remotefs
+//! Aws S3 client for remotefs.
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::Path;
 
 use aws_config::Region;
 use aws_config::default_provider::credentials::DefaultCredentialsChain;
 use aws_config::meta::region::RegionProviderChain;
 pub use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::config::{Builder as S3ClientBuilder, Credentials, ProvideCredentials};
-use aws_sdk_s3::primitives::{ByteStream, SdkBody};
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, Object};
-#[cfg(target_os = "windows")]
-use path_slash::PathExt as _;
-use remotefs::fs::{Metadata, ReadStream, UnixPex, Welcome, WriteStream};
-use remotefs::{File, RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
-use tokio::runtime::Runtime;
+use aws_sdk_s3::error::ProvideErrorMetadata as _;
+use aws_sdk_s3::types::Object;
+use remotefs::fs::{
+    AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, FileType, Metadata,
+    ReadOptions, SetMetadata, UnixPex, WriteOptions,
+};
+use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 
-use super::object::S3Object;
-use crate::utils::path as path_utils;
+use crate::key;
+use crate::object::S3Object;
+use crate::stream::read::S3Reader;
+use crate::stream::write::S3Writer;
 
-const MIN_MULTIPART_UPLOAD_SIZE: usize = 5 * 1024 * 1024; // 5MB
-
-/// Aws s3 file system client
+/// Aws S3 file system client.
+///
+/// The client implements [`AsyncRemoteFs`]. With the `tokio` feature,
+/// [`AwsS3Fs::into_blocking`] returns a `BlockingAwsS3Fs` implementing the
+/// blocking [`remotefs::RemoteFs`].
+#[derive(Debug)]
 pub struct AwsS3Fs {
     client: Option<S3Client>,
-    runtime: Arc<Runtime>,
-    wrkdir: PathBuf,
     // -- options
     bucket_name: String,
     /// Region name, if unset `Custom`.
     region: Option<String>,
-    /// Custom endpoint (useful for minio)
+    /// Custom endpoint (useful for MinIO).
     endpoint: Option<String>,
     profile: Option<String>,
     access_key: Option<String>,
     secret_key: Option<String>,
     security_token: Option<String>,
     session_token: Option<String>,
-    /// New path style. Required for some backends, such as MinIO
+    /// New path style. Required for some backends, such as MinIO.
     new_path_style: bool,
 }
 
+/// Credentials used to configure an S3 client.
 #[derive(Debug)]
 pub enum RemoteFsCredentials {
+    /// Credentials loaded from the default AWS provider chain.
     Default(DefaultCredentialsChain),
+    /// Explicitly configured user credentials.
     User(Credentials),
 }
 
 impl ProvideCredentials for RemoteFsCredentials {
     fn fallback_on_interrupt(&self) -> Option<Credentials> {
         match self {
-            Self::Default(c) => c.fallback_on_interrupt(),
-            Self::User(c) => c.fallback_on_interrupt(),
+            Self::Default(credentials) => credentials.fallback_on_interrupt(),
+            Self::User(credentials) => credentials.fallback_on_interrupt(),
         }
     }
 
@@ -65,19 +69,17 @@ impl ProvideCredentials for RemoteFsCredentials {
         Self: 'a,
     {
         match self {
-            Self::Default(c) => c.provide_credentials(),
-            Self::User(c) => c.provide_credentials(),
+            Self::Default(credentials) => credentials.provide_credentials(),
+            Self::User(credentials) => credentials.provide_credentials(),
         }
     }
 }
 
 impl AwsS3Fs {
-    /// Initialize a new `AwsS3Fs`
-    pub fn new<S: AsRef<str>>(bucket: S, runtime: &Arc<Runtime>) -> Self {
+    /// Initialize a new `AwsS3Fs` for `bucket`.
+    pub fn new<S: AsRef<str>>(bucket: S) -> Self {
         Self {
             client: None,
-            runtime: runtime.clone(),
-            wrkdir: PathBuf::from("/"),
             bucket_name: bucket.as_ref().to_string(),
             region: None,
             endpoint: None,
@@ -90,204 +92,119 @@ impl AwsS3Fs {
         }
     }
 
-    /// Specify region to connect to
+    /// Specify the AWS region to connect to.
     pub fn region<S: AsRef<str>>(mut self, region: S) -> Self {
         self.region = Some(region.as_ref().to_string());
         self
     }
 
-    /// Specify custom endpoint
-    /// This should be used when trying to connect to `minio` or other API compatible endpoints.
+    /// Specify a custom endpoint, such as a MinIO server.
     pub fn endpoint<S: AsRef<str>>(mut self, endpoint: S) -> Self {
         self.endpoint = Some(endpoint.as_ref().to_string());
         self
     }
 
-    /// Set aws profile. If unset, "default" will be used
+    /// Set the AWS profile used to connect.
     pub fn profile<S: AsRef<str>>(mut self, profile: S) -> Self {
         self.profile = Some(profile.as_ref().to_string());
         self
     }
 
-    /// Set whether to use new path style. Required for backends such as MinIO (Default: False)
+    /// Set whether to use path-style requests.
     pub fn new_path_style(mut self, new_path_style: bool) -> Self {
         self.new_path_style = new_path_style;
         self
     }
 
-    /// Specify access key for aws connection.
-    /// If unset, will be read from environment variable `AWS_ACCESS_KEY_ID`
+    /// Specify an AWS access key.
     pub fn access_key<S: AsRef<str>>(mut self, key: S) -> Self {
         self.access_key = Some(key.as_ref().to_string());
         self
     }
 
-    /// Specify secret access key for aws connection.
-    /// If unset, will be read from environment variable `AWS_SECRET_ACCESS_KEY`
+    /// Specify an AWS secret access key.
     pub fn secret_access_key<S: AsRef<str>>(mut self, key: S) -> Self {
         self.secret_key = Some(key.as_ref().to_string());
         self
     }
 
-    /// Specify security token for aws connection.
-    /// If unset, will be read from environment variable `AWS_SECURITY_TOKEN`
+    /// Specify an AWS security token.
     pub fn security_token<S: AsRef<str>>(mut self, key: S) -> Self {
         self.security_token = Some(key.as_ref().to_string());
         self
     }
 
-    /// Specify session token for aws connection.
-    /// If unset, will be read from environment variable `AWS_SESSION_TOKEN`
+    /// Specify an AWS session token.
     pub fn session_token<S: AsRef<str>>(mut self, key: S) -> Self {
         self.session_token = Some(key.as_ref().to_string());
         self
     }
 
-    // -- get ref
-
-    /// Get a reference to the underlying aws sdk [`S3Client`] struct
+    /// Get a reference to the underlying AWS SDK client.
     pub fn client(&self) -> Option<&S3Client> {
         self.client.as_ref()
     }
 
-    // -- private
-
-    /// List objects contained in `p` path
-    fn list_objects(&self, p: &Path, list_dir: bool) -> RemoteResult<Vec<S3Object>> {
-        // Make path relative
-        let key: String = Self::fmt_path(p, list_dir);
-        debug!("Query list directory {}; key: {}", p.display(), key);
-        self.query_objects(key, true)
+    /// Return the SDK client or `NotConnected`.
+    fn connected_client(&self) -> RemoteResult<&S3Client> {
+        self.client
+            .as_ref()
+            .ok_or_else(|| RemoteError::new(RemoteErrorType::NotConnected))
     }
 
-    /// Stat an s3 object
-    fn stat_object(&self, p: &Path) -> RemoteResult<S3Object> {
-        let key: String = Self::fmt_path(p, false);
-        debug!("Query stat object {}; key: {}", p.display(), key);
-        let objects = self.query_objects(key, false)?;
-        // Absolutize path
-        let absol: PathBuf = path_utils::absolutize(Path::new("/"), p);
-        // Find associated object
-        match objects
-            .into_iter()
-            .find(|x| x.path.as_path() == absol.as_path())
-        {
-            Some(obj) => Ok(obj),
-            None => Err(RemoteError::new_ex(
-                RemoteErrorType::NoSuchFileOrDirectory,
-                format!("{}: No such file or directory", p.display()),
-            )),
-        }
-    }
-
-    /// Query objects at key
-    fn query_objects(
+    /// Query objects under `key`, optionally keeping only its direct children.
+    async fn query_objects(
         &self,
-        key: String,
+        key: &str,
         only_direct_children: bool,
     ) -> RemoteResult<Vec<S3Object>> {
-        debug!("query objects with prefix: '{key}'");
-
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
+        let client = self.connected_client()?;
+        debug!("query objects with prefix '{key}'");
+        let output = client
             .list_objects_v2()
             .bucket(self.bucket_name.as_str())
-            .prefix(key.as_str())
-            .send();
-        let results = self.runtime.block_on(fut);
-        match results {
-            Ok(entries) => {
-                let Some(contents) = entries.contents else {
-                    debug!("No objects found at key {key}",);
-                    return Ok(vec![]);
-                };
-
-                let objects: Vec<S3Object> = contents
-                    .into_iter()
-                    .filter(|object| {
-                        if only_direct_children {
-                            Self::list_object_should_be_kept(object, key.as_str())
-                        } else {
-                            true
-                        }
-                    })
-                    .map(S3Object::from)
-                    .collect();
-
-                debug!("Found objects: {:?}", objects);
-                Ok(objects)
-            }
-            Err(e) => Err(RemoteError::new_ex(RemoteErrorType::StatFailed, e)),
-        }
+            .prefix(key)
+            .send()
+            .await
+            .map_err(|error| RemoteError::with_source(RemoteErrorType::StatFailed, error))?;
+        let objects = output
+            .contents
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|object| !only_direct_children || Self::list_object_should_be_kept(object, key))
+            .map(S3Object::from)
+            .collect();
+        debug!("found objects: {objects:?}");
+        Ok(objects)
     }
 
-    /// Returns whether object should be kept after list command.
-    /// The object won't be kept if:
-    ///
-    /// 1. is not a direct child of provided dir
-    fn list_object_should_be_kept(obj: &Object, dir: &str) -> bool {
-        Self::is_direct_child(obj.key.as_deref().unwrap_or_default(), dir)
+    /// Stat the object with exactly this key.
+    async fn stat_key(&self, key: &str) -> RemoteResult<S3Object> {
+        let expected = key::to_path(key);
+        let is_dir = key.ends_with('/');
+        self.query_objects(key, false)
+            .await?
+            .into_iter()
+            .find(|object| object.path == expected && object.is_dir == is_dir)
+            .ok_or_else(|| {
+                RemoteError::with_message(
+                    RemoteErrorType::NoSuchFileOrDirectory,
+                    format!("{key}: no such file or directory"),
+                )
+            })
     }
 
-    /// Checks whether Object's key is direct child of `parent` path.
+    /// Returns whether an object should be kept after a directory listing.
+    fn list_object_should_be_kept(object: &Object, dir: &str) -> bool {
+        Self::is_direct_child(object.key.as_deref().unwrap_or_default(), dir)
+    }
+
+    /// Check whether an S3 key is a direct child of `parent`.
     fn is_direct_child(key: &str, parent: &str) -> bool {
-        key == format!("{}{}", parent, S3Object::object_name(key))
-            || key == format!("{}{}/", parent, S3Object::object_name(key))
+        key == format!("{parent}{}", S3Object::object_name(key))
+            || key == format!("{parent}{}/", S3Object::object_name(key))
     }
 
-    /// Make s3 absolute path from a given path
-    fn resolve(&self, p: &Path) -> PathBuf {
-        path_utils::diff_paths(
-            path_utils::absolutize(self.wrkdir.as_path(), p),
-            Path::new("/"),
-        )
-        .unwrap_or_default()
-    }
-
-    /// fmt path for fsentry according to format expected by s3
-    fn fmt_path(p: &Path, is_dir: bool) -> String {
-        // prevent root as slash
-        if p == Path::new("/") {
-            return "".to_string();
-        }
-        // Remove root only if absolute
-        #[cfg(target_family = "unix")]
-        let is_absolute: bool = p.is_absolute();
-        // NOTE: don't use is_absolute: on windows won't work
-        #[cfg(target_family = "windows")]
-        let is_absolute: bool = p.display().to_string().starts_with('/');
-        let p: PathBuf = match is_absolute {
-            true => path_utils::diff_paths(p, Path::new("/")).unwrap_or_default(),
-            false => p.to_path_buf(),
-        };
-        // NOTE: windows only: resolve paths
-        #[cfg(target_family = "windows")]
-        let p: PathBuf = PathBuf::from(p.to_slash_lossy().to_string());
-        // Fmt
-        match is_dir {
-            true => {
-                let mut p: String = p.display().to_string();
-                if !p.ends_with('/') {
-                    p.push('/');
-                }
-                p
-            }
-            false => p.to_string_lossy().to_string(),
-        }
-    }
-
-    /// Check connection status
-    fn check_connection(&mut self) -> RemoteResult<()> {
-        if self.is_connected() {
-            Ok(())
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NotConnected))
-        }
-    }
-
-    /// Return whether connection should use anonymous credentials
     fn is_anonymous(&self) -> bool {
         self.access_key.is_none()
             && self.secret_key.is_none()
@@ -295,26 +212,30 @@ impl AwsS3Fs {
             && self.session_token.is_none()
     }
 
-    /// Load credentials for current session
-    fn load_credentials(&self, region: RegionProviderChain) -> RemoteResult<RemoteFsCredentials> {
+    async fn load_credentials(
+        &self,
+        region: RegionProviderChain,
+    ) -> RemoteResult<RemoteFsCredentials> {
         if self.is_anonymous() {
-            Ok(RemoteFsCredentials::Default(self.runtime.block_on(
-                DefaultCredentialsChain::builder().region(region).build(),
-            )))
+            Ok(RemoteFsCredentials::Default(
+                DefaultCredentialsChain::builder()
+                    .region(region)
+                    .build()
+                    .await,
+            ))
         } else {
             let Some(access_key) = self.access_key.as_ref() else {
-                return Err(RemoteError::new_ex(
+                return Err(RemoteError::with_message(
                     RemoteErrorType::AuthenticationFailed,
                     "Access key not set",
                 ));
             };
             let Some(secret_key) = self.secret_key.as_ref() else {
-                return Err(RemoteError::new_ex(
+                return Err(RemoteError::with_message(
                     RemoteErrorType::AuthenticationFailed,
                     "Secret key not set",
                 ));
             };
-
             Ok(RemoteFsCredentials::User(Credentials::new(
                 access_key,
                 secret_key,
@@ -325,16 +246,12 @@ impl AwsS3Fs {
         }
     }
 
-    /// Initialize region to be used from connection parameters
-    fn init_region(&self) -> RemoteResult<RegionProviderChain> {
-        Ok(
-            RegionProviderChain::first_try(self.region.as_ref().cloned().map(Region::new))
-                .or_default_provider()
-                .or_else(Region::new("us-west-2")),
-        )
+    fn init_region(&self) -> RegionProviderChain {
+        RegionProviderChain::first_try(self.region.as_ref().cloned().map(Region::new))
+            .or_default_provider()
+            .or_else(Region::new("us-west-2"))
     }
 
-    /// Make bucket based on current options
     fn make_client(
         &self,
         region: Option<Region>,
@@ -345,436 +262,358 @@ impl AwsS3Fs {
             .behavior_version_latest()
             .region(region);
         builder.set_force_path_style(Some(self.new_path_style));
-
         builder.set_endpoint_url(self.endpoint.clone());
-
         S3Client::from_conf(builder.build())
     }
 }
 
-impl RemoteFs for AwsS3Fs {
-    fn connect(&mut self) -> RemoteResult<Welcome> {
-        // Load credentials
-        debug!("Loading credentials... (profile {:?})", self.profile);
-        let region_provider = self.init_region()?;
-        let region = self.runtime.block_on(region_provider.region());
-        let credentials = self.load_credentials(region_provider)?;
-        // Parse region
+/// A blocking view of [`AwsS3Fs`] that implements [`remotefs::RemoteFs`].
+///
+/// Every call blocks on the supplied Tokio handle and must not be made from
+/// inside an async context. Build one with [`AwsS3Fs::into_blocking`].
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+pub type BlockingAwsS3Fs = remotefs::adapters::blocking::BlockOn<AwsS3Fs>;
+
+#[cfg(feature = "tokio")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
+impl AwsS3Fs {
+    /// Wraps the client for blocking callers using the given runtime handle.
+    ///
+    /// The returned value implements [`remotefs::RemoteFs`] and can be stored
+    /// as `Box<dyn RemoteFs>`. Calling it from an async context panics, as
+    /// documented by [`tokio::runtime::Handle::block_on`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `handle` belongs to a current-thread runtime, which cannot
+    /// drive the blocked operation from a non-async caller.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use remotefs::RemoteFs;
+    /// use remotefs_aws_s3::AwsS3Fs;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = tokio::runtime::Runtime::new()?;
+    /// let mut client: Box<dyn RemoteFs> =
+    ///     Box::new(AwsS3Fs::new("test-bucket").into_blocking(runtime.handle().clone()));
+    /// client.connect()?;
+    /// client.disconnect()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn into_blocking(self, handle: tokio::runtime::Handle) -> BlockingAwsS3Fs {
+        assert_ne!(
+            handle.runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread,
+            "into_blocking requires a multi-thread Tokio runtime"
+        );
+        remotefs::adapters::blocking::BlockOn::new(self, handle)
+    }
+}
+
+#[remotefs::async_trait]
+impl AsyncRemoteFs for AwsS3Fs {
+    async fn connect(&mut self) -> RemoteResult<()> {
+        if self.client.is_some() {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyConnected));
+        }
+        debug!("loading credentials for profile {:?}", self.profile);
+        let region_provider = self.init_region();
+        let region = region_provider.region().await;
+        let credentials = self.load_credentials(region_provider).await?;
         trace!(
-            "Parsing region: {}; endpoint: {}",
+            "region: {}; endpoint: {}",
             self.region.as_deref().unwrap_or("NULL"),
             self.endpoint.as_deref().unwrap_or("NULL")
         );
-        debug!(
-            "Credentials loaded! Connecting to bucket {}...",
+        self.client = Some(self.make_client(region, credentials));
+        info!(
+            "connection successfully established to S3 bucket {}",
             self.bucket_name
         );
-        self.client = Some(self.make_client(region, credentials));
-        info!("Connection successfully established to s3 bucket");
-        Ok(Welcome::default())
+        Ok(())
     }
 
-    fn disconnect(&mut self) -> RemoteResult<()> {
-        info!("Disconnecting from S3 bucket...");
+    async fn disconnect(&mut self) -> RemoteResult<()> {
+        info!("disconnecting from S3 bucket");
         match self.client.take() {
-            Some(bucket) => {
-                drop(bucket);
+            Some(client) => {
+                drop(client);
                 Ok(())
             }
             None => Err(RemoteError::new(RemoteErrorType::NotConnected)),
         }
     }
 
-    fn is_connected(&mut self) -> bool {
+    fn is_connected(&self) -> bool {
         self.client.is_some()
     }
 
-    fn pwd(&mut self) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        Ok(self.wrkdir.clone())
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::STREAM_READ | Capabilities::STREAM_WRITE | Capabilities::RANGE_READ
     }
 
-    fn change_dir(&mut self, dir: &Path) -> RemoteResult<PathBuf> {
-        self.check_connection()?;
-        // Always allow entering root
-        if dir == Path::new("/") {
-            self.wrkdir = dir.to_path_buf();
-            debug!("New working directory: {}", self.wrkdir.display());
-            return Ok(self.wrkdir.clone());
+    async fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
+        let key = key::from_path(path, true)?;
+        debug!("list directory {}; key: '{key}'", path.display());
+        self.query_objects(&key, true)
+            .await
+            .map(|objects| objects.into_iter().map(File::from).collect())
+    }
+
+    async fn stat(&self, path: &Path) -> RemoteResult<File> {
+        let file_key = key::from_path(path, false)?;
+        self.connected_client()?;
+        if file_key.is_empty() {
+            return Ok(File::new(
+                "/",
+                Metadata::default().file_type(FileType::Directory),
+            ));
         }
-        // Check if directory exists
-        debug!("Entering directory {}...", dir.display());
-        let dir_p: PathBuf = self.resolve(dir);
-        let dir_s: String = Self::fmt_path(dir_p.as_path(), true);
-        debug!("Searching for key {} (path: {})...", dir_s, dir_p.display());
-        // Check if directory already exists
-        if self
-            .stat_object(PathBuf::from(dir_s.as_str()).as_path())
-            .is_ok()
-        {
-            self.wrkdir = path_utils::absolutize(Path::new("/"), dir_p.as_path());
-            debug!("New working directory: {}", self.wrkdir.display());
-            Ok(self.wrkdir.clone())
-        } else {
-            Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))
+        match self.stat_key(&file_key).await {
+            Ok(object) => return Ok(object.into()),
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => {}
+            Err(error) => return Err(error),
+        }
+        trace!("failed to stat object as file; trying as a directory");
+        let dir_key = key::from_path(path, true)?;
+        self.stat_key(&dir_key).await.map(File::from)
+    }
+
+    async fn exists(&self, path: &Path) -> RemoteResult<bool> {
+        match self.stat(path).await {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => Ok(false),
+            Err(error) => Err(error),
         }
     }
 
-    fn list_dir(&mut self, path: &Path) -> RemoteResult<Vec<File>> {
-        self.check_connection()?;
-        self.list_objects(path, true)
-            .map(|x| x.into_iter().map(|x| x.into()).collect())
-    }
-
-    fn stat(&mut self, path: &Path) -> RemoteResult<File> {
-        self.check_connection()?;
-        let path = self.resolve(path);
-        if let Ok(obj) = self.stat_object(path.as_path()) {
-            return Ok(obj.into());
-        }
-        // Try as a "directory"
-        trace!("Failed to stat object as file; trying as a directory...");
-        let path = PathBuf::from(Self::fmt_path(path.as_path(), true));
-        self.stat_object(path.as_path()).map(|x| x.into())
-    }
-
-    fn setstat(&mut self, _path: &Path, _metadata: Metadata) -> RemoteResult<()> {
+    async fn set_metadata(&self, _path: &Path, _metadata: &SetMetadata) -> RemoteResult<()> {
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
-    fn exists(&mut self, path: &Path) -> RemoteResult<bool> {
-        match self.stat(path) {
-            Ok(_) => Ok(true),
-            Err(RemoteError {
-                kind: RemoteErrorType::NoSuchFileOrDirectory,
-                ..
-            }) => Ok(false),
-            Err(err) => Err(err),
+    async fn create_dir(&self, path: &Path, _mode: Option<UnixPex>) -> RemoteResult<()> {
+        let dir = key::from_path(path, true)?;
+        let client = self.connected_client()?;
+        debug!("making directory '{dir}'");
+        if self.stat_key(&dir).await.is_ok() {
+            error!("directory '{dir}' already exists");
+            return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
-    }
-
-    fn remove_file(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        let path = Self::fmt_path(self.resolve(path).as_path(), false);
-        debug!("Removing object '{}'", path);
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
-            .delete_object()
-            .bucket(self.bucket_name.as_str())
-            .key(path.as_str())
-            .send();
-
-        self.runtime
-            .block_on(fut)
-            .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not remove file: {}", e),
-                )
-            })
-            .map(|_| ())
-    }
-
-    fn remove_dir(&mut self, path: &Path) -> RemoteResult<()> {
-        self.check_connection()?;
-        if !self.exists(path).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        println!("{}", self.resolve(path).as_path().display());
-        let path = Self::fmt_path(self.resolve(path).as_path(), true);
-        debug!("Removing object {}...", path);
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
-            .delete_object()
-            .bucket(self.bucket_name.as_str())
-            .key(path.as_str())
-            .send();
-
-        self.runtime.block_on(fut).map(|_| ()).map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                format!("Could not remove directory: {}", e),
-            )
-        })
-    }
-
-    fn remove_dir_all(&mut self, path: &Path) -> RemoteResult<()> {
-        debug!("Removing all content of {}", path.display());
-        if self.remove_dir(path).is_err() {
-            self.remove_file(path)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn create_dir(&mut self, path: &Path, _mode: UnixPex) -> RemoteResult<()> {
-        self.check_connection()?;
-        let dir: String = Self::fmt_path(self.resolve(path).as_path(), true);
-        debug!("Making directory {}...", dir);
-        // Check if directory already exists
-        if self
-            .stat_object(PathBuf::from(dir.as_str()).as_path())
-            .is_ok()
-        {
-            error!("Directory {} already exists", dir);
-            return Err(RemoteError::new(RemoteErrorType::DirectoryAlreadyExists));
-        }
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
+        client
             .put_object()
             .bucket(self.bucket_name.as_str())
             .key(dir.as_str())
-            .send();
-
-        self.runtime.block_on(fut).map(|_| ()).map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::FileCreateDenied,
-                format!("Could not make directory: {}", e),
-            )
-        })
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|error| RemoteError::with_source(RemoteErrorType::FileCreateDenied, error))
     }
 
-    fn symlink(&mut self, _path: &Path, _target: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn copy(&mut self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn mov(&mut self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn exec(&mut self, _cmd: &str) -> RemoteResult<(u32, String)> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn append(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create(&mut self, _path: &Path, _metadata: &Metadata) -> RemoteResult<WriteStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn open(&mut self, _path: &Path) -> RemoteResult<ReadStream> {
-        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
-    }
-
-    fn create_file(
-        &mut self,
-        path: &Path,
-        _metadata: &Metadata,
-        mut reader: Box<dyn Read + Send>,
-    ) -> RemoteResult<u64> {
-        self.check_connection()?;
-        let src = self.resolve(path);
-        let key = Self::fmt_path(src.as_path(), false);
-
-        // we write 4096 bytes at a time
-        debug!("Query PUT for key '{}'", key);
-        let mut buf = vec![0; MIN_MULTIPART_UPLOAD_SIZE];
-        let mut offset = 0;
-        let mut part_number = 1;
-
-        // create multipart upload
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
-            .create_multipart_upload()
+    async fn remove_file(&self, path: &Path) -> RemoteResult<()> {
+        let key = key::from_path(path, false)?;
+        let client = self.connected_client()?;
+        self.stat_key(&key).await?;
+        debug!("removing object '{key}'");
+        client
+            .delete_object()
             .bucket(self.bucket_name.as_str())
             .key(key.as_str())
-            .send();
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|error| RemoteError::with_source(RemoteErrorType::CouldNotRemoveFile, error))
+    }
 
-        let upload = self.runtime.block_on(fut).map_err(|e| {
-            error!("Could not init multipart upload: {e:?}",);
-            RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                format!("Could not init multipart upload: {}", e),
-            )
-        })?;
-        let upload_id = upload.upload_id().ok_or(RemoteError::new_ex(
-            RemoteErrorType::ProtocolError,
-            "no multipart id",
-        ))?;
-        debug!("starting multipart upload with upload id {upload_id}");
+    async fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
+        let key = key::from_path(path, true)?;
+        let client = self.connected_client()?;
+        let children = self.query_objects(&key, true).await?;
+        if !children.is_empty() {
+            return Err(RemoteError::new(RemoteErrorType::DirectoryNotEmpty));
+        }
+        self.stat_key(&key).await?;
+        debug!("removing directory '{key}'");
+        client
+            .delete_object()
+            .bucket(self.bucket_name.as_str())
+            .key(key.as_str())
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|error| RemoteError::with_source(RemoteErrorType::CouldNotRemoveFile, error))
+    }
 
-        let mut upload_parts: Vec<aws_sdk_s3::types::CompletedPart> = Vec::new();
-
-        loop {
-            let buflen = reader.read(&mut buf).map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    format!("Could not read file: {}", e),
-                )
-            })?;
-            if buflen == 0 {
-                break;
+    async fn remove_dir_all(&self, path: &Path) -> RemoteResult<()> {
+        let key = key::from_path(path, true)?;
+        match self.stat(path).await {
+            Ok(entry) if entry.is_dir() => {
+                for child in self.list_dir(entry.path()).await? {
+                    self.remove_dir_all(child.path()).await?;
+                }
+                match self.remove_dir(entry.path()).await {
+                    Ok(()) => Ok(()),
+                    Err(error)
+                        if error.kind() == RemoteErrorType::NoSuchFileOrDirectory
+                            && self.query_objects(&key, false).await?.is_empty() =>
+                    {
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                }
             }
-
-            let bytestream = ByteStream::new(SdkBody::from(&buf[..buflen]));
-            debug!("sending part {part_number} for {key} at offset {offset} for {buflen} bytes");
-
-            let buflen = buflen as i64;
-
-            let fut = self
-                .client
-                .as_ref()
-                .unwrap()
-                .upload_part()
-                .bucket(self.bucket_name.as_str())
-                .key(key.as_str())
-                .upload_id(upload_id)
-                .body(bytestream)
-                .part_number(part_number)
-                .send();
-
-            let upload_part_res = self.runtime.block_on(fut).map_err(|e| {
-                error!("Could not put file: {e:?}",);
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not put file: {}", e),
-                )
-            })?;
-
-            upload_parts.push(
-                CompletedPart::builder()
-                    .e_tag(upload_part_res.e_tag.unwrap_or_default())
-                    .part_number(part_number)
-                    .build(),
-            );
-
-            debug!("written {buflen} bytes at offset {offset} for {key}");
-
-            offset += buflen;
-            part_number += 1;
+            Ok(entry) => self.remove_file(entry.path()).await,
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => {
+                let objects = self.query_objects(&key, false).await?;
+                if objects.is_empty() {
+                    return Err(error);
+                }
+                let client = self.connected_client()?;
+                for object in objects {
+                    let object_key = key::from_path(object.path.as_path(), object.is_dir)?;
+                    client
+                        .delete_object()
+                        .bucket(self.bucket_name.as_str())
+                        .key(object_key.as_str())
+                        .send()
+                        .await
+                        .map_err(|delete_error| {
+                            RemoteError::with_source(
+                                RemoteErrorType::CouldNotRemoveFile,
+                                delete_error,
+                            )
+                        })?;
+                }
+                Ok(())
+            }
+            Err(error) => Err(error),
         }
-
-        // complete multipart
-        let completed_multipart_upload: CompletedMultipartUpload =
-            CompletedMultipartUpload::builder()
-                .set_parts(Some(upload_parts))
-                .build();
-
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
-            .complete_multipart_upload()
-            .bucket(self.bucket_name.as_str())
-            .key(key.as_str())
-            .upload_id(upload_id)
-            .multipart_upload(completed_multipart_upload)
-            .send();
-
-        self.runtime.block_on(fut).map_err(|e| {
-            error!("Could not complete multipart upload: {e:?}",);
-            RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                format!("Could not complete multipart upload: {}", e),
-            )
-        })?;
-
-        Ok(offset as u64)
     }
 
-    fn open_file(
-        &mut self,
-        src: &Path,
-        mut dest: Box<dyn std::io::Write + Send>,
-    ) -> RemoteResult<u64> {
-        self.check_connection()?;
-        if !self.exists(src).ok().unwrap_or(false) {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
-        let src = self.resolve(src);
-        let key = Self::fmt_path(src.as_path(), false);
-        info!("Query GET for key '{}'", key);
+    async fn rename(&self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
+        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    }
 
-        let fut = self
-            .client
-            .as_ref()
-            .unwrap()
+    async fn copy(&self, _src: &Path, _dest: &Path) -> RemoteResult<()> {
+        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    }
+
+    async fn symlink(&self, _path: &Path, _target: &Path) -> RemoteResult<()> {
+        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    }
+
+    async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
+        let key = key::from_path(path, false)?;
+        let client = self.connected_client()?;
+        if opts.length == Some(0) {
+            return Ok(AsyncReadStream::new(S3Reader::empty()));
+        }
+        let mut request = client
             .get_object()
             .bucket(self.bucket_name.as_str())
-            .key(key)
-            .send();
-
-        let mut data = self
-            .runtime
-            .block_on(fut)
-            .map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::ProtocolError,
-                    format!("Could not get file: {}", e),
-                )
-            })?
-            .body;
-
-        let mut n = 0;
-
-        while let Some(bytes) = self.runtime.block_on(data.try_next()).map_err(|e| {
-            RemoteError::new_ex(
-                RemoteErrorType::ProtocolError,
-                format!("Could not get file: {}", e),
-            )
-        })? {
-            dest.write_all(&bytes).map_err(|e| {
-                RemoteError::new_ex(
-                    RemoteErrorType::IoError,
-                    format!("Could not write file: {}", e),
-                )
-            })?;
-            n += bytes.len() as u64;
+            .key(key.as_str());
+        if let Some(range) = http_range(opts) {
+            debug!("GET '{key}' with range {range}");
+            request = request.range(range);
+        } else {
+            debug!("GET '{key}'");
         }
+        match request.send().await {
+            Ok(output) => Ok(AsyncReadStream::new(S3Reader::new(output.body))),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|service_error| service_error.is_no_such_key()) =>
+            {
+                Err(RemoteError::with_source(
+                    RemoteErrorType::NoSuchFileOrDirectory,
+                    error,
+                ))
+            }
+            Err(error) if error.code() == Some("InvalidRange") => {
+                debug!("range {opts:?} is beyond EOF for '{key}'; returning empty stream");
+                Ok(AsyncReadStream::new(S3Reader::empty()))
+            }
+            Err(error) => Err(RemoteError::with_source(
+                RemoteErrorType::ProtocolError,
+                error,
+            )),
+        }
+    }
 
-        Ok(n)
+    async fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
+        let key = key::from_path(path, false)?;
+        let client = self.connected_client()?.clone();
+        debug!("create '{key}' (size hint: {:?})", opts.size_hint);
+        Ok(AsyncWriteStream::new(S3Writer::new(
+            client,
+            self.bucket_name.clone(),
+            key,
+        )))
+    }
+
+    async fn append(&self, _path: &Path, _opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
+        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    }
+
+    async fn exec(&self, _cmd: &str) -> RemoteResult<ExecOutput> {
+        Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
+    }
+}
+
+/// Build the HTTP `Range` header for a ranged read.
+pub(crate) fn http_range(opts: &ReadOptions) -> Option<String> {
+    let offset = opts.offset.unwrap_or(0);
+    match opts.length {
+        None if offset == 0 => None,
+        None => Some(format!("bytes={offset}-")),
+        Some(length) => {
+            let end = offset.saturating_add(length.saturating_sub(1));
+            Some(format!("bytes={offset}-{end}"))
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    use std::path::PathBuf;
 
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    use std::io::Cursor;
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    use std::time::SystemTime;
-
+    use futures::io::{AsyncReadExt as _, AsyncWriteExt as _, Cursor};
     use pretty_assertions::assert_eq;
 
     use super::*;
+    #[cfg(feature = "with-containers")]
     use crate::mock::container::Minio;
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    use crate::stream::write::PART_SIZE;
 
     #[test]
     fn should_init_s3() {
-        let s3 = AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap()));
-        assert_eq!(s3.wrkdir.as_path(), Path::new("/"));
+        let s3 = AwsS3Fs::new("aws-s3-test");
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
         assert!(s3.region.is_none());
         assert!(s3.endpoint.is_none());
-        assert_eq!(s3.is_anonymous(), true);
-        assert_eq!(s3.new_path_style, false);
+        assert!(s3.is_anonymous());
+        assert!(!s3.new_path_style);
         assert!(s3.client.is_none());
         assert!(s3.access_key.is_none());
         assert!(s3.profile.is_none());
         assert!(s3.secret_key.is_none());
         assert!(s3.security_token.is_none());
         assert!(s3.session_token.is_none());
-        assert!(s3.secret_key.is_none());
-        assert!(s3.client.is_none());
+        assert!(!s3.is_connected());
     }
 
     #[test]
     fn should_init_s3_with_options() {
-        let s3 = AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap()))
+        let s3 = AwsS3Fs::new("aws-s3-test")
             .region("eu-central-1")
             .access_key("AKIA0000")
             .profile("default")
@@ -784,679 +623,152 @@ mod test {
             .new_path_style(true)
             .endpoint("omar");
         assert_eq!(s3.bucket_name.as_str(), "aws-s3-test");
-        assert_eq!(s3.region.as_deref().unwrap(), "eu-central-1");
-        assert_eq!(s3.access_key.as_deref().unwrap(), "AKIA0000");
-        assert_eq!(s3.secret_key.as_deref().unwrap(), "PASSWORD");
-        assert_eq!(s3.security_token.as_deref().unwrap(), "secret");
-        assert_eq!(s3.session_token.as_deref().unwrap(), "token");
-        assert_eq!(s3.endpoint.as_deref().unwrap(), "omar");
-        assert_eq!(s3.is_anonymous(), false);
-        assert_eq!(s3.new_path_style, true);
+        assert_eq!(s3.region.as_deref(), Some("eu-central-1"));
+        assert_eq!(s3.access_key.as_deref(), Some("AKIA0000"));
+        assert_eq!(s3.secret_key.as_deref(), Some("PASSWORD"));
+        assert_eq!(s3.security_token.as_deref(), Some("secret"));
+        assert_eq!(s3.session_token.as_deref(), Some("token"));
+        assert_eq!(s3.endpoint.as_deref(), Some("omar"));
+        assert!(!s3.is_anonymous());
+        assert!(s3.new_path_style);
+    }
+
+    #[test]
+    fn should_advertise_capabilities() {
+        let caps = AwsS3Fs::new("bucket").capabilities();
+        assert!(caps.contains(Capabilities::STREAM_READ));
+        assert!(caps.contains(Capabilities::STREAM_WRITE));
+        assert!(caps.contains(Capabilities::RANGE_READ));
+        assert!(!caps.contains(Capabilities::APPEND));
+        assert!(!caps.contains(Capabilities::COPY));
+        assert!(!caps.contains(Capabilities::SYMLINK));
+        assert!(!caps.contains(Capabilities::SET_METADATA));
+        assert!(!caps.contains(Capabilities::SEEK_READ));
+        assert!(!caps.contains(Capabilities::EXEC));
+    }
+
+    #[test]
+    fn should_build_http_range_header() {
+        assert_eq!(http_range(&ReadOptions::default()), None);
+        assert_eq!(http_range(&ReadOptions::default().offset(0)), None);
+        assert_eq!(
+            http_range(&ReadOptions::default().offset(5)).as_deref(),
+            Some("bytes=5-")
+        );
+        assert_eq!(
+            http_range(&ReadOptions::default().offset(2).length(3)).as_deref(),
+            Some("bytes=2-4")
+        );
+        assert_eq!(
+            http_range(&ReadOptions::default().length(10)).as_deref(),
+            Some("bytes=0-9")
+        );
+        let expected = format!("bytes={}-{}", u64::MAX, u64::MAX);
+        assert_eq!(
+            http_range(&ReadOptions::default().offset(u64::MAX).length(2)).as_deref(),
+            Some(expected.as_str())
+        );
     }
 
     #[test]
     fn s3_is_direct_child() {
-        assert_eq!(AwsS3Fs::is_direct_child("pippo/", ""), true);
-        assert_eq!(AwsS3Fs::is_direct_child("pippo/sottocartella/", ""), false);
+        assert!(AwsS3Fs::is_direct_child("pippo/", ""));
+        assert!(!AwsS3Fs::is_direct_child("pippo/sottocartella/", ""));
+        assert!(AwsS3Fs::is_direct_child("pippo/sottocartella/", "pippo/"));
+        assert!(!AwsS3Fs::is_direct_child("pippo/sottocartella/", "pippo"));
+        assert!(AwsS3Fs::is_direct_child(
+            "pippo/sottocartella/readme.md",
+            "pippo/sottocartella/"
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_relative_paths_before_connection_check() {
+        let client = AwsS3Fs::new("bucket");
+        let path = Path::new("relative/file.txt");
         assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/", "pippo/"),
-            true
+            client.stat(path).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
         assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/", "pippo"), // This case must be handled indeed
-            false
+            client.list_dir(path).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
         assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/readme.md", "pippo/sottocartella/"),
-            true
+            client.create_dir(path, None).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
         assert_eq!(
-            AwsS3Fs::is_direct_child("pippo/sottocartella/readme.md", "pippo/sottocartella/"),
-            true
+            client.remove_file(path).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.remove_dir(path).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client.exists(path).await.unwrap_err().kind(),
+            RemoteErrorType::InvalidPath
         );
     }
 
-    #[test]
-    fn s3_resolve() {
-        let mut s3 = AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap()));
-        s3.wrkdir = PathBuf::from("/tmp");
-        // Absolute
+    #[tokio::test]
+    async fn should_return_errors_on_uninitialized_client() {
+        let mut client = AwsS3Fs::new("aws-s3-test").region("eu-central-1");
+        let path = Path::new("/tmp");
         assert_eq!(
-            s3.resolve(Path::new("/tmp/sottocartella/")).as_path(),
-            Path::new("tmp/sottocartella")
-        );
-        // Relative
-        assert_eq!(
-            s3.resolve(Path::new("subfolder/")).as_path(),
-            Path::new("tmp/subfolder")
-        );
-    }
-
-    #[test]
-    fn s3_fmt_path() {
-        assert_eq!(
-            AwsS3Fs::fmt_path(Path::new("/tmp/omar.txt"), false).as_str(),
-            "tmp/omar.txt"
+            client.stat(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
         );
         assert_eq!(
-            AwsS3Fs::fmt_path(Path::new("omar.txt"), false).as_str(),
-            "omar.txt"
+            client.list_dir(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
         );
         assert_eq!(
-            AwsS3Fs::fmt_path(Path::new("/tmp/subfolder"), true).as_str(),
-            "tmp/subfolder/"
+            client
+                .create_dir(path, Some(UnixPex::from(0o755)))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::NotConnected
         );
         assert_eq!(
-            AwsS3Fs::fmt_path(Path::new("tmp/subfolder"), true).as_str(),
-            "tmp/subfolder/"
+            client.remove_file(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
         );
-        assert_eq!(AwsS3Fs::fmt_path(Path::new("tmp"), true).as_str(), "tmp/");
-        assert_eq!(AwsS3Fs::fmt_path(Path::new("tmp/"), true).as_str(), "tmp/");
-        assert_eq!(AwsS3Fs::fmt_path(Path::new("/"), true).as_str(), "");
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_append_to_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        // Append to file
-        let file_data = "Hello, world!\n";
-        let reader = Cursor::new(file_data.as_bytes());
+        assert_eq!(
+            client.remove_dir(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert_eq!(
+            client.remove_dir_all(path).await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert_eq!(
+            client
+                .append(path, &WriteOptions::default())
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            client.disconnect().await.unwrap_err().kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert!(client.copy(path, Path::new("/culonia")).await.is_err());
+        assert!(client.rename(path, Path::new("/culonia")).await.is_err());
         assert!(
             client
-                .append_file(p, &Metadata::default(), Box::new(reader))
+                .symlink(Path::new("/a"), Path::new("/b"))
+                .await
                 .is_err()
         );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_change_directory() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        let pwd = client.pwd().ok().unwrap();
-        assert!(client.change_dir(Path::new("/")).is_ok());
-        assert!(client.change_dir(pwd.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_change_directory() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
+        assert!(client.exec("echo 5").await.is_err());
         assert!(
             client
-                .change_dir(Path::new("/tmp/sdfghjuireghiuergh/useghiyuwegh"))
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_copy_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.copy(p, Path::new("aaa/bbbb/ccc/b.txt")).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_create_directory() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_create_directory_cause_already_exists() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .is_ok()
-        );
-        assert_eq!(
-            client
-                .create_dir(Path::new("mydir"), UnixPex::from(0o755))
-                .err()
-                .unwrap()
-                .kind,
-            RemoteErrorType::DirectoryAlreadyExists
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(feature = "with-s3-ci")]
-    fn should_not_create_directory() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // create directory
-        assert!(
-            client
-                .create_dir(
-                    Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"),
-                    UnixPex::from(0o755)
-                )
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_create_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert_eq!(
-            client
-                .create_file(p, &metadata, Box::new(reader))
-                .ok()
-                .unwrap(),
-            10
-        );
-        // Verify size
-        assert_eq!(client.stat(p).ok().unwrap().metadata().size, 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_exec_command() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        assert!(client.exec("echo 5").is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_tell_whether_file_exists() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        assert_eq!(client.exists(p).ok().unwrap(), true);
-        assert_eq!(client.exists(Path::new("b.txt")).ok().unwrap(), false);
-        assert_eq!(
-            client.exists(Path::new("/tmp/ppppp/bhhrhu")).ok().unwrap(),
-            false
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_list_dir() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let wrkdir = client.pwd().ok().unwrap();
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let file = client
-            .list_dir(wrkdir.as_path())
-            .ok()
-            .unwrap()
-            .first()
-            .unwrap()
-            .clone();
-        assert_eq!(file.name().as_str(), "a.txt");
-        let mut expected_path = wrkdir;
-        expected_path.push(p);
-        assert_eq!(file.path.as_path(), expected_path.as_path());
-        assert_eq!(file.extension().as_deref().unwrap(), "txt");
-        assert_eq!(file.metadata.size, 10);
-        assert_eq!(file.metadata.mode, None);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_move_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let dest = Path::new("b.txt");
-        assert!(client.mov(p, dest).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_open_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert_eq!(client.open_file(p, buffer).ok().unwrap(), 10);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_write_big_data() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = vec![1; MIN_MULTIPART_UPLOAD_SIZE * 2];
-        let reader = Cursor::new(file_data);
-        let metadata = Metadata {
-            size: (MIN_MULTIPART_UPLOAD_SIZE * 2) as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert_eq!(
-            client.open_file(p, buffer).ok().unwrap(),
-            (MIN_MULTIPART_UPLOAD_SIZE * 2) as u64
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_open_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Verify size
-        let buffer: Box<dyn std::io::Write + Send> = Box::new(Vec::with_capacity(512));
-        assert!(
-            client
-                .open_file(Path::new("/tmp/aashafb/hhh"), buffer)
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_print_working_directory() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        assert!(client.pwd().is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_remove_dir_all() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Create file
-        let mut file_path = dir_path.clone();
-        file_path.push(Path::new("a.txt"));
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(
-            client
-                .create_file(file_path.as_path(), &metadata, Box::new(reader))
-                .is_ok()
-        );
-        // Remove dir
-        assert!(client.remove_dir_all(dir_path.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_remove_dir() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create dir
-        let mut dir_path = client.pwd().ok().unwrap();
-        dir_path.push(Path::new("test/"));
-        assert!(
-            client
-                .create_dir(dir_path.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        assert!(client.remove_dir(dir_path.as_path()).is_ok());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_remove_dir() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Remove dir
-        assert!(client.remove_dir(Path::new("test/")).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_remove_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.txt");
-        let file_data = "test data\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(client.remove_file(p).is_ok());
-        // stat
-        assert!(client.stat(p).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_setstat_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        assert!(
-            client
-                .setstat(
-                    p,
-                    Metadata {
-                        accessed: Some(SystemTime::UNIX_EPOCH),
-                        created: Some(SystemTime::UNIX_EPOCH),
-                        gid: Some(1000),
-                        file_type: remotefs::fs::FileType::File,
-                        mode: Some(UnixPex::from(0o755)),
-                        modified: Some(SystemTime::UNIX_EPOCH),
-                        size: 7,
-                        symlink: None,
-                        uid: Some(1000),
-                    }
-                )
-                .is_err()
-        );
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_stat_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let entry = client.stat(p).ok().unwrap();
-        assert_eq!(entry.name(), "a.sh");
-        let mut expected_path = client.pwd().ok().unwrap();
-        expected_path.push("a.sh");
-        assert_eq!(entry.path(), expected_path.as_path());
-        let meta = entry.metadata();
-        assert_eq!(meta.size, 7);
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_stat_file() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        assert!(client.stat(p).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_make_symlink() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let symlink = Path::new("b.sh");
-        assert!(client.symlink(symlink, p).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn should_not_make_symlink() {
-        crate::mock::logger();
-        let Ctx {
-            mut client,
-            container: _container,
-        } = setup_client();
-        // Create file
-        let p = Path::new("a.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        let metadata = Metadata {
-            size: file_data.len() as u64,
-            ..Default::default()
-        };
-        assert!(client.create_file(p, &metadata, Box::new(reader)).is_ok());
-        let symlink = Path::new("b.sh");
-        let file_data = "echo 5\n";
-        let reader = Cursor::new(file_data.as_bytes());
-        assert!(
-            client
-                .create_file(symlink, &metadata, Box::new(reader))
-                .is_ok()
-        );
-        assert!(client.symlink(symlink, p).is_err());
-        assert!(client.remove_file(symlink).is_ok());
-        assert!(client.symlink(symlink, Path::new("c.sh")).is_err());
-        finalize_client(client);
-    }
-
-    #[test]
-    fn should_return_errors_on_uninitialized_client() {
-        let mut client =
-            AwsS3Fs::new("aws-s3-test", &Arc::new(Runtime::new().unwrap())).region("eu-central-1");
-        assert!(client.change_dir(Path::new("/tmp")).is_err());
-        assert!(
-            client
-                .copy(Path::new("/nowhere"), PathBuf::from("/culonia").as_path())
-                .is_err()
-        );
-        assert!(client.exec("echo 5").is_err());
-        assert!(client.disconnect().is_err());
-        assert!(client.symlink(Path::new("/a"), Path::new("/b")).is_err());
-        assert!(client.list_dir(Path::new("/tmp")).is_err());
-        assert!(
-            client
-                .create_dir(Path::new("/tmp"), UnixPex::from(0o755))
-                .is_err()
-        );
-        assert!(client.pwd().is_err());
-        assert!(client.remove_dir_all(Path::new("/nowhere")).is_err());
-        assert!(
-            client
-                .mov(Path::new("/nowhere"), Path::new("/culonia"))
-                .is_err()
-        );
-        assert!(client.stat(Path::new("/tmp")).is_err());
-        assert!(
-            client
-                .setstat(Path::new("/tmp"), Metadata::default())
-                .is_err()
-        );
-        assert!(client.open(Path::new("/tmp/pippo.txt")).is_err());
-        assert!(
-            client
-                .create(Path::new("/tmp/pippo.txt"), &Metadata::default())
-                .is_err()
-        );
-        assert!(
-            client
-                .append(Path::new("/tmp/pippo.txt"), &Metadata::default())
+                .set_metadata(path, &SetMetadata::default())
+                .await
                 .is_err()
         );
     }
@@ -1467,23 +779,539 @@ mod test {
 
     #[test]
     fn test_should_be_sync() {
-        let client = AwsS3Fs::new("bucket", &Arc::new(Runtime::new().unwrap()));
-
-        is_sync(client);
+        is_sync(AwsS3Fs::new("bucket"));
     }
 
     #[test]
     fn test_should_be_send() {
-        let client = AwsS3Fs::new("bucket", &Arc::new(Runtime::new().unwrap()));
-
-        is_send(client);
+        is_send(AwsS3Fs::new("bucket"));
     }
 
-    // -- test utils
+    #[test]
+    fn should_be_object_safe() {
+        let _: Box<dyn AsyncRemoteFs> = Box::new(AwsS3Fs::new("bucket"));
+    }
 
-    #[allow(dead_code)]
+    #[test]
+    fn should_initialize_test_logger() {
+        crate::mock::logger();
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_append_to_file() {
+        crate::mock::logger();
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        let mut source = Cursor::new(b"x".to_vec());
+        let error = ctx
+            .client
+            .append_file(&path, &WriteOptions::default(), &mut source)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_copy_file() {
+        let ctx = setup_client().await;
+        let source = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &source, b"test data\n").await.unwrap();
+        let error = ctx
+            .client
+            .copy(&source, &ctx.wrkdir.join("b.txt"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_rename_file() {
+        let ctx = setup_client().await;
+        let source = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &source, b"test data\n").await.unwrap();
+        let error = ctx
+            .client
+            .rename(&source, &ctx.wrkdir.join("b.txt"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_exec_command() {
+        let ctx = setup_client().await;
+        let error = ctx.client.exec("echo 5").await.unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_set_metadata() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        let error = ctx
+            .client
+            .set_metadata(&path, &SetMetadata::default().mode(UnixPex::from(0o755)))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_make_symlink() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        let error = ctx
+            .client
+            .symlink(&ctx.wrkdir.join("b.sh"), &path)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::UnsupportedFeature);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_create_directory() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("mydir");
+        ctx.client
+            .create_dir(&path, Some(UnixPex::from(0o755)))
+            .await
+            .unwrap();
+        assert!(ctx.client.stat(&path).await.unwrap().is_dir());
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_create_directory_cause_already_exists() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("mydir");
+        ctx.client.create_dir(&path, None).await.unwrap();
+        let error = ctx.client.create_dir(&path, None).await.unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::AlreadyExists);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_create_file() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        assert_eq!(
+            upload(&ctx.client, &path, b"test data\n").await.unwrap(),
+            10
+        );
+        assert_eq!(
+            ctx.client.stat(&path).await.unwrap().metadata().size,
+            Some(10)
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_write_empty_file() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("empty.txt");
+        assert_eq!(upload(&ctx.client, &path, b"").await.unwrap(), 0);
+        assert_eq!(
+            ctx.client.stat(&path).await.unwrap().metadata().size,
+            Some(0)
+        );
+        assert!(
+            download(&ctx.client, &path, &ReadOptions::default())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_tell_whether_file_exists() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        assert!(ctx.client.exists(&path).await.unwrap());
+        assert!(!ctx.client.exists(&ctx.wrkdir.join("b.txt")).await.unwrap());
+        assert!(
+            !ctx.client
+                .exists(Path::new("/tmp/ppppp/bhhrhu"))
+                .await
+                .unwrap()
+        );
+        assert!(ctx.client.exists(Path::new("/")).await.unwrap());
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_list_dir() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        let entries = ctx.client.list_dir(&ctx.wrkdir).await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name(), "a.txt");
+        assert_eq!(entries[0].path, path);
+        assert_eq!(entries[0].extension().as_deref(), Some("txt"));
+        assert_eq!(entries[0].metadata().size, Some(10));
+        assert_eq!(entries[0].metadata().mode, None);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_open_file() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        assert_eq!(
+            download(&ctx.client, &path, &ReadOptions::default())
+                .await
+                .unwrap(),
+            b"test data\n"
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_read_ranges() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("ranges.txt");
+        upload(&ctx.client, &path, b"0123456789").await.unwrap();
+        assert_eq!(
+            download(
+                &ctx.client,
+                &path,
+                &ReadOptions::default().offset(2).length(3)
+            )
+            .await
+            .unwrap(),
+            b"234"
+        );
+        assert_eq!(
+            download(&ctx.client, &path, &ReadOptions::default().offset(7))
+                .await
+                .unwrap(),
+            b"789"
+        );
+        assert!(
+            download(&ctx.client, &path, &ReadOptions::default().length(0))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            download(
+                &ctx.client,
+                &path,
+                &ReadOptions::default().offset(2).length(0)
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            download(&ctx.client, &path, &ReadOptions::default().offset(10))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            download(&ctx.client, &path, &ReadOptions::default().offset(100))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            download(
+                &ctx.client,
+                &path,
+                &ReadOptions::default().offset(8).length(50)
+            )
+            .await
+            .unwrap(),
+            b"89"
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_write_big_data() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("large.bin");
+        let data = vec![1_u8; PART_SIZE * 2 + 1];
+        assert_eq!(
+            upload(&ctx.client, &path, &data).await.unwrap(),
+            data.len() as u64
+        );
+        assert_eq!(
+            download(&ctx.client, &path, &ReadOptions::default())
+                .await
+                .unwrap()
+                .len(),
+            data.len()
+        );
+        assert_eq!(
+            ctx.client.stat(&path).await.unwrap().metadata().size,
+            Some(data.len() as u64)
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_stream_write_and_finish() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("stream.txt");
+        let mut stream = ctx
+            .client
+            .create(&path, &WriteOptions::default())
+            .await
+            .unwrap();
+        stream.write_all(b"hello ").await.unwrap();
+        stream.write_all(b"world").await.unwrap();
+        stream.flush().await.unwrap();
+        stream.finish().await.unwrap();
+        assert_eq!(
+            download(&ctx.client, &path, &ReadOptions::default())
+                .await
+                .unwrap(),
+            b"hello world"
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_abandon_dropped_write_stream() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("abandoned.txt");
+        let mut stream = ctx
+            .client
+            .create(&path, &WriteOptions::default())
+            .await
+            .unwrap();
+        stream.write_all(b"never").await.unwrap();
+        drop(stream);
+        assert!(!ctx.client.exists(&path).await.unwrap());
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_stream_read_and_finish() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("stream.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        let mut stream = ctx
+            .client
+            .open(&path, &ReadOptions::default())
+            .await
+            .unwrap();
+        assert!(!stream.seekable());
+        let mut output = Vec::new();
+        stream.read_to_end(&mut output).await.unwrap();
+        stream.finish().await.unwrap();
+        assert_eq!(output, b"test data\n");
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_open_file() {
+        let ctx = setup_client().await;
+        let error = ctx
+            .client
+            .open(&ctx.wrkdir.join("missing"), &ReadOptions::default())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::NoSuchFileOrDirectory);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_remove_dir_all() {
+        let ctx = setup_client().await;
+        let directory = ctx.wrkdir.join("test");
+        let nested = directory.join("nested");
+        ctx.client.create_dir(&directory, None).await.unwrap();
+        upload(&ctx.client, &directory.join("a.txt"), b"a")
+            .await
+            .unwrap();
+        ctx.client.create_dir(&nested, None).await.unwrap();
+        upload(&ctx.client, &nested.join("b.txt"), b"b")
+            .await
+            .unwrap();
+        ctx.client.remove_dir_all(&directory).await.unwrap();
+        assert!(!ctx.client.exists(&directory).await.unwrap());
+        assert!(!ctx.client.exists(&nested.join("b.txt")).await.unwrap());
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_remove_dir() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("test");
+        ctx.client.create_dir(&path, None).await.unwrap();
+        ctx.client.remove_dir(&path).await.unwrap();
+        assert!(!ctx.client.exists(&path).await.unwrap());
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_remove_dir() {
+        let ctx = setup_client().await;
+        let error = ctx
+            .client
+            .remove_dir(&ctx.wrkdir.join("missing"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::NoSuchFileOrDirectory);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_remove_non_empty_dir() {
+        let ctx = setup_client().await;
+        let directory = ctx.wrkdir.join("test");
+        ctx.client.create_dir(&directory, None).await.unwrap();
+        upload(&ctx.client, &directory.join("a.txt"), b"a")
+            .await
+            .unwrap();
+        let error = ctx.client.remove_dir(&directory).await.unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::DirectoryNotEmpty);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_remove_file() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.txt");
+        upload(&ctx.client, &path, b"test data\n").await.unwrap();
+        ctx.client.remove_file(&path).await.unwrap();
+        assert_eq!(
+            ctx.client.stat(&path).await.unwrap_err().kind(),
+            RemoteErrorType::NoSuchFileOrDirectory
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_remove_missing_file() {
+        let ctx = setup_client().await;
+        let error = ctx
+            .client
+            .remove_file(&ctx.wrkdir.join("missing"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::NoSuchFileOrDirectory);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_stat_file() {
+        let ctx = setup_client().await;
+        let path = ctx.wrkdir.join("a.sh");
+        upload(&ctx.client, &path, b"#!/bin\n").await.unwrap();
+        let file = ctx.client.stat(&path).await.unwrap();
+        assert_eq!(file.name(), "a.sh");
+        assert_eq!(file.path(), path.as_path());
+        assert_eq!(file.metadata().size, Some(7));
+        assert!(file.is_file());
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_stat_file() {
+        let ctx = setup_client().await;
+        let error = ctx.client.stat(&ctx.wrkdir.join("a.sh")).await.unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::NoSuchFileOrDirectory);
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    #[tokio::test]
+    async fn should_not_connect_twice() {
+        let mut ctx = setup_client().await;
+        assert_eq!(
+            ctx.client.connect().await.unwrap_err().kind(),
+            RemoteErrorType::AlreadyConnected
+        );
+        finalize_client(ctx).await;
+    }
+
+    #[cfg(all(feature = "with-containers", feature = "tokio"))]
+    #[test]
+    fn should_work_through_block_on_adapter() {
+        use std::io::Cursor as StdCursor;
+
+        use remotefs::RemoteFs as _;
+
+        crate::mock::logger();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let ctx = runtime.block_on(setup_client());
+        let Ctx {
+            client,
+            wrkdir,
+            container: _container,
+        } = ctx;
+        let blocking = client.into_blocking(runtime.handle().clone());
+        let path = wrkdir.join("blocking.txt");
+        let mut source = StdCursor::new(b"blocking".to_vec());
+        assert_eq!(
+            blocking
+                .write_file(&path, &WriteOptions::default().size_hint(8), &mut source)
+                .unwrap(),
+            8
+        );
+        let mut destination = StdCursor::new(Vec::new());
+        assert_eq!(
+            blocking
+                .read_file(&path, &ReadOptions::default(), &mut destination)
+                .unwrap(),
+            8
+        );
+        assert_eq!(destination.into_inner(), b"blocking");
+        assert!(blocking.remove_dir_all(&wrkdir).is_ok());
+        let mut client = blocking.into_inner();
+        assert!(runtime.block_on(client.disconnect()).is_ok());
+        runtime.block_on(async {
+            drop(_container);
+        });
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     struct Ctx {
         client: AwsS3Fs,
+        /// Absolute working directory created for the test.
+        wrkdir: PathBuf,
         #[cfg(feature = "with-containers")]
         container: Minio,
         #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
@@ -1491,91 +1319,92 @@ mod test {
     }
 
     #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
-    fn setup_client() -> Ctx {
-        // Get transfer
+    async fn setup_client() -> Ctx {
         let bucket = env!("AWS_S3_BUCKET");
-        let mut client = AwsS3Fs::new(bucket, &Arc::new(Runtime::new().unwrap()));
-        assert!(client.connect().is_ok());
-        // Create wrkdir
-        let tempdir = PathBuf::from(generate_tempdir());
-        assert!(
-            client
-                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Change directory
-        let err = client.change_dir(tempdir.as_path());
-        if err.is_err() {
-            println!("Error: {:?}", err);
-        }
-        assert!(client.change_dir(tempdir.as_path()).is_ok());
+        let mut client = AwsS3Fs::new(bucket);
+        assert!(client.connect().await.is_ok());
+        let wrkdir = PathBuf::from(generate_tempdir());
+        client
+            .create_dir(wrkdir.as_path(), None)
+            .await
+            .expect("could not create test directory");
         Ctx {
             client,
+            wrkdir,
             container: (),
         }
     }
 
     #[cfg(feature = "with-containers")]
-    fn setup_client() -> Ctx {
-        let minio = Minio::start();
-        let port = minio.port();
-
-        // Get transfer
-        let runtime = Arc::new(Runtime::new().expect("Could not create runtime"));
-        let mut client = AwsS3Fs::new("github-ci", &runtime)
+    async fn setup_client() -> Ctx {
+        let minio = Minio::start().await;
+        let port = minio.port().await;
+        let mut client = AwsS3Fs::new("github-ci")
             .endpoint(format!("http://localhost:{port}"))
             .access_key("minioadmin")
             .secret_access_key("minioadmin")
             .new_path_style(true);
-
-        // connect
-        assert!(client.connect().is_ok());
-
-        // Create bucket manually
-        let fut = client
+        assert!(client.connect().await.is_ok());
+        client
             .client()
             .unwrap()
             .create_bucket()
             .bucket("github-ci")
-            .send();
-        let res = runtime.block_on(fut);
-
-        assert!(res.is_ok());
-
-        // Create wrkdir
-        let tempdir = PathBuf::from(generate_tempdir());
-        assert!(
-            client
-                .create_dir(tempdir.as_path(), UnixPex::from(0o775))
-                .is_ok()
-        );
-        // Change directory
-        assert!(client.change_dir(tempdir.as_path()).is_ok());
+            .send()
+            .await
+            .expect("could not create bucket");
+        let wrkdir = PathBuf::from(generate_tempdir());
+        client
+            .create_dir(wrkdir.as_path(), None)
+            .await
+            .expect("could not create test directory");
         Ctx {
             client,
+            wrkdir,
             container: minio,
         }
     }
 
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
-    fn finalize_client(mut client: AwsS3Fs) {
-        // Get working directory
-        let wrkdir = client.pwd().ok().unwrap();
-        // Remove directory
-        assert!(client.remove_dir_all(wrkdir.as_path()).is_ok());
-        assert!(client.disconnect().is_ok());
+    async fn finalize_client(ctx: Ctx) {
+        let Ctx {
+            mut client,
+            wrkdir,
+            container: _container,
+        } = ctx;
+        match client.remove_dir_all(wrkdir.as_path()).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == RemoteErrorType::NoSuchFileOrDirectory => {}
+            Err(error) => panic!("could not finalize test directory: {error:?}"),
+        }
+        assert!(client.disconnect().await.is_ok());
     }
 
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     fn generate_tempdir() -> String {
         use rand::distr::Alphanumeric;
         use rand::{RngExt as _, rng};
+
         let mut rng = rng();
         let name: String = std::iter::repeat(())
             .map(|()| rng.sample(Alphanumeric))
             .map(char::from)
             .take(8)
             .collect();
-        format!("/github-ci/temp_{}/", name)
+        format!("/github-ci/temp_{name}/")
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    async fn upload(client: &AwsS3Fs, path: &Path, data: &[u8]) -> RemoteResult<u64> {
+        let opts = WriteOptions::default().size_hint(data.len() as u64);
+        let mut source = Cursor::new(data.to_vec());
+        client.write_file(path, &opts, &mut source).await
+    }
+
+    #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
+    async fn download(client: &AwsS3Fs, path: &Path, opts: &ReadOptions) -> RemoteResult<Vec<u8>> {
+        let mut destination = Cursor::new(Vec::new());
+        client.read_file(path, opts, &mut destination).await?;
+        Ok(destination.into_inner())
     }
 }

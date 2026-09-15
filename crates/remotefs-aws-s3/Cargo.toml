@@ -1,6 +1,6 @@
 [package]
 name = "remotefs-aws-s3"
-version = "0.4.4"
+version = "1.0.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-aws-s3"
@@ -14,32 +14,39 @@ repository = "https://github.com/remotefs-rs/remotefs-rs-aws-s3"
 rust-version = "1.94.1"
 description = "remotefs Aws S3 client library"
 
+[package.metadata.docs.rs]
+features = ["tokio"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dependencies]
 aws-config = "1"
 aws-credential-types = "1"
 aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
-log = "^0.4"
-remotefs = "^0.3"
-thiserror = "2"
-tokio = { version = "1", features = ["fs", "rt"] }
+aws-smithy-types = { version = ">=1, <1.7.0", features = ["byte-stream-poll-next"] }
+bytes = "1"
+futures-io = "0.3"
+log = "0.4"
+remotefs = { version = "1", features = ["async"] }
+tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
-env_logger = "^0.11"
-pretty_assertions = "^1"
+env_logger = "0.11"
+futures = "0.3"
+pretty_assertions = "1"
 rand = "0.10"
-tempfile = "^3"
-testcontainers = { version = "0.28", features = ["blocking"] }
+testcontainers = "0.28"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 
 [features]
 default = ["find"]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
+tokio = ["remotefs/tokio"]
 # tests
-github-actions = []
-with-s3-ci = []
 with-containers = []
+with-s3-ci = []
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
-path-slash = "^0.2"
+path-slash = "0.2"
