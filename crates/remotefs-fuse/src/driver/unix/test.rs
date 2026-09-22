@@ -73,8 +73,8 @@ fn setup_driver_with_uid(uid: u32, gid: u32) -> Driver<MemoryFs> {
     ));
 
     let mut fs = MemoryFs::new(tree)
-        .with_get_gid(move || uid)
-        .with_get_uid(move || gid);
+        .with_get_gid(move || gid)
+        .with_get_uid(move || uid);
 
     fs.connect().expect("Failed to connect");
     assert!(fs.is_connected());

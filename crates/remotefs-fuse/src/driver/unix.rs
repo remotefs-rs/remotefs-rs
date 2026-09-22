@@ -343,7 +343,7 @@ where
     fn get_inode_from_path(&mut self, path: &Path) -> RemoteResult<(File, FileAttr)> {
         let inode = self.state.database.inode_for(path);
         let (file, attrs) = self.remote.stat(path).map(|file| {
-            let attrs = convert_file(&file, inode);
+            let attrs = convert_file(&file, inode, self.state.uid(), self.state.gid());
             (file, attrs)
         })?;
 

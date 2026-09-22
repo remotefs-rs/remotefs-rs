@@ -22,6 +22,79 @@ pub(crate) const BLOCK_SIZE: usize = 512;
 pub(crate) const FMODE_EXEC: c_int = 0x20;
 pub(crate) const ROOT_UID: u32 = 0;
 
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use pretty_assertions::assert_eq;
+    use remotefs::File;
+    use remotefs::fs::Metadata;
+
+    use super::convert_file;
+
+    #[test]
+    fn test_convert_file_should_apply_uid_and_gid_overrides() {
+        let file = File::new(
+            PathBuf::from("/remote.txt"),
+            Metadata::default().uid(1002).gid(1003),
+        );
+
+        let attrs = convert_file(&file, 7, Some(1000), Some(1001));
+
+        assert_eq!(attrs.uid, 1000);
+        assert_eq!(attrs.gid, 1001);
+    }
+
+    #[test]
+    fn test_convert_file_should_apply_uid_override_independently() {
+        let file = File::new(
+            PathBuf::from("/remote.txt"),
+            Metadata::default().uid(1002).gid(1003),
+        );
+
+        let attrs = convert_file(&file, 7, Some(1000), None);
+
+        assert_eq!(attrs.uid, 1000);
+        assert_eq!(attrs.gid, 1003);
+    }
+
+    #[test]
+    fn test_convert_file_should_apply_gid_override_independently() {
+        let file = File::new(
+            PathBuf::from("/remote.txt"),
+            Metadata::default().uid(1002).gid(1003),
+        );
+
+        let attrs = convert_file(&file, 7, None, Some(1001));
+
+        assert_eq!(attrs.uid, 1002);
+        assert_eq!(attrs.gid, 1001);
+    }
+
+    #[test]
+    fn test_convert_file_should_preserve_remote_ids_without_overrides() {
+        let file = File::new(
+            PathBuf::from("/remote.txt"),
+            Metadata::default().uid(1002).gid(1003),
+        );
+
+        let attrs = convert_file(&file, 7, None, None);
+
+        assert_eq!(attrs.uid, 1002);
+        assert_eq!(attrs.gid, 1003);
+    }
+
+    #[test]
+    fn test_convert_file_should_default_missing_ids_to_zero() {
+        let file = File::new(PathBuf::from("/remote.txt"), Metadata::default());
+
+        let attrs = convert_file(&file, 7, None, None);
+
+        assert_eq!(attrs.uid, 0);
+        assert_eq!(attrs.gid, 0);
+    }
+}
+
 /// Convert a remote file type to a FUSE file type.
 pub(crate) fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileType {
     match filetype {
@@ -32,8 +105,13 @@ pub(crate) fn convert_remote_filetype(filetype: remotefs::fs::FileType) -> FileT
     }
 }
 
-/// Convert a remote file to FUSE attributes using `inode`.
-pub(crate) fn convert_file(value: &File, inode: Inode) -> FileAttr {
+/// Convert a remote file to FUSE attributes using `inode` and ownership overrides.
+pub(crate) fn convert_file(
+    value: &File,
+    inode: Inode,
+    uid: Option<u32>,
+    gid: Option<u32>,
+) -> FileAttr {
     let size = value.metadata().size.unwrap_or(0);
     FileAttr {
         ino: fuser::INodeNo(inode),
@@ -50,8 +128,8 @@ pub(crate) fn convert_file(value: &File, inode: Inode) -> FileAttr {
             .map(|mode| u32::from(mode) as u16)
             .unwrap_or(0o777),
         nlink: 0,
-        uid: value.metadata().uid.unwrap_or(0),
-        gid: value.metadata().gid.unwrap_or(0),
+        uid: uid.or(value.metadata().uid).unwrap_or(0),
+        gid: gid.or(value.metadata().gid).unwrap_or(0),
         rdev: 0,
         blksize: BLOCK_SIZE as u32,
         flags: 0,

@@ -108,7 +108,11 @@ where
     pub(super) async fn get_inode_from_path(&self, path: &Path) -> RemoteResult<(File, FileAttr)> {
         let inode = { self.state().database.inode_for(path) };
         let file = self.remote.read().await.stat(path).await?;
-        let attrs = convert_file(&file, inode);
+        let (uid, gid) = {
+            let state = self.state();
+            (state.uid(), state.gid())
+        };
+        let attrs = convert_file(&file, inode, uid, gid);
         Ok((file, attrs))
     }
 
