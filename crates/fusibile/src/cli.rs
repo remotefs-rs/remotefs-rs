@@ -52,11 +52,11 @@ pub struct CliArgs {
     #[cfg(unix)]
     #[arg(long)]
     pub volume: String,
-    /// uid to use for the mounted filesystem
+    /// Local uid presented as the owner of mounted files
     #[cfg(unix)]
     #[arg(long)]
     pub uid: Option<u32>,
-    /// gid to use for the mounted filesystem
+    /// Local gid presented as the group of mounted files
     #[arg(long)]
     #[cfg(unix)]
     pub gid: Option<u32>,

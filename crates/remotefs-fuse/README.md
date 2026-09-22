@@ -228,16 +228,23 @@ async fn main() -> std::io::Result<()> {
 
 > ❗ This doesn't apply to Windows.
 
-The possibility to override UID and GID is used because sometimes this scenario can happen:
+The UID and GID overrides make remote entries appear to be owned by local
+identities. They are useful when, for example:
 
-1. my UID is `1000`
-2. I'm mounting for instance a SFTP file system and the remote user I used to sign in has UID `1002`
-3. I'm unable to operate on the file system because UID `1000` can't operate to files owned by `1002`
+1. your local UID is `1000`;
+2. the SFTP account owns remote files as UID `1002`; and
+3. local requests from UID `1000` would otherwise be checked against UID
+   `1002`.
 
-But of course this doesn't make sense: I signed in with user who owns those files, so I should be able to operate on them.
-That's why I've added `Uid` and `Gid` into the `MountOption` variant.
+Pass the local IDs that should own the mounted entries:
 
-Setting the `Uid` option to `1002` you'll be able to operate on the File system as it should.
+```sh
+--uid "$(id -u)" --gid "$(id -g)"
+```
+
+In this example, `--uid` resolves to `1000`, not the remote UID `1002`. The
+overrides affect ownership presented by the mount and its permission checks;
+they do not change ownership on the remote filesystem.
 
 ## Project stability
 

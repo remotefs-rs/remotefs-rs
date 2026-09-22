@@ -10,18 +10,18 @@ use std::str::FromStr;
 pub enum MountOption {
     /* nix driver */
     #[cfg(unix)]
-    /// Treat all files as if they are owned by the given user.
-    /// This flag can be useful when mounting for instance sftp volumes,
-    /// where the uid/gid of the files may be different from the user mounting the filesystem.
-    /// This doesn't change the ownership of the files, but allows the user to access them.
-    /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
+    /// Present every mounted entry as owned by the given local user.
+    ///
+    /// This option bridges different numeric user IDs on the local and remote
+    /// systems. It changes neither remote ownership nor the credentials used by
+    /// the remote backend, which can still reject an operation.
     Uid(u32),
     #[cfg(unix)]
-    /// Treat all files as if they are owned by the given group.
-    /// This flag can be useful when mounting for instance sftp volumes,
-    /// where the uid/gid of the files may be different from the group mounting the filesystem.
-    /// This doesn't change the ownership of the files, but allows the user to access them.
-    /// Of course, if the signed in user doesn't have the right permissions, the files will still be inaccessible.
+    /// Present every mounted entry as owned by the given local group.
+    ///
+    /// This option bridges different numeric group IDs on the local and remote
+    /// systems. It changes neither remote ownership nor the credentials used by
+    /// the remote backend, which can still reject an operation.
     Gid(u32),
     #[cfg(unix)]
     /// Set the default file mode in case the filesystem doesn't provide one
