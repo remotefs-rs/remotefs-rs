@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use remotefs::{RemoteError, RemoteErrorType, RemoteResult};
-use ssh2_config::{DefaultAlgorithms, HostParams, ParseRule, SshConfig};
+use ssh2_config::{DefaultAlgorithms, HostParams, SshConfig};
 
 use super::SshOpts;
 
@@ -46,8 +46,10 @@ impl Config {
         }
     }
 
-    /// Parse config at `p` and get params for `host`
-    fn parse(p: &Path, host: &str, rules: ParseRule) -> RemoteResult<HostParams> {
+    /// Parse config at `p` and get params for `host`.
+    ///
+    /// Parse rules and home directory are taken from `opts`.
+    fn parse(p: &Path, host: &str, opts: &SshOpts) -> RemoteResult<HostParams> {
         trace!("Parsing configuration at {}", p.display());
         let mut reader = BufReader::new(File::open(p).map_err(|e| {
             RemoteError::with_message(
@@ -55,8 +57,12 @@ impl Config {
                 format!("Could not open configuration file: {e}"),
             )
         })?);
-        SshConfig::default()
-            .parse(&mut reader, rules)
+        let mut config = SshConfig::default();
+        if let Some(home_dir) = opts.home_dir.as_deref() {
+            config = config.home_dir(home_dir);
+        }
+        config
+            .parse(&mut reader, opts.parse_rules)
             .map_err(|e| {
                 RemoteError::with_message(
                     RemoteErrorType::IoError,
@@ -132,7 +138,7 @@ impl Config {
             .map(|proxy_jump| {
                 let spec = ProxyJumpSpec::parse(proxy_jump)?;
                 let mut params = if let Some(config_file) = opts.config_file.as_deref() {
-                    Self::parse(config_file, &spec.host, opts.parse_rules)?
+                    Self::parse(config_file, &spec.host, opts)?
                 } else {
                     HostParams::new(&DefaultAlgorithms::default())
                 };
@@ -238,7 +244,7 @@ impl TryFrom<&SshOpts> for Config {
 
     fn try_from(opts: &SshOpts) -> Result<Self, Self::Error> {
         if let Some(p) = opts.config_file.as_deref() {
-            let params = Self::parse(p, opts.host.as_str(), opts.parse_rules)?;
+            let params = Self::parse(p, opts.host.as_str(), opts)?;
             Ok(Self::from_params(params, opts))
         } else {
             let params = HostParams::new(&DefaultAlgorithms::default());
@@ -250,8 +256,10 @@ impl TryFrom<&SshOpts> for Config {
 #[cfg(test)]
 mod test {
     use std::io::Write as _;
+    use std::path::PathBuf;
 
     use pretty_assertions::{assert_eq, assert_ne};
+    use ssh2_config::ParseRule;
     use tempfile::NamedTempFile;
 
     use super::*;
@@ -329,6 +337,68 @@ mod test {
         assert_ne!(
             config.params,
             HostParams::new(&DefaultAlgorithms::default())
+        );
+    }
+
+    #[test]
+    fn should_expand_tilde_with_custom_home_dir() {
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host target\n    IdentityFile ~/.ssh/id_custom"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("target")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .home_dir("/custom/home");
+
+        let config = Config::try_from(&opts).expect("failed to parse SSH config");
+
+        assert_eq!(
+            config.params.identity_file,
+            Some(vec![PathBuf::from("/custom/home/.ssh/id_custom")])
+        );
+    }
+
+    #[test]
+    fn should_resolve_relative_include_against_custom_home_dir() {
+        let home = tempfile::tempdir().expect("failed to create home dir");
+        let ssh_dir = home.path().join(".ssh");
+        std::fs::create_dir(&ssh_dir).expect("failed to create .ssh dir");
+        std::fs::write(ssh_dir.join("extra"), "Host target\n    Port 2200\n")
+            .expect("failed to write included config");
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(config_file, "Include extra").expect("failed to write SSH config");
+        let opts = SshOpts::new("target")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .home_dir(home.path());
+
+        let config = Config::try_from(&opts).expect("failed to parse SSH config");
+
+        assert_eq!(config.port, 2200);
+    }
+
+    #[test]
+    fn should_use_custom_home_dir_for_proxy_jump_hosts() {
+        let mut config_file = NamedTempFile::new().expect("failed to create SSH config");
+        writeln!(
+            config_file,
+            "Host target\n    ProxyJump jump\nHost jump\n    IdentityFile ~/.ssh/id_jump"
+        )
+        .expect("failed to write SSH config");
+        let opts = SshOpts::new("target")
+            .config_file(config_file.path(), ParseRule::STRICT)
+            .home_dir("/custom/home");
+        let config = Config::try_from(&opts).expect("failed to parse SSH config");
+
+        let jumps = config
+            .proxy_jump_configs(&opts)
+            .expect("failed to resolve proxy jumps");
+
+        assert_eq!(jumps.len(), 1);
+        assert_eq!(
+            jumps[0].params.identity_file,
+            Some(vec![PathBuf::from("/custom/home/.ssh/id_jump")])
         );
     }
 

@@ -117,6 +117,8 @@ pub struct SshOpts {
     methods: Vec<KeyMethod>,
     /// Ssh config parser ruleset
     parse_rules: ParseRule,
+    /// Home directory used by the ssh config parser. If `None`, the parser resolves it itself.
+    home_dir: Option<PathBuf>,
     /// Ssh agent configuration for authentication
     ssh_agent_identity: Option<SshAgentIdentity>,
 }
@@ -138,6 +140,7 @@ impl SshOpts {
             key_storage: None,
             methods: Vec::default(),
             parse_rules: ParseRule::STRICT,
+            home_dir: None,
             ssh_agent_identity: None,
         }
     }
@@ -218,6 +221,30 @@ impl SshOpts {
     pub fn config_file<P: AsRef<Path>>(mut self, p: P, rules: ParseRule) -> Self {
         self.config_file = Some(p.as_ref().to_path_buf());
         self.parse_rules = rules;
+        self
+    }
+
+    /// Set the home directory used to parse the SSH configuration file
+    ///
+    /// The home directory is used to expand `~` and to resolve relative `Include` paths
+    /// against `<home>/.ssh`. If this method is not called, the home directory of the
+    /// current user is used.
+    ///
+    /// This option has an effect only if a configuration file is set with [`SshOpts::config_file`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    ///
+    /// use remotefs_ssh::{SshConfigParseRule, SshOpts};
+    ///
+    /// let opts = SshOpts::new("my-server")
+    ///     .config_file(Path::new("/home/alice/.ssh/config"), SshConfigParseRule::STRICT)
+    ///     .home_dir(Path::new("/home/alice"));
+    /// ```
+    pub fn home_dir<P: AsRef<Path>>(mut self, p: P) -> Self {
+        self.home_dir = Some(p.as_ref().to_path_buf());
         self
     }
 
@@ -307,6 +334,7 @@ mod test {
         assert!(opts.password.is_none());
         assert!(opts.connection_timeout.is_none());
         assert!(opts.config_file.is_none());
+        assert!(opts.home_dir.is_none());
         assert!(opts.key_storage.is_none());
         assert!(opts.methods.is_empty());
     }
@@ -319,6 +347,7 @@ mod test {
             .password("qwerty123")
             .connection_timeout(Duration::from_secs(10))
             .config_file(Path::new("/home/pippo/.ssh/config"), ParseRule::STRICT)
+            .home_dir(Path::new("/home/pippo"))
             .key_storage(Box::new(MockSshKeyStorage::default()))
             .method(KeyMethod::new(
                 MethodType::CryptClientServer,
@@ -339,6 +368,7 @@ mod test {
             opts.config_file.as_deref().unwrap(),
             Path::new("/home/pippo/.ssh/config")
         );
+        assert_eq!(opts.home_dir.as_deref().unwrap(), Path::new("/home/pippo"));
         assert!(opts.key_storage.is_some());
         assert_eq!(opts.methods.len(), 1);
     }
