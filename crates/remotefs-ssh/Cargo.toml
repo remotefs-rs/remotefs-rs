@@ -53,12 +53,12 @@ libssh-rs = { version = "0.3", optional = true }
 log = "0.4"
 openssl = { version = "0.10", optional = true }
 remotefs = "1"
-russh = { version = "0.63", optional = true }
-russh-sftp = { version = "2", optional = true }
+russh = { version = "0.64", optional = true }
+russh-sftp = { version = "3", optional = true }
 socket2 = { version = "0.6", optional = true }
 ssh-key = { version = "0.7.0-rc.11", optional = true }
 ssh2 = { version = "0.9", optional = true }
-ssh2-config = "0.8"
+ssh2-config = "0.9"
 tokio = { version = "1", default-features = false, features = ["io-util", "net", "rt", "time"], optional = true }
 
 [dev-dependencies]
