@@ -590,7 +590,7 @@ mod test {
 
     use super::*;
     #[cfg(feature = "with-containers")]
-    use crate::mock::container::Minio;
+    use crate::mock::container::{self, RustFs};
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use crate::stream::write::PART_SIZE;
 
@@ -1313,7 +1313,7 @@ mod test {
         /// Absolute working directory created for the test.
         wrkdir: PathBuf,
         #[cfg(feature = "with-containers")]
-        container: Minio,
+        container: RustFs,
         #[cfg(all(feature = "with-s3-ci", not(feature = "with-containers")))]
         container: (),
     }
@@ -1337,12 +1337,12 @@ mod test {
 
     #[cfg(feature = "with-containers")]
     async fn setup_client() -> Ctx {
-        let minio = Minio::start().await;
-        let port = minio.port().await;
+        let rustfs = RustFs::start().await;
+        let port = rustfs.port();
         let mut client = AwsS3Fs::new("github-ci")
-            .endpoint(format!("http://localhost:{port}"))
-            .access_key("minioadmin")
-            .secret_access_key("minioadmin")
+            .endpoint(format!("http://127.0.0.1:{port}"))
+            .access_key(container::ACCESS_KEY)
+            .secret_access_key(container::SECRET_KEY)
             .new_path_style(true);
         assert!(client.connect().await.is_ok());
         client
@@ -1361,7 +1361,7 @@ mod test {
         Ctx {
             client,
             wrkdir,
-            container: minio,
+            container: rustfs,
         }
     }
 

@@ -27,7 +27,7 @@
 //! | `find` | Enable the remotefs `find_async()` function. | ✔ |
 //! | `no-log` | Disable logging through the `log` crate. | |
 //! | `tokio` | Enable `BlockingAwsS3Fs` and `AwsS3Fs::into_blocking`. | |
-//! | `with-containers` | Enable MinIO-backed integration tests. | |
+//! | `with-containers` | Enable RustFS-backed integration tests. | |
 //! | `with-s3-ci` | Enable tests against a configured S3 bucket. | |
 //!
 //! ### AWS S3 client
