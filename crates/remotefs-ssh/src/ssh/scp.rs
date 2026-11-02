@@ -19,6 +19,7 @@ use remotefs::path::ensure_absolute;
 use self::shell::StatFlavor;
 use super::SshOpts;
 use crate::SshSession;
+use crate::utils::path as path_utils;
 
 pub(crate) mod shell;
 
@@ -271,7 +272,7 @@ where
                 format!("Failed to stat file: {line}", line = line.trim()),
             ));
         }
-        let parent = path.parent().unwrap_or(path);
+        let parent = path_utils::parent(path).unwrap_or(path);
         let mut entry = shell::parse_ls_line(parent, line.trim())
             .ok_or_else(|| RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))?;
         if let Some(mtime) = self.mtime_epoch(path) {

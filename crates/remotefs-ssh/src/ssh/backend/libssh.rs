@@ -28,6 +28,7 @@ use crate::ssh::backend::{Sftp, WriteMode};
 use crate::ssh::config::Config;
 use crate::ssh::scp::shell;
 use crate::ssh::stream::RangedRead;
+use crate::utils::path as path_utils;
 
 /// An implementation of [`SshSession`] using libssh as the backend.
 ///
@@ -1041,12 +1042,20 @@ enum MakePath<'a> {
     File(&'a Path),
 }
 
+/// Builds the remote path of the entry `name`, always with `/` separators.
+///
+/// A listed entry is joined with `/` to its directory, which is kept as is
+/// since libssh sends it to the server unchanged; a stat path is kept as is.
+fn make_path(path: MakePath<'_>, name: &str) -> PathBuf {
+    match path {
+        MakePath::Directory(dir) => path_utils::join_with(dir.as_os_str(), name.as_ref(), false),
+        MakePath::File(file) => file.to_path_buf(),
+    }
+}
+
 fn make_fsentry(sftp: &libssh_rs::Sftp, path: MakePath<'_>, metadata: libssh_rs::Metadata) -> File {
     let name = metadata.name().unwrap_or("/");
-    let path = match path {
-        MakePath::Directory(dir) => dir.join(name),
-        MakePath::File(file) => file.to_path_buf(),
-    };
+    let path = make_path(path, name);
     let symlink = match metadata.file_type() {
         Some(libssh_rs::FileType::Symlink) => match sftp.read_link(conv_path_to_str(&path)) {
             Ok(target) => Some(PathBuf::from(target)),
@@ -1586,6 +1595,28 @@ mod tests {
         assert_eq!(mapped.kind(), RemoteErrorType::StatFailed);
         assert!(std::error::Error::source(&mapped).is_some());
         assert!(sftp_status(&libssh_rs::Error::TryAgain).is_none());
+    }
+
+    #[test]
+    fn should_make_entry_paths_with_forward_slashes() {
+        for (path, name, expected) in [
+            (
+                MakePath::Directory(Path::new(r"/srv/a\b")),
+                "files",
+                r"/srv/a\b/files",
+            ),
+            (
+                MakePath::File(Path::new("/srv/files")),
+                "files",
+                "/srv/files",
+            ),
+        ] {
+            assert_eq!(
+                make_path(path, name).to_str(),
+                Some(expected),
+                "make_path(.., {name:?})"
+            );
+        }
     }
 
     #[test]

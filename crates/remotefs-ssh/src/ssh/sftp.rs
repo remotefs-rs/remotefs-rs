@@ -15,6 +15,7 @@ use remotefs::path::ensure_absolute;
 use super::SshOpts;
 use crate::SshSession;
 use crate::ssh::backend::{Sftp as _, WriteMode};
+use crate::utils::path as path_utils;
 
 /// Mode applied to directories created without an explicit mode.
 const DEFAULT_DIR_MODE: i32 = 0o755;
@@ -143,7 +144,7 @@ where
         if src_file.is_dir() {
             sftp.mkdir(dest, Self::mode(src_file.metadata().mode, DEFAULT_DIR_MODE))?;
             for entry in sftp.readdir(src)? {
-                let name = entry.path().file_name().ok_or_else(|| {
+                let child_dest = path_utils::child_path(dest, entry.path()).ok_or_else(|| {
                     RemoteError::with_message(
                         RemoteErrorType::BadFile,
                         format!(
@@ -152,7 +153,7 @@ where
                         ),
                     )
                 })?;
-                Self::copy_recursive(sftp, entry.path(), &dest.join(name))?;
+                Self::copy_recursive(sftp, entry.path(), &child_dest)?;
             }
             return Ok(());
         }

@@ -29,6 +29,7 @@ use super::{MAX_FORWARD_CONNECTIONS, WriteMode, interface, socket};
 use crate::SshOpts;
 use crate::ssh::config::Config;
 use crate::ssh::key_method::MethodType;
+use crate::utils::path as path_utils;
 
 /// The default SSH client handler for russh.
 ///
@@ -1603,7 +1604,9 @@ impl RusshSftp {
             .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))?;
         let mut files = Vec::new();
         for entry in entries {
-            let entry_path = dirname.join(entry.file_name());
+            // `dirname` is kept as is, as it was sent to the server.
+            let entry_path =
+                path_utils::join_with(dirname.as_os_str(), entry.file_name().as_ref(), false);
             let symlink = if entry.file_type().is_symlink() {
                 self.read_link(&entry_path).await
             } else {

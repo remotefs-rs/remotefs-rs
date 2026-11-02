@@ -244,6 +244,59 @@ fn should_copy_symlinks_and_reject_overlapping_destinations() {
 }
 
 #[test]
+fn should_copy_directory_tree_into_child_paths() {
+    let ctx = setup();
+    let source_dir = ctx.path("source");
+    let nested_dir = source_dir.join("nested");
+    let destination = ctx.path("destination");
+    ctx.runtime.block_on(async {
+        ctx.client.create_dir(&source_dir, None).await.unwrap();
+        ctx.client.create_dir(&nested_dir, None).await.unwrap();
+        write(&ctx.client, &source_dir.join("a.txt"), b"alpha").await;
+        write(&ctx.client, &nested_dir.join("b.txt"), b"beta").await;
+
+        ctx.client.copy(&source_dir, &destination).await.unwrap();
+
+        assert_eq!(
+            read(
+                &ctx.client,
+                &destination.join("a.txt"),
+                &ReadOptions::default()
+            )
+            .await,
+            b"alpha"
+        );
+        assert_eq!(
+            read(
+                &ctx.client,
+                &destination.join("nested").join("b.txt"),
+                &ReadOptions::default()
+            )
+            .await,
+            b"beta"
+        );
+    });
+    finalize(ctx);
+}
+
+#[test]
+fn should_list_entries_under_backslash_directory_verbatim() {
+    let ctx = setup();
+    let dir = ctx.path(r"a\b");
+    ctx.runtime.block_on(async {
+        ctx.client.create_dir(&dir, None).await.unwrap();
+        write(&ctx.client, &dir.join("child"), b"data").await;
+
+        let entries = ctx.client.list_dir(&dir).await.unwrap();
+
+        let paths: Vec<Option<&str>> = entries.iter().map(|f| f.path().to_str()).collect();
+        let expected = format!(r"{root}/a\b/child", root = ctx.root.display());
+        assert_eq!(paths, vec![Some(expected.as_str())]);
+    });
+    finalize(ctx);
+}
+
+#[test]
 fn should_work_through_blocking_wrapper() {
     crate::mock::logger();
     let container = OpensshServer::start();

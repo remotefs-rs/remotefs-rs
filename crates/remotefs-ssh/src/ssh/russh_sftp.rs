@@ -13,6 +13,7 @@ use russh::client::Handler;
 use super::SshOpts;
 use super::backend::{RusshSession, RusshSftp, WriteMode};
 use super::sftp::SFTP_CAPABILITIES;
+use crate::utils::path as path_utils;
 
 const DEFAULT_DIR_MODE: u32 = 0o755;
 const DEFAULT_FILE_MODE: u32 = 0o644;
@@ -96,7 +97,7 @@ where
             sftp.mkdir(dest, Self::mode(src_file.metadata().mode, DEFAULT_DIR_MODE))
                 .await?;
             for entry in sftp.readdir(src).await? {
-                let name = entry.path().file_name().ok_or_else(|| {
+                let child_dest = path_utils::child_path(dest, entry.path()).ok_or_else(|| {
                     RemoteError::with_message(
                         RemoteErrorType::BadFile,
                         format!(
@@ -105,7 +106,7 @@ where
                         ),
                     )
                 })?;
-                Box::pin(Self::copy_recursive(sftp, entry.path(), &dest.join(name))).await?;
+                Box::pin(Self::copy_recursive(sftp, entry.path(), &child_dest)).await?;
             }
             return Ok(());
         }

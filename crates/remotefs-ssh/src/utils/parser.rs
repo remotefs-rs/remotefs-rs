@@ -3,11 +3,12 @@
 //! parser utils
 
 use std::collections::HashMap;
-use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use chrono::format::ParseError;
 use chrono::prelude::*;
+
+use crate::utils::path as path_utils;
 
 /// Convert `ls` syntax time to [`SystemTime`].
 ///
@@ -68,9 +69,8 @@ pub fn parse_stat_listing(output: &str) -> HashMap<String, SystemTime> {
             let (epoch, name) = line.trim().split_once(char::is_whitespace)?;
             let secs: u64 = epoch.trim().parse().ok()?;
             let time = SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(secs))?;
-            let basename = Path::new(name.trim())
-                .file_name()
-                .map(|x| x.to_string_lossy().to_string())?;
+            // Split only on `/`, so a `\` in a remote name is kept on Windows.
+            let basename = path_utils::last_name(name.trim())?.to_string();
             Some((basename, time))
         })
         .collect()
@@ -214,6 +214,21 @@ mod test {
         assert_eq!(map.len(), 2);
         assert!(map.contains_key("a.txt"));
         assert!(map.contains_key("b.txt"));
+    }
+
+    #[test]
+    fn should_key_stat_listing_by_name_after_last_forward_slash() {
+        let output = "1704067200 /srv/a\\b\n1541376000 /srv/b\n";
+        let map = parse_stat_listing(output);
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get(r"a\b")
+                .unwrap()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1704067200
+        );
     }
 
     #[test]

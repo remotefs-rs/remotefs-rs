@@ -119,6 +119,40 @@ fn should_append_and_copy_file() {
 }
 
 #[test]
+fn should_copy_directory_tree_into_child_paths() {
+    let ctx = setup();
+    let source_dir = ctx.path("source");
+    let nested_dir = source_dir.join("nested");
+    ctx.client
+        .create_dir(&source_dir, Some(UnixPex::from(0o775)))
+        .unwrap();
+    ctx.client
+        .create_dir(&nested_dir, Some(UnixPex::from(0o775)))
+        .unwrap();
+    write(&ctx.client, &source_dir.join("a.txt"), b"alpha");
+    write(&ctx.client, &nested_dir.join("b.txt"), b"beta");
+    let destination = ctx.path("destination");
+    ctx.client.copy(&source_dir, &destination).unwrap();
+    assert_eq!(
+        read(
+            &ctx.client,
+            &destination.join("a.txt"),
+            &ReadOptions::default()
+        ),
+        b"alpha"
+    );
+    assert_eq!(
+        read(
+            &ctx.client,
+            &destination.join("nested").join("b.txt"),
+            &ReadOptions::default()
+        ),
+        b"beta"
+    );
+    finalize(ctx);
+}
+
+#[test]
 fn should_honor_absolute_paths_and_ranges() {
     let ctx = setup();
     let path = ctx.path("range.txt");

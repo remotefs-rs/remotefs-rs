@@ -15,6 +15,7 @@ use russh::client::Handler;
 use super::SshOpts;
 use super::backend::RusshSession;
 use super::scp::{SCP_CAPABILITIES, shell};
+use crate::utils::path as path_utils;
 
 /// Blocking adapter for [`RusshScpFs`] created with [`RusshScpFs::into_blocking`].
 pub type BlockingRusshScpFs<T> = remotefs::adapters::blocking::BlockOn<RusshScpFs<T>>;
@@ -203,7 +204,7 @@ where
                 format!("Failed to stat file: {line}", line = line.trim()),
             ));
         }
-        let parent = path.parent().unwrap_or(path);
+        let parent = path_utils::parent(path).unwrap_or(path);
         let mut entry = shell::parse_ls_line(parent, line.trim())
             .ok_or_else(|| RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory))?;
         if let Some(mtime) = self.mtime_epoch(path).await {

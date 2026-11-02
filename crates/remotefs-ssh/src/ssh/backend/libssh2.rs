@@ -23,6 +23,7 @@ use crate::ssh::backend::forward::{
 use crate::ssh::backend::keepalive::ServerKeepalive;
 use crate::ssh::config::Config;
 use crate::ssh::stream::RangedRead;
+use crate::utils::path as path_utils;
 use crate::{SshAgentIdentity, SshOpts};
 
 /// An implementation of [`SshSession`] using libssh2 as the backend.
@@ -824,6 +825,30 @@ const SFTP_NO_SUCH_PATH: i32 = 10;
 const SFTP_FILE_ALREADY_EXISTS: i32 = 11;
 const SFTP_DIR_NOT_EMPTY: i32 = 18;
 
+/// libssh2 session error codes (`LIBSSH2_ERROR_*`) surfaced through `ssh2::ErrorCode::Session`.
+const LIBSSH2_ERROR_FILE: i32 = -16;
+const LIBSSH2_ERROR_EAGAIN: i32 = -37;
+
+/// Builds the remote path of the entry `name` listed in `dirname`, always with `/` separators.
+///
+/// `\` in `dirname` is treated as a separator when `backslash_is_separator` is
+/// set, while `name` is appended verbatim. Returns `None` for the `.` and `..`
+/// entries.
+fn readdir_entry_path(
+    dirname: &Path,
+    name: &Path,
+    backslash_is_separator: bool,
+) -> Option<PathBuf> {
+    if name == Path::new(".") || name == Path::new("..") {
+        return None;
+    }
+    Some(path_utils::join_with(
+        dirname.as_os_str(),
+        name.as_os_str(),
+        backslash_is_separator,
+    ))
+}
+
 /// Maps an SFTP failure onto a typed remotefs error, keeping `err` as the source.
 fn sftp_error(err: ssh2::Error, fallback: RemoteErrorType) -> RemoteError {
     let kind = match err.code() {
@@ -936,15 +961,31 @@ impl Sftp for LibSsh2Sftp {
     }
 
     fn readdir(&self, dirname: &Path) -> RemoteResult<Vec<remotefs::File>> {
-        self.inner
-            .readdir(dirname)
-            .map(|files| {
-                files
-                    .into_iter()
-                    .map(|(path, metadata)| self.make_fsentry(path.as_path(), &metadata))
-                    .collect()
-            })
-            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
+        // `ssh2::Sftp::readdir` joins each name with `Path::join`, which on
+        // Windows reinterprets `\` and drive prefixes inside remote names, so
+        // read the bare names from the directory handle instead. On Windows
+        // `ssh2` sends `dirname` with every `\` turned into `/`, so entries
+        // are built under that same directory.
+        let mut dir = self
+            .inner
+            .opendir(dirname)
+            .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))?;
+        let mut files = Vec::new();
+        loop {
+            match dir.readdir() {
+                Ok((name, metadata)) => {
+                    if let Some(path) = readdir_entry_path(dirname, &name, cfg!(windows)) {
+                        files.push(self.make_fsentry(&path, &metadata));
+                    }
+                }
+                Err(err) if err.code() == ssh2::ErrorCode::Session(LIBSSH2_ERROR_FILE) => {
+                    break;
+                }
+                Err(err) if err.code() == ssh2::ErrorCode::Session(LIBSSH2_ERROR_EAGAIN) => {}
+                Err(err) => return Err(sftp_error(err, RemoteErrorType::StatFailed)),
+            }
+        }
+        Ok(files)
     }
 
     fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
@@ -1586,6 +1627,23 @@ mod test {
 
     use super::*;
     use crate::mock::ssh as ssh_mock;
+
+    #[test]
+    fn should_build_readdir_entry_paths_with_forward_slashes() {
+        for (dir, name, expected) in [
+            (r"/srv\data", "files", Some("/srv/data/files")),
+            ("/srv", ".", None),
+            ("/srv", "..", None),
+        ] {
+            assert_eq!(
+                readdir_entry_path(Path::new(dir), Path::new(name), true)
+                    .as_deref()
+                    .and_then(Path::to_str),
+                expected,
+                "readdir_entry_path({dir:?}, {name:?}, true)"
+            );
+        }
+    }
 
     #[test]
     fn should_filter_non_rsa_pubkey_algorithms() {

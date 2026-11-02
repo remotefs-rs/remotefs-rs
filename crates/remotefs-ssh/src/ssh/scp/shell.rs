@@ -5,6 +5,7 @@
 //! the blocking and asynchronous SCP clients share one implementation.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -13,7 +14,7 @@ use lazy_regex::{Lazy, Regex};
 use remotefs::File;
 use remotefs::fs::{FileType, Metadata, SetMetadata, UnixPex, UnixPexClass};
 
-use crate::utils::{fmt as fmt_utils, parser as parser_utils};
+use crate::utils::{fmt as fmt_utils, parser as parser_utils, path as path_utils};
 
 /// NOTE: about this damn regex <https://stackoverflow.com/questions/32480890/is-there-a-regex-to-parse-the-values-from-an-ftp-directory-listing>
 static LS_RE: Lazy<Regex> = lazy_regex!(
@@ -69,6 +70,9 @@ pub(crate) fn mtime_command(flavor: StatFlavor, path: &Path) -> Option<String> {
 }
 
 /// Batched `stat` command printing `<mtime> <name>` per entry of `dir`.
+///
+/// `dir` is kept as is, as in [`list_command`], and each name is appended
+/// with `/`.
 pub(crate) fn mtimes_command(flavor: StatFlavor, dir: &Path, names: &[String]) -> Option<String> {
     if names.is_empty() {
         return None;
@@ -80,7 +84,13 @@ pub(crate) fn mtimes_command(flavor: StatFlavor, dir: &Path, names: &[String]) -
     };
     let args = names
         .iter()
-        .map(|name| quote(&dir.join(name)))
+        .map(|name| {
+            quote(&path_utils::join_with(
+                dir.as_os_str(),
+                OsStr::new(name),
+                false,
+            ))
+        })
         .collect::<Vec<_>>()
         .join(" ");
     Some(format!("stat {fmt} {args}"))
@@ -199,6 +209,9 @@ pub(crate) fn parse_listing(dir: &Path, output: &str) -> Vec<File> {
 }
 
 /// Parses one `ls -l` line into a [`File`] located under `dir`.
+///
+/// `dir` is kept as is, as it is sent to the server by [`list_command`], and
+/// the entry name is appended with `/`.
 pub(crate) fn parse_ls_line(dir: &Path, line: &str) -> Option<File> {
     trace!("Parsing LS line: '{line}'");
     let captures = LS_RE.captures(line)?;
@@ -243,14 +256,14 @@ pub(crate) fn parse_ls_line(dir: &Path, line: &str) -> Option<File> {
     } else {
         (String::from(&captures["name"]), None)
     };
-    let file_name = PathBuf::from(&file_name)
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or(file_name);
     if file_name == "." || file_name == ".." {
         return None;
     }
-    let path = dir.join(&file_name);
+    let file_name = match path_utils::last_name(&file_name) {
+        Some(name) => name.to_string(),
+        None => file_name,
+    };
+    let path = path_utils::join_with(dir.as_os_str(), OsStr::new(&file_name), false);
     let file_type = if symlink.is_some() {
         FileType::Symlink
     } else if is_dir {
@@ -300,7 +313,8 @@ mod tests {
             "-rw-r--r--  1 1000 1000 12 Sep 10 10:00 hello.txt",
         )
         .unwrap();
-        assert_eq!(file.path(), Path::new("/tmp/hello.txt"));
+        assert_eq!(file.path().to_str(), Some("/tmp/hello.txt"));
+        assert_eq!(file.name(), "hello.txt");
         assert!(file.is_file());
         assert_eq!(file.metadata().size, Some(12));
         assert_eq!(file.metadata().uid, Some(1000));
@@ -315,6 +329,7 @@ mod tests {
         )
         .unwrap();
         assert!(link.is_symlink());
+        assert_eq!(link.path().to_str(), Some("/tmp/link"));
         assert_eq!(
             link.metadata().symlink.as_deref(),
             Some(Path::new("/etc/hosts"))
@@ -325,7 +340,88 @@ mod tests {
         )
         .unwrap();
         assert!(dir.is_dir());
-        assert_eq!(dir.path(), Path::new("/etc"));
+        assert_eq!(dir.path().to_str(), Some("/etc"));
+    }
+
+    #[test]
+    fn should_list_entries_with_bare_names_and_slash_paths() {
+        let listing = "total 8\n\
+            drwxr-xr-x 2 root root 4096 Sep 10 2025 .\n\
+            drwxr-xr-x 2 root root 4096 Sep 10 2025 ..\n\
+            drwxr-xr-x 2 root root 4096 Sep 10 2025 files\n\
+            -rw-r--r-- 1 root root   12 Sep 10 2025 readme.txt\n";
+        let entries = parse_listing(Path::new("/srv"), listing);
+        let names: Vec<String> = entries.iter().map(File::name).collect();
+        let paths: Vec<Option<&str>> = entries.iter().map(|f| f.path().to_str()).collect();
+        assert_eq!(names, vec!["files".to_string(), "readme.txt".to_string()]);
+        assert_eq!(paths, vec![Some("/srv/files"), Some("/srv/readme.txt")]);
+    }
+
+    #[test]
+    fn should_stat_ls_line_under_parent_of_path() {
+        for (path, line, expected) in [
+            ("/", "drwxr-xr-x 20 root root 4096 Sep 10 2025 /", "/"),
+            (
+                "/srv/files",
+                "drwxr-xr-x 2 root root 4096 Sep 10 2025 /srv/files",
+                "/srv/files",
+            ),
+            (
+                "/srv/files/.",
+                "drwxr-xr-x 2 root root 4096 Sep 10 2025 /srv/files/.",
+                "/srv/files",
+            ),
+            (
+                "/srv/files/..",
+                "drwxr-xr-x 2 root root 4096 Sep 10 2025 /srv/files/..",
+                "/srv/files/..",
+            ),
+            (
+                r"/srv/a\b",
+                r"-rw-r--r-- 1 root root 12 Sep 10 2025 a\b",
+                r"/srv/a\b",
+            ),
+        ] {
+            let path = Path::new(path);
+            let parent = path_utils::parent(path).unwrap_or(path);
+            let file = parse_ls_line(parent, line).unwrap();
+            assert_eq!(
+                file.path().to_str(),
+                Some(expected),
+                "parse_ls_line({line:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn should_stat_backslash_paths_verbatim_under_slash_parent() {
+        for (path, name) in [(r"/srv/a\b", r"a\b"), (r"/srv/a\b/child", "child")] {
+            let parent = path_utils::parent_with(Path::new(path), true).unwrap();
+            let line = format!("-rw-r--r-- 1 root root 12 Sep 10 2025 {path}");
+            let file = parse_ls_line(parent, &line).unwrap();
+            assert_eq!(file.name(), name, "parse_ls_line({line:?})");
+            assert_eq!(file.path().to_str(), Some(path), "parse_ls_line({line:?})");
+        }
+    }
+
+    #[test]
+    fn should_list_entries_under_backslash_directory_verbatim() {
+        let listing = "total 8\n\
+            drwxr-xr-x 2 root root 4096 Sep 10 2025 files\n\
+            -rw-r--r-- 1 root root   12 Sep 10 2025 c\\d\n";
+        let entries = parse_listing(Path::new(r"/srv/a\b"), listing);
+        let names: Vec<String> = entries.iter().map(File::name).collect();
+        let paths: Vec<Option<&str>> = entries.iter().map(|f| f.path().to_str()).collect();
+        assert_eq!(names, vec!["files".to_string(), r"c\d".to_string()]);
+        assert_eq!(paths, vec![Some(r"/srv/a\b/files"), Some(r"/srv/a\b/c\d")]);
+    }
+
+    #[test]
+    fn should_build_mtimes_command_under_backslash_directory_verbatim() {
+        assert_eq!(
+            mtimes_command(StatFlavor::Gnu, Path::new(r"/srv/a\b"), &["files".into()]),
+            Some(r"stat -c '%Y %n' '/srv/a\b/files'".to_string())
+        );
     }
 
     #[test]
