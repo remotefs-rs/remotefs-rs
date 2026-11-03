@@ -1,6 +1,6 @@
 //! Conversions between remotefs types and `smb` crate types.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use remotefs::fs::{File, FileType, Metadata, UnixPex};
@@ -101,10 +101,13 @@ pub(super) fn open_info_to_file(path: PathBuf, info: &FileNetworkOpenInformation
     )
 }
 
-/// Builds a remotefs `File` from a directory listing entry.
-pub(super) fn dir_entry_to_file(parent: &Path, entry: &FileIdBothDirectoryInformation) -> File {
-    let mut path = parent.to_path_buf();
-    path.push(entry.file_name.to_string());
+/// Builds the path of the directory listing entry `name` under `parent`.
+pub(super) fn entry_path(parent: &SharePath, name: &str) -> PathBuf {
+    parent.child(name).to_path_buf()
+}
+
+/// Builds a remotefs `File` at `path` from a directory listing entry.
+pub(super) fn dir_entry_to_file(path: PathBuf, entry: &FileIdBothDirectoryInformation) -> File {
     File::new(
         path,
         metadata_for(
@@ -168,6 +171,24 @@ mod test {
             unc_for(&share, &nested).to_string(),
             r"\\localhost\temp\cargo-test\a.txt"
         );
+    }
+
+    #[test]
+    fn should_build_entry_paths_with_forward_slashes() {
+        for (parent, name, expected) in [
+            ("/", "a.txt", "/a.txt"),
+            ("/cargo-test", "a.txt", "/cargo-test/a.txt"),
+            ("/cargo-test/mydir", "b", "/cargo-test/mydir/b"),
+        ] {
+            let parent = SharePath::parse(Path::new(parent)).unwrap();
+            let path = entry_path(&parent, name);
+            // Compare strings: on Windows `Path` equality treats `\` and `/` alike.
+            assert_eq!(
+                path.to_str(),
+                Some(expected),
+                "entry_path({parent:?}, {name:?})"
+            );
+        }
     }
 
     #[test]

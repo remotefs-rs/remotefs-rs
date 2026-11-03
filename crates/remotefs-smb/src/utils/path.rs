@@ -1,10 +1,12 @@
 //! Share-rooted remote path handling shared by every client.
 //!
 //! Every remotefs 1 operation receives an absolute path. SMB clients address
-//! entries relative to the connected share, so the accepted form is a POSIX
-//! path rooted at `/` (the share root). Parsing validates the root with
-//! [`remotefs::path::ensure_absolute`], drops `.` and empty components, and
-//! rejects `..` and backslashes, which are not valid inside SMB names.
+//! entries relative to the connected share, so the accepted form is a path
+//! rooted at `/` (the share root). Parsing validates the root with
+//! [`remotefs::path::ensure_absolute`], accepts both `/` and `\` as separators
+//! (a backslash is never part of an SMB name, so paths built with
+//! `Path::join` on Windows are valid), drops `.` and empty components, and
+//! rejects `..`.
 
 use std::path::{Path, PathBuf};
 
@@ -28,11 +30,13 @@ pub struct SharePath {
 impl SharePath {
     /// Parses an absolute, share-rooted remotefs path.
     ///
+    /// Both `/` and `\` separate components, on every platform. Empty and `.`
+    /// components are dropped.
+    ///
     /// # Errors
     ///
     /// Returns [`RemoteErrorType::InvalidPath`] when the path is not
-    /// absolute, is not rooted at `/`, contains a `..` component, or
-    /// contains a backslash inside a component.
+    /// absolute, is not rooted at `/`, or contains a `..` component.
     pub fn parse(path: &Path) -> RemoteResult<Self> {
         ensure_absolute(path)?;
         let text = path.to_string_lossy();
@@ -40,13 +44,10 @@ impl SharePath {
             return Err(invalid("path must be rooted at the share (`/`)"));
         };
         let mut components = Vec::new();
-        for component in rest.split('/') {
+        for component in rest.split(['/', '\\']) {
             match component {
                 "" | "." => {}
                 ".." => return Err(invalid("`..` components are not allowed")),
-                name if name.contains('\\') => {
-                    return Err(invalid("backslash is not a valid SMB name character"));
-                }
                 name => components.push(name.to_string()),
             }
         }
@@ -130,6 +131,21 @@ mod test {
     }
 
     #[test]
+    fn should_treat_backslashes_as_separators() {
+        for (input, expected) in [
+            (Path::new("/docs").join("report.txt"), "/docs/report.txt"),
+            (PathBuf::from(r"/docs\report.txt"), "/docs/report.txt"),
+            (PathBuf::from(r"/a\b/c"), "/a/b/c"),
+            (PathBuf::from(r"/a\/b\\c\"), "/a/b/c"),
+            (PathBuf::from(r"/\"), "/"),
+        ] {
+            let path = SharePath::parse(&input).unwrap();
+            // Compare strings: on Windows `Path` equality treats `\` and `/` alike.
+            assert_eq!(path.to_path_buf().to_str(), Some(expected), "{input:?}");
+        }
+    }
+
+    #[test]
     fn should_build_children() {
         let parent = SharePath::parse(Path::new("/cargo-test")).unwrap();
         let child = parent.child("b.txt");
@@ -151,7 +167,7 @@ mod test {
 
     #[test]
     fn should_reject_relative_paths() {
-        for input in ["", ".", "a.txt", "cargo-test/a.txt"] {
+        for input in ["", ".", "a.txt", "cargo-test/a.txt", r"\cargo"] {
             let error = SharePath::parse(Path::new(input)).unwrap_err();
             assert_eq!(error.kind(), RemoteErrorType::InvalidPath, "{input:?}");
         }
@@ -159,7 +175,13 @@ mod test {
 
     #[test]
     fn should_reject_non_share_roots_and_bad_components() {
-        for input in [r"C:\cargo", r"\\server\share\x", "/a/../b", r"/a\b"] {
+        for input in [
+            r"C:\cargo",
+            r"\\server\share\x",
+            "/a/../b",
+            r"/a\..\b",
+            r"/a\..",
+        ] {
             let error = SharePath::parse(Path::new(input)).unwrap_err();
             assert_eq!(error.kind(), RemoteErrorType::InvalidPath, "{input:?}");
         }

@@ -282,8 +282,10 @@ Every client supports the lifecycle (`connect`, `disconnect`,
 `is_connected`), `list_dir`, `stat`, `exists`, `create_dir`,
 `remove_file`, `remove_dir`, `remove_dir_all`, `rename`, and the one-shot
 transfers `read_file`, `write_file`, and `append_file`. Paths are absolute
-and rooted at the share. The table lists the `Capabilities` flags each client
-advertises; `exec` and `symlink` are unsupported everywhere.
+and rooted at the share. Both `/` and `\` work as path separators, so paths
+built on Windows are accepted, and listed entries always use `/`. The table
+lists the `Capabilities` flags each client advertises; `exec` and `symlink`
+are unsupported everywhere.
 
 | Capability     | Rust-native (`SmbFs`) | pavao (`PavaoSmbFs`) | WNet (`WNetSmbFs`) |
 | -------------- | --------------------- | -------------------- | ------------------ |

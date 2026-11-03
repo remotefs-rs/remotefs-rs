@@ -9,7 +9,9 @@ mod stream;
 
 use std::path::Path;
 
-use convert::{dir_entry_to_file, open_info_to_file, smb_error, system_time_to_filetime, unc_for};
+use convert::{
+    dir_entry_to_file, entry_path, open_info_to_file, smb_error, system_time_to_filetime, unc_for,
+};
 use credentials::ResolvedCredentials;
 pub use credentials::SmbCredentials;
 use futures_util::StreamExt;
@@ -491,7 +493,7 @@ impl AsyncRemoteFs for SmbFs {
                 if name == "." || name == ".." {
                     continue;
                 }
-                entries.push(dir_entry_to_file(absolute.as_path(), &entry));
+                entries.push(dir_entry_to_file(entry_path(&share, &name), &entry));
             }
             Ok::<Vec<File>, RemoteError>(entries)
         }
@@ -1120,7 +1122,8 @@ mod test {
             .unwrap();
         let entries = client.list_dir(dir).await.unwrap();
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].path(), Path::new("/cargo-test/mydir/a.txt"));
+        assert_eq!(entries[0].path().to_str(), Some("/cargo-test/mydir/a.txt"));
+        assert_eq!(entries[0].name(), "a.txt");
         assert_eq!(entries[0].extension().as_deref(), Some("txt"));
         assert_eq!(entries[0].metadata().size, Some(1));
         assert!(client

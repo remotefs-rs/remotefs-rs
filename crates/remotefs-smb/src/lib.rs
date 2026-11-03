@@ -25,7 +25,9 @@
 //!
 //! `pavao` and `smb` can be enabled together. Every client takes absolute
 //! paths rooted at the share (`/docs/report.txt`); there is no working
-//! directory. Check `capabilities()` before relying on streams, ranges,
+//! directory. Both `/` and `\` are accepted as separators, so paths built
+//! with `Path::join` on Windows work, and listed entries always use `/`.
+//! Check `capabilities()` before relying on streams, ranges,
 //! copy, or metadata changes.
 //!
 //! ## Get started
