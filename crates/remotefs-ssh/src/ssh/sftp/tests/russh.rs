@@ -280,17 +280,18 @@ fn should_copy_directory_tree_into_child_paths() {
 }
 
 #[test]
-fn should_list_entries_under_backslash_directory_verbatim() {
+fn should_list_directory_given_with_backslash_separators() {
     let ctx = setup();
-    let dir = ctx.path(r"a\b");
+    let dir = ctx.path("steam");
+    let given = PathBuf::from(format!(r"{root}\steam", root = ctx.root.display()));
     ctx.runtime.block_on(async {
         ctx.client.create_dir(&dir, None).await.unwrap();
-        write(&ctx.client, &dir.join("child"), b"data").await;
+        write(&ctx.client, &dir.join("userdata"), b"data").await;
 
-        let entries = ctx.client.list_dir(&dir).await.unwrap();
+        let entries = ctx.client.list_dir(&given).await.unwrap();
 
         let paths: Vec<Option<&str>> = entries.iter().map(|f| f.path().to_str()).collect();
-        let expected = format!(r"{root}/a\b/child", root = ctx.root.display());
+        let expected = format!("{root}/steam/userdata", root = ctx.root.display());
         assert_eq!(paths, vec![Some(expected.as_str())]);
     });
     finalize(ctx);

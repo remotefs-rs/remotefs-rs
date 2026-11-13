@@ -6,7 +6,6 @@ use remotefs::fs::{
     AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, ReadOptions,
     SetMetadata, UnixPex, WriteOptions,
 };
-use remotefs::path::ensure_absolute;
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use russh::client::Handler;
 
@@ -179,12 +178,14 @@ where
     }
 
     async fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?.readdir(path).await
     }
 
     async fn stat(&self, path: &Path) -> RemoteResult<File> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?.stat(path).await
     }
 
@@ -197,12 +198,14 @@ where
     }
 
     async fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?.set_metadata(path, metadata).await
     }
 
     async fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         if self.exists(path).await? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
@@ -212,30 +215,38 @@ where
     }
 
     async fn remove_file(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?.unlink(path).await
     }
 
     async fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?.rmdir(path).await
     }
 
     async fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         self.sftp()?.rename(src, dest).await
     }
 
     async fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         Self::copy_recursive(self.sftp()?, src, dest).await
     }
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
-        ensure_absolute(target)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
+        let target = path_utils::remote_path(target)?;
+        let target = target.as_ref();
         if !self.exists(target).await? {
             return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
         }
@@ -243,12 +254,14 @@ where
     }
 
     async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?.open_read(path, opts).await
     }
 
     async fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?
             .open_write(
                 path,
@@ -259,7 +272,8 @@ where
     }
 
     async fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.sftp()?
             .open_write(
                 path,

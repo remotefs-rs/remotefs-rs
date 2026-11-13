@@ -29,14 +29,12 @@
 //!
 //! Every client is `Send + Sync`; operations take `&self` and every path must be absolute.
 //!
-//! Listed entries always use `/` as separator, on every platform. A path passed
-//! to a client is sent to the server as is, so a `\` in it is a literal
-//! character, not a separator, also on Windows: build remote paths with `/`
-//! rather than with [`std::path::Path::join`]. The only exception is SFTP over
-//! the libssh2 backend on Windows, where the `ssh2` crate turns every `\` in a
-//! request path into `/`, so remote paths containing a literal `\` cannot be
-//! reached and the entries of a listed directory are built under the
-//! directory with its `\` turned into `/`.
+//! Listed entries always use `/` as separator, on every platform. Both `/` and
+//! `\` are accepted as separators in the paths given to a client, on every
+//! platform, so paths built with [`std::path::Path::join`] on Windows work.
+//! Every `\` is sent to the server as `/`, so a remote entry whose name
+//! contains a literal `\` cannot be reached; listed entries keep such names
+//! verbatim.
 //!
 //! ### Other features
 //!

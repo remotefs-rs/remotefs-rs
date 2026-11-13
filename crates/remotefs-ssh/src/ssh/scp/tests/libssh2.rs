@@ -183,6 +183,22 @@ fn should_advertise_capabilities() {
 }
 
 #[test]
+fn should_list_directory_given_with_backslash_separators() {
+    let ctx = setup();
+    let dir = ctx.path("steam");
+    ctx.client.create_dir(&dir, None).unwrap();
+    write(&ctx.client, &dir.join("userdata"), b"data");
+    let given = PathBuf::from(format!(r"{root}\steam", root = ctx.root.display()));
+
+    let entries = ctx.client.list_dir(&given).unwrap();
+
+    let paths: Vec<Option<&str>> = entries.iter().map(|f| f.path().to_str()).collect();
+    let expected = format!("{root}/steam/userdata", root = ctx.root.display());
+    assert_eq!(paths, vec![Some(expected.as_str())]);
+    finalize(ctx);
+}
+
+#[test]
 fn should_be_sync_and_send() {
     fn is_send<T: Send>(_: T) {}
     fn is_sync<T: Sync>(_: T) {}

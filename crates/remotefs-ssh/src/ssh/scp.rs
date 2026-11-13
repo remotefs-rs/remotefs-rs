@@ -14,7 +14,6 @@ use remotefs::fs::{
     Capabilities, ExecOutput, ReadOptions, ReadStream, RemoteError, RemoteErrorType, RemoteFs,
     RemoteResult, SetMetadata, UnixPex, WriteOptions, WriteStream,
 };
-use remotefs::path::ensure_absolute;
 
 use self::shell::StatFlavor;
 use super::SshOpts;
@@ -245,7 +244,8 @@ where
     }
 
     fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path)?;
         debug!("Getting file entries in {path}", path = path.display());
         let (rc, output) = self.run(&shell::list_command(path))?;
@@ -262,7 +262,8 @@ where
     }
 
     fn stat(&self, path: &Path) -> RemoteResult<File> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Stat {path}", path = path.display());
         let is_dir = self.succeeds(&shell::is_dir_command(path))?;
         let (rc, line) = self.run(&shell::stat_command(path, is_dir))?;
@@ -282,12 +283,14 @@ where
     }
 
     fn exists(&self, path: &Path) -> RemoteResult<bool> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.succeeds(&shell::exists_command(path))
     }
 
     fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path)?;
         debug!("Setting attributes for {path}", path = path.display());
         for cmd in shell::set_metadata_commands(path, metadata) {
@@ -297,7 +300,8 @@ where
     }
 
     fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         if self.exists(path)? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
@@ -309,7 +313,8 @@ where
     }
 
     fn remove_file(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path)?;
         debug!("Removing file {path}", path = path.display());
         self.assert_ok(
@@ -319,7 +324,8 @@ where
     }
 
     fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path)?;
         debug!("Removing directory {path}", path = path.display());
         self.assert_ok(
@@ -329,7 +335,8 @@ where
     }
 
     fn remove_dir_all(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path)?;
         debug!(
             "Removing directory {path} recursively",
@@ -342,8 +349,10 @@ where
     }
 
     fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         self.require_exists(src)?;
         debug!(
             "Renaming {src} to {dest}",
@@ -357,8 +366,10 @@ where
     }
 
     fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         self.require_exists(src)?;
         debug!(
             "Copying {src} to {dest}",
@@ -372,8 +383,10 @@ where
     }
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
-        ensure_absolute(target)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
+        let target = path_utils::remote_path(target)?;
+        let target = target.as_ref();
         self.require_exists(target)?;
         if self.exists(path)? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
@@ -390,7 +403,8 @@ where
     }
 
     fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path)?;
         debug!(
             "Opening file {path} for read ({opts:?})",
@@ -400,7 +414,8 @@ where
     }
 
     fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         let size = opts
             .size_hint
             .ok_or_else(|| RemoteError::new(RemoteErrorType::SizeRequired))?;
@@ -419,7 +434,7 @@ where
     }
 
     fn append(&self, path: &Path, _opts: &WriteOptions) -> RemoteResult<WriteStream> {
-        ensure_absolute(path)?;
+        path_utils::remote_path(path)?;
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 

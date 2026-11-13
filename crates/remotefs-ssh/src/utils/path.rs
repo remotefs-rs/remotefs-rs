@@ -1,7 +1,32 @@
 //! Remote path helpers.
 
+use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+
+use remotefs::RemoteResult;
+use remotefs::path::ensure_absolute;
+
+/// Returns `path` as the remote path to send to the server, with every `\`
+/// turned into `/`.
+///
+/// `\` is a separator in the paths given to a client on every platform, so a
+/// path built with [`Path::join`] on Windows reaches the right remote entry.
+/// Validation runs first, on the path as given, so `\srv` is still rejected as
+/// relative and is not turned into `/srv`. A path that is not valid Unicode is
+/// kept as is.
+///
+/// # Errors
+///
+/// Returns [`remotefs::RemoteErrorType::InvalidPath`] when `path` is not
+/// absolute.
+pub(crate) fn remote_path(path: &Path) -> RemoteResult<Cow<'_, Path>> {
+    let path = ensure_absolute(path)?;
+    match path.to_str() {
+        Some(text) if text.contains('\\') => Ok(Cow::Owned(PathBuf::from(text.replace('\\', "/")))),
+        _ => Ok(Cow::Borrowed(path)),
+    }
+}
 
 /// Builds the remote path of `name` inside `dir`, always with `/` separators.
 ///
@@ -111,9 +136,11 @@ pub(crate) fn parent_with(path: &Path, backslash_is_separator: bool) -> Option<&
 
 #[cfg(test)]
 mod test {
+    use std::borrow::Cow;
     use std::path::Path;
 
     use pretty_assertions::assert_eq;
+    use remotefs::RemoteErrorType;
 
     use super::*;
 
@@ -232,6 +259,53 @@ mod test {
         }
     }
 
+    #[test]
+    fn should_turn_backslash_separators_into_forward_slashes() {
+        let joined = Path::new("/home/deck/.steam/steam").join("userdata");
+        for (input, expected) in [
+            (joined.as_path(), "/home/deck/.steam/steam/userdata"),
+            (
+                Path::new(r"/home/deck/.steam/steam\userdata"),
+                "/home/deck/.steam/steam/userdata",
+            ),
+            (
+                Path::new(r"/home/deck/.steam\steam\userdata"),
+                "/home/deck/.steam/steam/userdata",
+            ),
+            (Path::new(r"/srv\data\"), "/srv/data/"),
+            (Path::new(r"C:\Users\deck"), "C:/Users/deck"),
+            (Path::new(r"\\server\share\x"), "//server/share/x"),
+            (Path::new("/srv/files"), "/srv/files"),
+            (Path::new("/"), "/"),
+        ] {
+            // Compare strings: on Windows `Path` equality treats `\` and `/` alike.
+            assert_eq!(
+                remote_path(input).unwrap().to_str(),
+                Some(expected),
+                "remote_path({input:?})"
+            );
+        }
+    }
+
+    #[test]
+    fn should_borrow_remote_paths_without_backslashes() {
+        assert!(matches!(
+            remote_path(Path::new("/srv/files")).unwrap(),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn should_reject_relative_remote_paths_before_converting() {
+        for input in ["", "srv", r"srv\data", r"\srv", "C:srv"] {
+            assert_eq!(
+                remote_path(Path::new(input)).unwrap_err().kind(),
+                RemoteErrorType::InvalidPath,
+                "remote_path({input:?})"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn should_keep_non_utf8_names_verbatim() {
@@ -243,5 +317,8 @@ mod test {
         let dir = OsStr::from_bytes(b"/caf\xe9");
         let path = join_with(dir, OsStr::new("files"), false);
         assert_eq!(path.as_os_str().as_bytes(), b"/caf\xe9/files");
+        let dir = OsStr::from_bytes(b"/caf\xe9\\x");
+        let path = remote_path(Path::new(dir)).unwrap();
+        assert_eq!(path.as_os_str().as_bytes(), b"/caf\xe9\\x");
     }
 }

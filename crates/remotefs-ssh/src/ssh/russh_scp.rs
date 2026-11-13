@@ -8,7 +8,6 @@ use remotefs::fs::{
     AsyncReadStream, AsyncRemoteFs, AsyncWriteStream, Capabilities, ExecOutput, ReadOptions,
     SetMetadata, UnixPex, WriteOptions,
 };
-use remotefs::path::ensure_absolute;
 use remotefs::{File, RemoteError, RemoteErrorType, RemoteResult};
 use russh::client::Handler;
 
@@ -180,7 +179,8 @@ where
     }
 
     async fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path).await?;
         let (rc, output) = self.run(&shell::list_command(path)).await?;
         if rc != 0 {
@@ -195,7 +195,8 @@ where
     }
 
     async fn stat(&self, path: &Path) -> RemoteResult<File> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         let is_dir = self.succeeds(&shell::is_dir_command(path)).await?;
         let (rc, line) = self.run(&shell::stat_command(path, is_dir)).await?;
         if rc != 0 {
@@ -214,12 +215,14 @@ where
     }
 
     async fn exists(&self, path: &Path) -> RemoteResult<bool> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.succeeds(&shell::exists_command(path)).await
     }
 
     async fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path).await?;
         for cmd in shell::set_metadata_commands(path, metadata) {
             self.assert_ok(&cmd, RemoteErrorType::StatFailed).await?;
@@ -228,7 +231,8 @@ where
     }
 
     async fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         if self.exists(path).await? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
@@ -240,7 +244,8 @@ where
     }
 
     async fn remove_file(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path).await?;
         self.assert_ok(
             &shell::remove_file_command(path),
@@ -250,7 +255,8 @@ where
     }
 
     async fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path).await?;
         self.assert_ok(
             &shell::remove_dir_command(path),
@@ -260,7 +266,8 @@ where
     }
 
     async fn remove_dir_all(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.require_exists(path).await?;
         self.assert_ok(
             &shell::remove_dir_all_command(path),
@@ -270,8 +277,10 @@ where
     }
 
     async fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         self.assert_ok(
             &shell::rename_command(src, dest),
             RemoteErrorType::FileCreateDenied,
@@ -280,8 +289,10 @@ where
     }
 
     async fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         self.assert_ok(
             &shell::copy_command(src, dest),
             RemoteErrorType::FileCreateDenied,
@@ -290,8 +301,10 @@ where
     }
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
-        ensure_absolute(target)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
+        let target = path_utils::remote_path(target)?;
+        let target = target.as_ref();
         self.require_exists(target).await?;
         self.assert_ok(
             &shell::symlink_command(path, target),
@@ -301,12 +314,14 @@ where
     }
 
     async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         self.session()?.scp_recv(path, opts).await
     }
 
     async fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         let size = opts
             .size_hint
             .ok_or_else(|| RemoteError::new(RemoteErrorType::SizeRequired))?;
@@ -321,7 +336,7 @@ where
     }
 
     async fn append(&self, path: &Path, _opts: &WriteOptions) -> RemoteResult<AsyncWriteStream> {
-        ensure_absolute(path)?;
+        path_utils::remote_path(path)?;
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 

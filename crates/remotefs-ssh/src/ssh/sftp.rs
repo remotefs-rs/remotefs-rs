@@ -10,7 +10,6 @@ use remotefs::fs::{
     Capabilities, ExecOutput, ReadOptions, ReadStream, RemoteError, RemoteErrorType, RemoteFs,
     RemoteResult, SetMetadata, UnixPex, WriteOptions, WriteStream,
 };
-use remotefs::path::ensure_absolute;
 
 use super::SshOpts;
 use crate::SshSession;
@@ -214,13 +213,15 @@ where
     }
 
     fn list_dir(&self, path: &Path) -> RemoteResult<Vec<File>> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Reading directory content of {path}", path = path.display());
         self.sftp()?.readdir(path)
     }
 
     fn stat(&self, path: &Path) -> RemoteResult<File> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Collecting metadata for {path}", path = path.display());
         self.sftp()?.stat(path)
     }
@@ -234,13 +235,15 @@ where
     }
 
     fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Setting metadata for {path}", path = path.display());
         self.sftp()?.set_metadata(path, metadata)
     }
 
     fn create_dir(&self, path: &Path, mode: Option<UnixPex>) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         let sftp = self.sftp()?;
         if self.exists(path)? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
@@ -254,20 +257,24 @@ where
     }
 
     fn remove_file(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Removing file {path}", path = path.display());
         self.sftp()?.unlink(path)
     }
 
     fn remove_dir(&self, path: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Removing directory {path}", path = path.display());
         self.sftp()?.rmdir(path)
     }
 
     fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         debug!(
             "Renaming {src} to {dest}",
             src = src.display(),
@@ -277,8 +284,10 @@ where
     }
 
     fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
-        ensure_absolute(src)?;
-        ensure_absolute(dest)?;
+        let src = path_utils::remote_path(src)?;
+        let src = src.as_ref();
+        let dest = path_utils::remote_path(dest)?;
+        let dest = dest.as_ref();
         debug!(
             "Copying {src} to {dest}",
             src = src.display(),
@@ -288,8 +297,10 @@ where
     }
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        ensure_absolute(path)?;
-        ensure_absolute(target)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
+        let target = path_utils::remote_path(target)?;
+        let target = target.as_ref();
         let sftp = self.sftp()?;
         debug!(
             "Creating symlink at {path} pointing to {target}",
@@ -303,13 +314,15 @@ where
     }
 
     fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<ReadStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Opening file at {path} ({opts:?})", path = path.display());
         self.sftp()?.open_read(path, opts)
     }
 
     fn create(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!("Creating file at {path}", path = path.display());
         self.sftp()?.open_write(
             path,
@@ -319,7 +332,8 @@ where
     }
 
     fn append(&self, path: &Path, opts: &WriteOptions) -> RemoteResult<WriteStream> {
-        ensure_absolute(path)?;
+        let path = path_utils::remote_path(path)?;
+        let path = path.as_ref();
         debug!(
             "Opening file at {path} for appending",
             path = path.display()
