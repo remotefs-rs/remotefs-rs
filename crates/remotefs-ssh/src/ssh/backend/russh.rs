@@ -119,7 +119,7 @@ struct ForwardChannelPermit {
 impl RemoteForwardState {
     fn try_acquire_channel(self: &Arc<Self>) -> Option<ForwardChannelPermit> {
         self.active_channels
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < MAX_FORWARD_CONNECTIONS).then_some(active + 1)
             })
             .ok()
