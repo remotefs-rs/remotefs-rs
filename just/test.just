@@ -27,10 +27,9 @@ test args="":
         esac
       done
 
-# Test every crate with and without its default features.
+# Test every crate with its default features (see `test`).
 [group('test')]
 test_features args="":
-  just test "--no-default-features {{ args }}"
   just test "{{ args }}"
 
 # Generate an LCOV coverage report, one crate at a time (see `test`).
