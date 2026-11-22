@@ -10,7 +10,7 @@ keywords = ["remotefs", "memory"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.89"
+rust-version = { workspace = true }
 description = "remotefs implementation for volatile memory. Good for testing and simulation."
 
 [dependencies]

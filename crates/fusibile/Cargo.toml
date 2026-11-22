@@ -10,7 +10,7 @@ keywords = ["remote-fs", "fuse-driver", "fuse"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.94.1"
+rust-version = { workspace = true }
 description = "A CLI to mount remote file systems locally via FUSE or Dokany"
 
 [lints]

@@ -11,7 +11,7 @@ keywords = ["remotefs", "webdav", "webdav-client", "rfc4918"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.94.1"
+rust-version = { workspace = true }
 description = "remotefs WebDAV client library"
 
 [features]
