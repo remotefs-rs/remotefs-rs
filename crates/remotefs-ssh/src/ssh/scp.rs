@@ -34,7 +34,8 @@ pub const SCP_CAPABILITIES: Capabilities = Capabilities::STREAM_READ
 
 /// Blocking SCP filesystem client.
 ///
-/// Every path must be absolute. `create` requires
+/// Entry paths must be absolute. Symlink targets are stored verbatim
+/// and may be relative. `create` requires
 /// [`WriteOptions::size_hint`] because SCP announces the file size up front;
 /// `append` is unsupported.
 ///

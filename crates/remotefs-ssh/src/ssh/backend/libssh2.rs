@@ -25,10 +25,11 @@ use crate::ssh::backend::keepalive::ServerKeepalive;
 use crate::ssh::config::Config;
 use crate::ssh::stream::RangedRead;
 use crate::utils::path as path_utils;
-use crate::{SshAgentIdentity, SshOpts};
+use crate::{SftpSymlinkOrder, SshAgentIdentity, SshOpts};
 
 /// An implementation of [`SshSession`] using libssh2 as the backend.
 pub struct LibSsh2Session {
+    symlink_order: SftpSymlinkOrder,
     remote_forward_ports: Vec<u16>,
     remote_forward_worker: Option<ForwardWorker>,
     server_keepalives: Vec<ServerKeepalive>,
@@ -56,7 +57,10 @@ struct LibSsh2Transport {
 
 /// A wrapper around [`ssh2::Sftp`] to provide a SFTP client for [`LibSsh2Session`]
 pub struct LibSsh2Sftp {
+    symlink_order: SftpSymlinkOrder,
     inner: ssh2::Sftp,
+    #[cfg(any(windows, test))]
+    session: ssh2::Session,
 }
 
 impl fmt::Debug for LibSsh2Sftp {
@@ -91,7 +95,12 @@ impl SshSession for LibSsh2Session {
         let (remote_forward_worker, remote_forward_ports) =
             setup_libssh2_remote_forwards(opts, &ssh_config)?;
         let session = transport.session;
+        let detected = SftpSymlinkOrder::from_banner(
+            session.banner_bytes().unwrap_or_default(),
+            SftpSymlinkOrder::TargetFirst,
+        );
         Ok(Self {
+            symlink_order: opts.symlink_order(detected),
             session: Mutex::new(session),
             remote_forward_ports,
             remote_forward_worker,
@@ -205,6 +214,9 @@ impl SshSession for LibSsh2Session {
         session.set_blocking(true);
 
         Ok(LibSsh2Sftp {
+            symlink_order: self.symlink_order,
+            #[cfg(any(windows, test))]
+            session: session.clone(),
             inner: session
                 .sftp()
                 .map_err(|err| RemoteError::with_source(RemoteErrorType::ProtocolError, err))?,
@@ -833,13 +845,6 @@ impl Drop for LibSsh2ScpWriter {
     }
 }
 
-/// SFTP status codes (`SSH_FXP_STATUS`) surfaced through `ssh2::ErrorCode::SFTP`.
-const SFTP_NO_SUCH_FILE: i32 = 2;
-const SFTP_PERMISSION_DENIED: i32 = 3;
-const SFTP_NO_SUCH_PATH: i32 = 10;
-const SFTP_FILE_ALREADY_EXISTS: i32 = 11;
-const SFTP_DIR_NOT_EMPTY: i32 = 18;
-
 /// libssh2 session error codes (`LIBSSH2_ERROR_*`) surfaced through `ssh2::ErrorCode::Session`.
 const LIBSSH2_ERROR_FILE: i32 = -16;
 const LIBSSH2_ERROR_EAGAIN: i32 = -37;
@@ -867,12 +872,7 @@ fn readdir_entry_path(
 /// Maps an SFTP failure onto a typed remotefs error, keeping `err` as the source.
 fn sftp_error(err: ssh2::Error, fallback: RemoteErrorType) -> RemoteError {
     let kind = match err.code() {
-        ssh2::ErrorCode::SFTP(SFTP_NO_SUCH_FILE | SFTP_NO_SUCH_PATH) => {
-            RemoteErrorType::NoSuchFileOrDirectory
-        }
-        ssh2::ErrorCode::SFTP(SFTP_PERMISSION_DENIED) => RemoteErrorType::PermissionDenied,
-        ssh2::ErrorCode::SFTP(SFTP_FILE_ALREADY_EXISTS) => RemoteErrorType::AlreadyExists,
-        ssh2::ErrorCode::SFTP(SFTP_DIR_NOT_EMPTY) => RemoteErrorType::DirectoryNotEmpty,
+        ssh2::ErrorCode::SFTP(code) => super::sftp_error_kind(code as u32, fallback),
         _ => fallback,
     };
     RemoteError::with_source(kind, err)
@@ -1028,9 +1028,21 @@ impl Sftp for LibSsh2Sftp {
             .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
     }
 
-    fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+    fn symlink(&self, target: &Path, path: &Path) -> RemoteResult<()> {
+        let (first, second) = self.symlink_order.operands(path, target);
+        // On Windows ssh2 rejects non-Unicode operands and rewrites backslashes in the target.
+        #[cfg(any(windows, test))]
+        if target.as_os_str().as_encoded_bytes().contains(&b'\\')
+            || cfg!(windows) && (path.to_str().is_none() || target.to_str().is_none())
+        {
+            let protocol_error =
+                |err| RemoteError::with_source(RemoteErrorType::ProtocolError, err);
+            let mut channel = self.session.channel_session().map_err(protocol_error)?;
+            channel.subsystem("sftp").map_err(protocol_error)?;
+            return super::symlink::request(channel.stream(0), channel.stream(0), first, second);
+        }
         self.inner
-            .symlink(path, target)
+            .symlink(first, second)
             .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
     }
 

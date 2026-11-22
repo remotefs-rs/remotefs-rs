@@ -120,14 +120,15 @@ mod tests {
         for input in [
             "target",
             "../sibling/file",
+            "../sibling//./dir/",
             ".",
             "/abs/missing",
             r"C:\x",
             "a\\b",
         ] {
             assert_eq!(
-                super::ensure_symlink_target(Path::new(input))?,
-                Path::new(input)
+                super::ensure_symlink_target(Path::new(input))?.as_os_str(),
+                Path::new(input).as_os_str()
             );
         }
         Ok(())

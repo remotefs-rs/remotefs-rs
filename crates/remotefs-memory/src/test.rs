@@ -93,6 +93,13 @@ fn should_validate_all_paths_before_checking_connection() {
             .kind(),
         RemoteErrorType::InvalidPath
     );
+    assert_eq!(
+        client
+            .symlink(Path::new("/link"), Path::new(""))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
+    );
 }
 
 #[test]
@@ -362,13 +369,17 @@ fn should_create_symlinks_with_absolute_and_relative_targets() {
         ("/tmp/dir/abs-missing", "/tmp/sibling/missing.txt"),
         ("/tmp/dir/rel", "../sibling/target.txt"),
         ("/tmp/dir/rel-missing", "../missing.txt"),
+        ("/tmp/dir/dir-spelling", "../sibling//./dir/"),
         ("/tmp/dir/escape", "../../../../x"),
         ("/tmp/dir/self", "self"),
     ] {
         client.symlink(Path::new(link), Path::new(target)).unwrap();
         let entry = client.stat(Path::new(link)).unwrap();
         assert!(entry.is_symlink());
-        assert_eq!(entry.metadata().symlink.as_deref(), Some(Path::new(target)));
+        assert_eq!(
+            entry.metadata().symlink.as_ref().unwrap().as_os_str(),
+            Path::new(target).as_os_str()
+        );
     }
     assert_eq!(
         client
@@ -764,6 +775,18 @@ fn should_open_symlink_content() {
         .read_file(Path::new("/tmp/link"), &ReadOptions::default(), &mut output)
         .unwrap();
     assert_eq!(output, b"/tmp/target");
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let target = std::ffi::OsStr::from_bytes(b"../\xff");
+        let link = Path::new("/tmp/raw");
+        client.symlink(link, Path::new(target)).unwrap();
+        output.clear();
+        client
+            .read_file(link, &ReadOptions::default(), &mut output)
+            .unwrap();
+        assert_eq!(output, target.as_bytes());
+    }
     finalize_client(client);
 }
 

@@ -102,7 +102,8 @@ backend that cannot provide an operation returns
 `RemoteErrorType::UnsupportedFeature`; treat that as a capability answer and
 fall back accordingly.
 
-All filesystem paths must be absolute. `path::ensure_absolute` accepts POSIX
+Entry paths must be absolute. A symbolic link target such as `../README.md`
+is stored verbatim and can be relative to the link’s parent directory. `path::ensure_absolute` accepts POSIX
 roots, fully qualified Windows drive paths, and UNC server/share paths on every
 client platform. Use `find` or `find_async` with an explicit absolute root for
 recursive search.

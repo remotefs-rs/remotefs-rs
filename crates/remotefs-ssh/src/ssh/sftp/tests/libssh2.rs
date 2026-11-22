@@ -24,15 +24,19 @@ impl TestCtx {
 }
 
 fn setup() -> TestCtx {
+    setup_with_opts(|opts| opts)
+}
+
+fn setup_with_opts(configure: fn(SshOpts) -> SshOpts) -> TestCtx {
     crate::mock::logger();
     let container = OpensshServer::start();
     let config_file = ssh_mock::create_ssh_config(container.port());
-    let mut client = SftpFs::libssh2(
+    let mut client = SftpFs::libssh2(configure(
         SshOpts::new("sftp")
             .key_storage(Box::new(ssh_mock::MockSshKeyStorage::default()))
             .config_file(config_file.path(), ParseRule::ALLOW_UNKNOWN_FIELDS)
             .ssh_agent_identity(Some(crate::SshAgentIdentity::All)),
-    );
+    ));
     client.connect().expect("connect");
     let root = PathBuf::from(generate_tempdir());
     client
@@ -93,39 +97,55 @@ fn should_initialize_sftp_filesystem() {
 }
 
 #[test]
+fn should_reject_empty_symlink_target_before_connection() {
+    let client = SftpFs::libssh2(SshOpts::new("localhost"));
+    let error = client
+        .symlink(Path::new("/link"), Path::new(""))
+        .unwrap_err();
+    assert_eq!(error.kind(), remotefs::RemoteErrorType::InvalidPath);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
+fn should_use_explicit_symlink_order() {
+    let ctx = setup_with_opts(|opts| opts.sftp_symlink_order(crate::SftpSymlinkOrder::LinkFirst));
+    crate::ssh::symlink_tests::check_explicit_order(&ctx.client, &ctx.root);
+    finalize(ctx);
+}
+
+#[test]
 #[cfg_attr(
     not(feature = "with-containers"),
     ignore = "needs Docker, run with --features with-containers"
 )]
 fn should_create_symlinks_with_absolute_and_relative_targets() {
     let ctx = setup();
-    let dir = ctx.path("dir");
-    let sibling = ctx.path("sibling");
-    ctx.client
-        .create_dir(&dir, Some(UnixPex::from(0o775)))
-        .unwrap();
-    ctx.client
-        .create_dir(&sibling, Some(UnixPex::from(0o775)))
-        .unwrap();
-    let target = sibling.join("target.txt");
-    write(&ctx.client, &target, b"data");
-    let missing = sibling.join("missing.txt");
-    for (name, link_target) in [
-        ("abs", target.as_path()),
-        ("abs-missing", missing.as_path()),
-        ("rel", Path::new("../sibling/target.txt")),
-        ("rel-missing", Path::new("../missing.txt")),
-    ] {
-        let link = dir.join(name);
-        ctx.client.symlink(&link, link_target).unwrap();
-        let entry = ctx.client.stat(&link).unwrap();
-        assert!(entry.is_symlink());
-        assert_eq!(entry.metadata().symlink.as_deref(), Some(link_target));
+    crate::ssh::symlink_tests::check(&ctx.client, &ctx.root);
+    crate::ssh::symlink_tests::check_sftp_missing_parent(&ctx.client, &ctx.root);
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt as _;
+        let mut name = ctx.root.as_os_str().to_os_string();
+        name.push("/link-");
+        name.push(std::ffi::OsString::from_wide(&[0xd800]));
+        let link = Path::new(&name);
+        ctx.client.symlink(link, Path::new("../README.md")).unwrap();
+        let quoted = crate::ssh::scp::shell::quote(link);
+        let output = ctx.client.exec(&format!("readlink {quoted}")).unwrap();
+        assert_eq!(output.exit_code, 0);
+        assert_eq!(output.stdout.trim_end(), "../README.md");
+        // The native Windows binding cannot unlink a non-Unicode entry.
+        assert_eq!(
+            ctx.client
+                .exec(&format!("rm -f {quoted}"))
+                .unwrap()
+                .exit_code,
+            0
+        );
     }
-    assert_eq!(
-        read(&ctx.client, &dir.join("rel"), &ReadOptions::default()),
-        b"data"
-    );
     finalize(ctx);
 }
 

@@ -45,11 +45,15 @@ fn opts(port: u16) -> (SshOpts, tempfile::NamedTempFile) {
 }
 
 fn setup() -> TestCtx {
+    setup_with_opts(|opts| opts)
+}
+
+fn setup_with_opts(configure: fn(SshOpts) -> SshOpts) -> TestCtx {
     crate::mock::logger();
     let container = OpensshServer::start();
     let (opts, _config) = opts(container.port());
     let runtime = runtime();
-    let mut client = Client::new(opts);
+    let mut client = Client::new(configure(opts));
     let root = PathBuf::from(generate_tempdir());
     runtime.block_on(async {
         client.connect().await.expect("connect");
@@ -145,39 +149,60 @@ fn should_validate_symlink_target_before_connection() {
     not(feature = "with-containers"),
     ignore = "needs Docker, run with --features with-containers"
 )]
+fn should_use_explicit_symlink_order() {
+    let mut ctx =
+        setup_with_opts(|opts| opts.sftp_symlink_order(crate::SftpSymlinkOrder::LinkFirst));
+    let client = ctx.client.into_blocking(ctx.runtime.handle().clone());
+    crate::ssh::symlink_tests::check_explicit_order(&client, &ctx.root);
+    ctx.client = client.into_inner();
+    finalize(ctx);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_create_symlinks_with_absolute_and_relative_targets() {
-    let ctx = setup();
-    let dir = ctx.path("dir");
-    let sibling = ctx.path("sibling");
-    ctx.runtime.block_on(async {
-        ctx.client
-            .create_dir(&dir, Some(UnixPex::from(0o775)))
-            .await
-            .unwrap();
-        ctx.client
-            .create_dir(&sibling, Some(UnixPex::from(0o775)))
-            .await
-            .unwrap();
-        let target = sibling.join("target.txt");
-        write(&ctx.client, &target, b"data").await;
-        let missing = sibling.join("missing.txt");
-        for (name, link_target) in [
-            ("abs", target.as_path()),
-            ("abs-missing", missing.as_path()),
-            ("rel", Path::new("../sibling/target.txt")),
-            ("rel-missing", Path::new("../missing.txt")),
-        ] {
-            let link = dir.join(name);
-            ctx.client.symlink(&link, link_target).await.unwrap();
-            let entry = ctx.client.stat(&link).await.unwrap();
-            assert!(entry.is_symlink());
-            assert_eq!(entry.metadata().symlink.as_deref(), Some(link_target));
+    let mut ctx = setup();
+    let client = ctx.client.into_blocking(ctx.runtime.handle().clone());
+    crate::ssh::symlink_tests::check(&client, &ctx.root);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let raw = ctx.root.join(std::ffi::OsStr::from_bytes(b"link-\xff"));
+        let unicode = ctx.root.join("link-�");
+        let links = [
+            (&raw, Path::new("raw-target")),
+            (&unicode, Path::new("unicode-target")),
+        ];
+        for (link, target) in links {
+            client.symlink(link, target).unwrap();
         }
+        let files = client.list_dir(&ctx.root).unwrap();
+        for (link, target) in links {
+            let listed = files.iter().find(|file| file.path() == link).unwrap();
+            for file in [listed, &client.stat(link).unwrap()] {
+                assert!(file.is_symlink());
+                assert_eq!(file.metadata().symlink.as_deref(), Some(target));
+            }
+        }
+        let renamed = ctx.root.join(std::ffi::OsStr::from_bytes(b"renamed-\xfe"));
+        client.rename(&raw, &renamed).unwrap();
         assert_eq!(
-            read(&ctx.client, &dir.join("rel"), &ReadOptions::default()).await,
-            b"data"
+            client.stat(&raw).unwrap_err().kind(),
+            RemoteErrorType::NoSuchFileOrDirectory
         );
-    });
+        assert_eq!(
+            client.stat(&renamed).unwrap().metadata().symlink.as_deref(),
+            Some(Path::new("raw-target"))
+        );
+        assert_eq!(
+            client.stat(&unicode).unwrap().metadata().symlink.as_deref(),
+            Some(Path::new("unicode-target"))
+        );
+    }
+    ctx.client = client.into_inner();
     finalize(ctx);
 }
 

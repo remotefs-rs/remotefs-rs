@@ -27,14 +27,18 @@
 //! `libssh-vendored` and `libssh2-vendored`. Without them the corresponding
 //! system libraries must be installed.
 //!
-//! Every client is `Send + Sync`; operations take `&self` and every path must be absolute.
+//! Every client is `Send + Sync`; operations take `&self` and entry paths must be absolute. Symlink targets can be relative.
 //!
 //! Listed entries always use `/` as separator, on every platform. Both `/` and
-//! `\` are accepted as separators in the paths given to a client, on every
+//! `\` are accepted as separators in entry paths given to a client, on every
 //! platform, so paths built with [`std::path::Path::join`] on Windows work.
-//! Every `\` is sent to the server as `/`, so a remote entry whose name
-//! contains a literal `\` cannot be reached; listed entries keep such names
-//! verbatim.
+//! In entry paths, clients send each `\` as `/`. Listed names and symlink
+//! targets preserve literal backslashes.
+//!
+//! In SFTP mode, libssh opens an additional SSH session channel for a symlink
+//! with a non-UTF-8 operand. On Windows, libssh2 needs that channel for targets
+//! containing a literal backslash or non-Unicode data. An OpenSSH server
+//! configured with `MaxSessions 1` rejects these requests.
 //!
 //! ### Other features
 //!
@@ -154,7 +158,7 @@ compile_error!(
 mod ssh;
 pub use ssh::{
     KeyMethod, MethodType, ParseRule as SshConfigParseRule, SCP_CAPABILITIES, SFTP_CAPABILITIES,
-    ScpFs, SftpFs, SshAgentIdentity, SshKeyStorage, SshOpts, SshSession,
+    ScpFs, SftpFs, SftpSymlinkOrder, SshAgentIdentity, SshKeyStorage, SshOpts, SshSession,
 };
 
 #[cfg(feature = "libssh2")]

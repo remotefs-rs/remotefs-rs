@@ -10,7 +10,7 @@ use std::future::Future as _;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 
 use remotefs::fs::{
@@ -27,10 +27,10 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::time::{Instant, Sleep};
 
 use super::{MAX_FORWARD_CONNECTIONS, WriteMode, interface, socket};
-use crate::SshOpts;
 use crate::ssh::config::Config;
 use crate::ssh::key_method::MethodType;
 use crate::utils::path as path_utils;
+use crate::{SftpSymlinkOrder, SshOpts};
 
 /// The default SSH client handler for russh.
 ///
@@ -57,6 +57,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn should_decode_windows_symlink_target_units() {
+        assert_eq!(
+            windows_path_units(b"a\xed\xa0\x80/\xed\xbf\xbf"),
+            Some(vec![97, 0xd800, 47, 0xdfff])
+        );
+        assert_eq!(
+            windows_path_units("💾".as_bytes()),
+            Some("💾".encode_utf16().collect())
+        );
+        for invalid in [b"\xff".as_slice(), b"\xed\xa0", b"\xed\xbf\xc0"] {
+            assert_eq!(windows_path_units(invalid), None);
+        }
+    }
+
+    #[test]
+    fn should_keep_symlink_type_without_a_target() {
+        let mut attrs = russh_sftp::protocol::FileAttributes::default();
+        attrs.set_symlink(true);
+        assert!(make_fsentry(Path::new("/link"), &attrs, None).is_symlink());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn should_roundtrip_windows_symlink_targets() {
+        use std::os::windows::ffi::OsStringExt as _;
+        let target = std::ffi::OsString::from_wide(&[0xd800, 47, 0xdc00]);
+        let decoded = sftp_path(target.as_encoded_bytes().into()).unwrap();
+        assert_eq!(decoded.as_os_str(), target);
+        for invalid in [b"\xff".as_slice(), b"\xed\xa0\x80\xed\xb0\x80"] {
+            assert_eq!(
+                sftp_path(invalid.into()).unwrap_err().kind(),
+                RemoteErrorType::InvalidPath
+            );
+        }
+    }
+
+    #[test]
     fn should_limit_concurrent_forwarded_channels() {
         let state = Arc::new(RemoteForwardState::default());
         state.active.store(true, Ordering::Release);
@@ -72,6 +109,7 @@ mod tests {
 /// Transparent handler wrapper enforcing configured CA signature algorithms.
 struct CaSignaturePolicyHandler<T> {
     inner: T,
+    symlink_order: Arc<OnceLock<SftpSymlinkOrder>>,
     allowed_algorithms: Vec<String>,
     forward_agent: bool,
     remote_forwards: Arc<RemoteForwardState>,
@@ -86,6 +124,7 @@ impl<T> CaSignaturePolicyHandler<T> {
     ) -> Self {
         Self {
             inner,
+            symlink_order: Arc::default(),
             allowed_algorithms,
             forward_agent,
             remote_forwards,
@@ -228,6 +267,9 @@ where
         names: &russh::Names,
         session: &mut Session,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        self.symlink_order.get_or_init(|| {
+            SftpSymlinkOrder::from_banner(session.remote_sshid(), SftpSymlinkOrder::TargetFirst)
+        });
         self.inner.kex_done(shared_secret, names, session)
     }
 
@@ -848,6 +890,7 @@ where
     T: Handler + Default + Send + 'static,
 {
     session: Handle<CaSignaturePolicyHandler<T>>,
+    symlink_order: SftpSymlinkOrder,
     forward_agent: bool,
     remote_forward_ports: Vec<u16>,
     remote_forward_state: Arc<RemoteForwardState>,
@@ -875,6 +918,7 @@ enum RegisteredRemoteForward {
 
 /// SFTP handle for russh.
 pub(crate) struct RusshSftp {
+    symlink_order: SftpSymlinkOrder,
     session: Arc<SftpSession>,
 }
 
@@ -1101,8 +1145,8 @@ where
         debug!("Connecting to '{}'", ssh_config.address);
         let proxy_jumps = ssh_config.proxy_jump_configs(opts)?;
         let remote_forward_state = Arc::new(RemoteForwardState::default());
-        let mut session = if let Some(first_jump) = proxy_jumps.first() {
-            let mut session = connect_russh_direct::<T>(
+        let (mut session, detected_order) = if let Some(first_jump) = proxy_jumps.first() {
+            let (mut session, mut order) = connect_russh_direct::<T>(
                 opts,
                 first_jump,
                 Arc::new(RemoteForwardState::default()),
@@ -1119,12 +1163,13 @@ where
                 } else {
                     Arc::new(RemoteForwardState::default())
                 };
-                session = connect_russh_through_jump::<T>(opts, &session, next_hop, routes).await?;
+                (session, order) =
+                    connect_russh_through_jump::<T>(opts, &session, next_hop, routes).await?;
                 if !std::ptr::eq(next_hop, &ssh_config) {
                     auth::authenticate(&mut session, opts, next_hop).await?;
                 }
             }
-            session
+            (session, order)
         } else {
             connect_russh_direct::<T>(opts, &ssh_config, remote_forward_state.clone()).await?
         };
@@ -1144,6 +1189,12 @@ where
 
         Ok(Self {
             session,
+            symlink_order: opts.symlink_order(
+                detected_order
+                    .get()
+                    .copied()
+                    .unwrap_or(SftpSymlinkOrder::TargetFirst),
+            ),
             forward_agent: ssh_config.params.forward_agent.unwrap_or(false),
             remote_forward_ports,
             remote_forward_state,
@@ -1247,6 +1298,7 @@ where
         SftpSession::new(channel.into_stream())
             .await
             .map(|session| RusshSftp {
+                symlink_order: self.symlink_order,
                 session: Arc::new(session),
             })
             .map_err(|err| {
@@ -1269,11 +1321,16 @@ fn russh_client_config(opts: &SshOpts, ssh_config: &Config) -> Arc<client::Confi
     Arc::new(config)
 }
 
+type RusshConnection<T> = (
+    Handle<CaSignaturePolicyHandler<T>>,
+    Arc<OnceLock<SftpSymlinkOrder>>,
+);
+
 async fn connect_russh_direct<T>(
     opts: &SshOpts,
     ssh_config: &Config,
     remote_forwards: Arc<RemoteForwardState>,
-) -> RemoteResult<Handle<CaSignaturePolicyHandler<T>>>
+) -> RemoteResult<RusshConnection<T>>
 where
     T: Handler + Default + Send + 'static,
 {
@@ -1292,6 +1349,7 @@ where
             ssh_config.params.forward_agent.unwrap_or(false),
             remote_forwards.clone(),
         );
+        let order = Arc::clone(&handler.symlink_order);
         match connect_with_timeout(
             config.clone(),
             handler,
@@ -1305,7 +1363,7 @@ where
         )
         .await
         {
-            Ok(session) => return Ok(session),
+            Ok(session) => return Ok((session, order)),
             Err(err) if attempt < connection_attempts => {
                 warn!("SSH connection attempt {attempt} failed: {err}");
                 attempt += 1;
@@ -1320,7 +1378,7 @@ async fn connect_russh_through_jump<T>(
     jump_session: &Handle<CaSignaturePolicyHandler<T>>,
     target: &Config,
     remote_forwards: Arc<RemoteForwardState>,
-) -> RemoteResult<Handle<CaSignaturePolicyHandler<T>>>
+) -> RemoteResult<RusshConnection<T>>
 where
     T: Handler + Default + Send + 'static,
 {
@@ -1334,6 +1392,7 @@ where
             target.params.forward_agent.unwrap_or(false),
             remote_forwards.clone(),
         );
+        let order = Arc::clone(&handler.symlink_order);
         let connect = async {
             let channel = jump_session
                 .channel_open_direct_tcpip(
@@ -1351,7 +1410,7 @@ where
             tokio::time::timeout(target.connection_timeout, connect).await
         };
         match result {
-            Ok(Ok(session)) => return Ok(session),
+            Ok(Ok(session)) => return Ok((session, order)),
             Ok(Err(err)) if attempt < target.connection_attempts.max(1) => {
                 warn!("SSH connection attempt {attempt} through ProxyJump failed: {err:?}");
                 attempt += 1;
@@ -1562,6 +1621,56 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+fn sftp_path(value: russh_sftp::protocol::SftpString) -> RemoteResult<PathBuf> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStringExt as _;
+        Ok(std::ffi::OsString::from_vec(value.into_bytes()).into())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt as _;
+        let bytes = value.into_bytes();
+        let path = windows_path_units(&bytes).map(|units| std::ffi::OsString::from_wide(&units));
+        path.filter(|path| path.as_encoded_bytes() == bytes)
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                RemoteError::with_message(
+                    RemoteErrorType::InvalidPath,
+                    "remote path cannot be represented on Windows",
+                )
+            })
+    }
+    #[cfg(not(any(unix, windows)))]
+    value.into_string().map(PathBuf::from).map_err(|_| {
+        RemoteError::with_message(RemoteErrorType::InvalidPath, "remote path is not Unicode")
+    })
+}
+
+// Windows paths use UTF-8 extended with three-byte encodings of isolated
+// UTF-16 surrogates. Decode through safe wide-string APIs.
+#[cfg(any(windows, test))]
+fn windows_path_units(mut bytes: &[u8]) -> Option<Vec<u16>> {
+    let mut units = Vec::new();
+    loop {
+        match str::from_utf8(bytes) {
+            Ok(text) => {
+                units.extend(text.encode_utf16());
+                return Some(units);
+            }
+            Err(error) => {
+                let (valid, rest) = bytes.split_at(error.valid_up_to());
+                units.extend(str::from_utf8(valid).ok()?.encode_utf16());
+                let [0xed, high @ 0xa0..=0xbf, low @ 0x80..=0xbf, tail @ ..] = rest else {
+                    return None;
+                };
+                units.push(0xd000 | (u16::from(*high & 0x3f) << 6) | u16::from(*low & 0x3f));
+                bytes = tail;
+            }
+        }
+    }
+}
+
 impl RusshSftp {
     pub(crate) async fn mkdir(&self, path: &Path, mode: u32) -> RemoteResult<()> {
         let path_str = path_string(path);
@@ -1614,14 +1723,17 @@ impl RusshSftp {
     pub(crate) async fn readdir(&self, dirname: &Path) -> RemoteResult<Vec<File>> {
         let entries = self
             .session
-            .read_dir(path_string(dirname))
+            .read_dir(dirname.as_os_str().as_encoded_bytes())
             .await
             .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))?;
         let mut files = Vec::new();
         for entry in entries {
             // `dirname` is kept as is, as it was sent to the server.
-            let entry_path =
-                path_utils::join_with(dirname.as_os_str(), entry.file_name().as_ref(), false);
+            let entry_path = path_utils::join_with(
+                dirname.as_os_str(),
+                sftp_path(entry.file_name())?.as_os_str(),
+                false,
+            );
             let symlink = if entry.file_type().is_symlink() {
                 self.read_link(&entry_path).await
             } else {
@@ -1633,8 +1745,12 @@ impl RusshSftp {
     }
 
     async fn read_link(&self, path: &Path) -> Option<PathBuf> {
-        match self.session.read_link(path_string(path)).await {
-            Ok(target) => Some(PathBuf::from(target)),
+        match self
+            .session
+            .read_link(path.as_os_str().as_encoded_bytes())
+            .await
+        {
+            Ok(target) => sftp_path(target).ok(),
             Err(err) => {
                 error!(
                     "Failed to read link of {path}: {err}",
@@ -1647,7 +1763,10 @@ impl RusshSftp {
 
     pub(crate) async fn rename(&self, src: &Path, dest: &Path) -> RemoteResult<()> {
         self.session
-            .rename(path_string(src), path_string(dest))
+            .rename(
+                src.as_os_str().as_encoded_bytes(),
+                dest.as_os_str().as_encoded_bytes(),
+            )
             .await
             .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
     }
@@ -1673,7 +1792,7 @@ impl RusshSftp {
     pub(crate) async fn stat(&self, path: &Path) -> RemoteResult<File> {
         let attrs = self
             .session
-            .symlink_metadata(path_string(path))
+            .symlink_metadata(path.as_os_str().as_encoded_bytes())
             .await
             .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))?;
         let symlink = if attrs.is_symlink() {
@@ -1684,16 +1803,20 @@ impl RusshSftp {
         Ok(make_fsentry(path, &attrs, symlink))
     }
 
-    pub(crate) async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+    pub(crate) async fn symlink(&self, link: &Path, target: &Path) -> RemoteResult<()> {
+        let (first, second) = self.symlink_order.operands(link, target);
         self.session
-            .symlink(path_string(path), path_string(target))
+            .symlink(
+                first.as_os_str().as_encoded_bytes(),
+                second.as_os_str().as_encoded_bytes(),
+            )
             .await
             .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
     }
 
     pub(crate) async fn unlink(&self, path: &Path) -> RemoteResult<()> {
         self.session
-            .remove_file(path_string(path))
+            .remove_file(path.as_os_str().as_encoded_bytes())
             .await
             .map_err(|err| sftp_error(err, RemoteErrorType::CouldNotRemoveFile))
     }
@@ -1725,7 +1848,7 @@ fn make_fsentry(
     attrs: &russh_sftp::protocol::FileAttributes,
     symlink: Option<PathBuf>,
 ) -> File {
-    let file_type = if symlink.is_some() {
+    let file_type = if attrs.is_symlink() {
         FileType::Symlink
     } else if attrs.is_dir() {
         FileType::Directory

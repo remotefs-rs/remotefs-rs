@@ -103,7 +103,7 @@ impl MockRemoteFs {
     /// Adds a symbolic link without resolving its target.
     pub(crate) fn seed_symlink(&self, path: &Path, target: &Path) {
         self.assert_absolute(path);
-        self.assert_absolute(target);
+        crate::path::ensure_symlink_target(target).expect("invalid fixture symlink target");
         let mut state = self.lock_state();
         Self::assert_parent_directory(&state, path);
         state.entries.insert(

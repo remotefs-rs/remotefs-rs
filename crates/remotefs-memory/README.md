@@ -61,8 +61,8 @@ remotefs-memory = "1.2"
 ```
 
 `MemoryFs` implements the blocking `remotefs::RemoteFs` trait from remotefs 1.
-Every path is absolute and the tree root is `/`; there is no working
-directory. Transfers return owned streams that must be finished. Async
+Entry paths start at the tree root `/`. Symbolic link targets can be relative,
+for example `../README.md`. Transfers return owned streams that must be finished. Async
 consumers can wrap the client in `remotefs::adapters::r#async::Unblock`
 (remotefs `tokio` feature).
 
