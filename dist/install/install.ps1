@@ -19,7 +19,7 @@
     Skip the confirmation prompt during installation. Alias: -Yes.
 
 .EXAMPLE
-    irm https://remotefs-rs.github.io/remotefs-rs-fuse/install.ps1 | iex
+    irm https://remotefs-rs.github.io/remotefs-rs/install.ps1 | iex
 
 .EXAMPLE
     .\install.ps1 -Version 1.0.0 -Force
@@ -36,7 +36,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$GithubRepo = "remotefs-rs/remotefs-rs-fuse"
+$GithubRepo = "remotefs-rs/remotefs-rs"
 $IssuesUrl = "https://github.com/$GithubRepo/issues/new"
 
 # -- output helpers ----------------------------------------------------------
@@ -108,17 +108,24 @@ function Get-FusibileTarget {
 
 function Get-LatestFusibileVersion {
     try {
-        $release = Invoke-RestMethod `
-            -Uri "https://api.github.com/repos/$GithubRepo/releases/latest" `
+        $releases = Invoke-RestMethod `
+            -Uri "https://api.github.com/repos/$GithubRepo/releases?per_page=100" `
             -Headers @{ "User-Agent" = "fusibile-installer" } `
             -UseBasicParsing
     } catch {
-        Write-Err "Could not query the latest fusibile release: $($_.Exception.Message)"
-        Write-Warn "If no release has been published yet, pass a version explicitly with '-Version X.Y.Z'."
+        Write-Err "Could not query the GitHub releases: $($_.Exception.Message)"
+        Write-Warn "If no fusibile release has been published yet, pass a version explicitly with '-Version X.Y.Z'."
         Write-Warn "If you believe this is a bug, please report an issue at <$IssuesUrl>"
         exit 1
     }
-    return $release.tag_name.TrimStart("v")
+    # Only fusibile-v* tags count: the monorepo also publishes a tag per crate.
+    $release = $releases | Where-Object { $_.tag_name -like "fusibile-v*" } | Select-Object -First 1
+    if (-not $release) {
+        Write-Err "Could not find a fusibile release in the GitHub API response."
+        Write-Warn "Pass a version explicitly with '-Version X.Y.Z', or report an issue at <$IssuesUrl>"
+        exit 1
+    }
+    return $release.tag_name.Substring("fusibile-v".Length)
 }
 
 # -- Dokany detection ---------------------------------------------------------
@@ -152,7 +159,7 @@ function Install-Fusibile {
     )
 
     $asset = "fusibile-v$InstallVersion-$Target.zip"
-    $url = "https://github.com/$GithubRepo/releases/download/v$InstallVersion/$asset"
+    $url = "https://github.com/$GithubRepo/releases/download/fusibile-v$InstallVersion/$asset"
 
     Write-Host ""
     Write-Host "  fusibile configuration"

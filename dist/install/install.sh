@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # shellcheck shell=dash
 
-# Installer for fusibile <https://github.com/remotefs-rs/remotefs-rs-fuse>
+# Installer for fusibile <https://github.com/remotefs-rs/remotefs-rs>
 #
 # Options
 #
@@ -23,15 +23,13 @@
 
 set -eu
 
-GITHUB_REPO="remotefs-rs/remotefs-rs-fuse"
+GITHUB_REPO="remotefs-rs/remotefs-rs"
 GITHUB_URL="https://github.com/${GITHUB_REPO}"
 ISSUES_URL="${GITHUB_URL}/issues/new"
 BREW_FORMULA="remotefs-rs/fusibile/fusibile"
 VERSION=""
 FORCE=""
 SUDO=""
-
-printf '\n'
 
 BOLD="$(tput bold 2>/dev/null || printf '')"
 GREY="$(tput setaf 0 2>/dev/null || printf '')"
@@ -71,7 +69,7 @@ Downloads and installs the latest fusibile release for your platform, using
 Homebrew when available.
 
 USAGE:
-    curl -sSLf https://remotefs-rs.github.io/remotefs-rs-fuse/install.sh | sh -s -- [OPTIONS]
+    curl -sSLf https://remotefs-rs.github.io/remotefs-rs/install.sh | sh -s -- [OPTIONS]
 
 OPTIONS:
     -y, -f, --yes, --force       Skip the confirmation prompt
@@ -160,9 +158,17 @@ detect_arch() {
 
 unsupported() {
     error "$1"
-    info "On Windows, use the PowerShell installer instead: irm https://remotefs-rs.github.io/remotefs-rs-fuse/install.ps1 | iex"
+    info "On Windows, use the PowerShell installer instead: irm https://remotefs-rs.github.io/remotefs-rs/install.ps1 | iex"
     info "Alternatively you can install fusibile with Cargo <https://www.rust-lang.org/tools/install>: cargo install fusibile --locked"
     exit 1
+}
+
+# Prints the newest fusibile version found in a GitHub releases list. Only the
+# fusibile-v* tags count, because the monorepo also publishes a tag per crate.
+latest_fusibile_version() {
+    version="$(sed -n 's/.*"tag_name":[[:space:]]*"fusibile-v\([^"]*\)".*/\1/p' "$1" | head -n 1)"
+    [ -n "${version}" ] || return 1
+    printf '%s\n' "${version}"
 }
 
 resolve_version() {
@@ -170,16 +176,17 @@ resolve_version() {
         return 0
     fi
     info "Resolving the latest fusibile version…"
-    api_response="${TMP_DIR}/latest-release.json"
-    if ! download "${api_response}" "https://api.github.com/repos/${GITHUB_REPO}/releases/latest"; then
-        error "Could not query the latest fusibile release."
-        warn "If no release has been published yet, pass a version explicitly with '--version=X.Y.Z'."
+    api_response="${TMP_DIR}/releases.json"
+    if [ -n "${FUSIBILE_RELEASES_JSON:-}" ]; then
+        api_response="${FUSIBILE_RELEASES_JSON}"
+    elif ! download "${api_response}" "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100"; then
+        error "Could not query the GitHub releases."
+        warn "If no fusibile release has been published yet, pass a version explicitly with '--version=X.Y.Z'."
         warn "If you believe this is a bug, please report an issue at <${ISSUES_URL}>"
         exit 1
     fi
-    VERSION="$(sed -n 's/.*"tag_name":[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' "${api_response}" | head -n 1)"
-    if [ -z "${VERSION}" ]; then
-        error "Could not parse the latest fusibile version from the GitHub API response."
+    if ! VERSION="$(latest_fusibile_version "${api_response}")"; then
+        error "Could not find a fusibile release in the GitHub API response."
         warn "Pass a version explicitly with '--version=X.Y.Z', or report an issue at <${ISSUES_URL}>"
         exit 1
     fi
@@ -260,7 +267,7 @@ install_from_release() {
     esac
 
     asset="fusibile-v${VERSION}-${target}.tar.gz"
-    url="${GITHUB_URL}/releases/download/v${VERSION}/${asset}"
+    url="${GITHUB_URL}/releases/download/fusibile-v${VERSION}/${asset}"
     archive="${TMP_DIR}/${asset}"
 
     info "Downloading ${GREEN}fusibile v${VERSION}${NO_COLOR} from ${url} …"
@@ -321,93 +328,101 @@ check_fuse_runtime() {
 
 # -- main --------------------------------------------------------------------
 
-if [ -z "${PLATFORM-}" ]; then
-    PLATFORM="$(detect_platform)"
-fi
+main() {
+    printf '\n'
 
-if [ -z "${ARCH-}" ]; then
-    ARCH="$(detect_arch)"
-fi
+    if [ -z "${PLATFORM-}" ]; then
+        PLATFORM="$(detect_platform)"
+    fi
 
-if [ -z "${BIN_DIR-}" ]; then
-    BIN_DIR="/usr/local/bin"
-fi
+    if [ -z "${ARCH-}" ]; then
+        ARCH="$(detect_arch)"
+    fi
 
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -y | -f | --yes | --force)
-            FORCE=1
-            shift 1
-            ;;
-        -v=* | --version=*)
-            VERSION="${1#*=}"
-            shift 1
-            ;;
-        --version)
-            if [ "$#" -lt 2 ]; then
-                error "--version requires an argument"
+    if [ -z "${BIN_DIR-}" ]; then
+        BIN_DIR="/usr/local/bin"
+    fi
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -y | -f | --yes | --force)
+                FORCE=1
+                shift 1
+                ;;
+            -v=* | --version=*)
+                VERSION="${1#*=}"
+                shift 1
+                ;;
+            --version)
+                if [ "$#" -lt 2 ]; then
+                    error "--version requires an argument"
+                    exit 1
+                fi
+                VERSION="$2"
+                shift 2
+                ;;
+            -h | --help)
+                usage
+                exit 0
+                ;;
+            *)
+                error "Unknown option: $1"
+                usage
                 exit 1
-            fi
-            VERSION="$2"
-            shift 2
-            ;;
-        -h | --help)
-            usage
-            exit 0
-            ;;
-        *)
-            error "Unknown option: $1"
-            usage
-            exit 1
-            ;;
-    esac
-done
+                ;;
+        esac
+    done
 
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "${TMP_DIR}"' EXIT
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "${TMP_DIR}"' EXIT
 
-# Homebrew always installs the latest release, so an explicit version request
-# falls back to the plain binary download.
-if has brew && [ -z "${VERSION}" ]; then
-    METHOD="brew"
-else
-    METHOD="release"
+    # Homebrew always installs the latest release, so an explicit version request
+    # falls back to the plain binary download.
+    if has brew && [ -z "${VERSION}" ]; then
+        METHOD="brew"
+    else
+        METHOD="release"
+    fi
+
+    if [ "${METHOD}" = "release" ]; then
+        case "${PLATFORM}" in
+            linux | macos) ;;
+            *) unsupported "${PLATFORM} is not supported by this installer." ;;
+        esac
+        case "${ARCH}" in
+            x86_64 | aarch64) ;;
+            *) unsupported "Unsupported architecture: ${ARCH}." ;;
+        esac
+        resolve_version
+    fi
+
+    printf '  %s\n' "${UNDERLINE}fusibile configuration${NO_COLOR}"
+    info "${BOLD}Method${NO_COLOR}:    ${GREEN}${METHOD}${NO_COLOR}"
+    info "${BOLD}Platform${NO_COLOR}:  ${GREEN}${PLATFORM}${NO_COLOR}"
+    info "${BOLD}Arch${NO_COLOR}:      ${GREEN}${ARCH}${NO_COLOR}"
+    if [ "${METHOD}" = "release" ]; then
+        info "${BOLD}Version${NO_COLOR}:   ${GREEN}${VERSION}${NO_COLOR}"
+        info "${BOLD}Bin dir${NO_COLOR}:   ${GREEN}${BIN_DIR}${NO_COLOR}"
+    fi
+    printf '\n'
+
+    confirm "Install ${GREEN}fusibile${NO_COLOR}?"
+
+    if [ "${METHOD}" = "brew" ]; then
+        install_with_brew
+    else
+        install_from_release
+    fi
+
+    completed "fusibile has successfully been installed on your system!"
+    info "Usage: fusibile --help"
+    info "If you encounter any issue, please report it at <${ISSUES_URL}>"
+
+    check_fuse_runtime
+
+    exit 0
+}
+
+if [ "${FUSIBILE_INSTALL_SOURCE_ONLY:-}" != 1 ]; then
+    main "$@"
 fi
-
-if [ "${METHOD}" = "release" ]; then
-    case "${PLATFORM}" in
-        linux | macos) ;;
-        *) unsupported "${PLATFORM} is not supported by this installer." ;;
-    esac
-    case "${ARCH}" in
-        x86_64 | aarch64) ;;
-        *) unsupported "Unsupported architecture: ${ARCH}." ;;
-    esac
-    resolve_version
-fi
-
-printf '  %s\n' "${UNDERLINE}fusibile configuration${NO_COLOR}"
-info "${BOLD}Method${NO_COLOR}:    ${GREEN}${METHOD}${NO_COLOR}"
-info "${BOLD}Platform${NO_COLOR}:  ${GREEN}${PLATFORM}${NO_COLOR}"
-info "${BOLD}Arch${NO_COLOR}:      ${GREEN}${ARCH}${NO_COLOR}"
-if [ "${METHOD}" = "release" ]; then
-    info "${BOLD}Version${NO_COLOR}:   ${GREEN}${VERSION}${NO_COLOR}"
-    info "${BOLD}Bin dir${NO_COLOR}:   ${GREEN}${BIN_DIR}${NO_COLOR}"
-fi
-printf '\n'
-
-confirm "Install ${GREEN}fusibile${NO_COLOR}?"
-
-if [ "${METHOD}" = "brew" ]; then
-    install_with_brew
-else
-    install_from_release
-fi
-
-completed "fusibile has successfully been installed on your system!"
-info "Usage: fusibile --help"
-info "If you encounter any issue, please report it at <${ISSUES_URL}>"
-
-check_fuse_runtime
-
-exit 0
