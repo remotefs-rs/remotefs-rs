@@ -1,7 +1,7 @@
 # remotefs WebDAV
 
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-webdav/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+  <a href="https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs-webdav/CHANGELOG.md" target="_blank">Changelog</a>
   ·
   <a href="https://docs.rs/remotefs-webdav#get-started" target="_blank">Get started</a>
   ·
@@ -18,9 +18,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-webdav/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-webdav.svg?style=plain"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-webdav"
@@ -40,9 +40,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-webdav/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-webdav/workflows/CI/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-webdav"

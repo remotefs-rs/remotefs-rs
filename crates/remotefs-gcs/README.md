@@ -2,8 +2,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/remotefs-gcs.svg)](https://crates.io/crates/remotefs-gcs)
 [![Documentation](https://docs.rs/remotefs-gcs/badge.svg)](https://docs.rs/remotefs-gcs)
-[![CI](https://github.com/remotefs-rs/remotefs-rs-gcs/actions/workflows/ci.yml/badge.svg)](https://github.com/remotefs-rs/remotefs-rs-gcs/actions/workflows/ci.yml)
-[![Coverage](https://codecov.io/gh/remotefs-rs/remotefs-rs-gcs/branch/main/graph/badge.svg)](https://codecov.io/gh/remotefs-rs/remotefs-rs-gcs)
+[![CI](https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml)
+[![Coverage](https://codecov.io/gh/remotefs-rs/remotefs-rs/branch/main/graph/badge.svg)](https://codecov.io/gh/remotefs-rs/remotefs-rs)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 `remotefs-gcs` is an asynchronous [`remotefs`] client backed by Google Cloud
@@ -206,7 +206,7 @@ The minimum supported Rust version is 1.98.0. See the [Rust toolchain file]
 for the pinned compiler and the [contribution guide] for project conventions.
 
 [Rust toolchain file]: rust-toolchain.toml
-[contribution guide]: https://github.com/remotefs-rs/remotefs-rs-gcs/blob/main/AGENTS.md
+[contribution guide]: https://github.com/remotefs-rs/remotefs-rs/blob/main/AGENTS.md
 
 ## License
 

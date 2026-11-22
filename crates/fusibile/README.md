@@ -26,9 +26,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
 </p>
@@ -213,16 +213,16 @@ system.
 Contributions, bug reports, new features, and questions are welcome! 😉
 If you have any questions or concerns, or you want to suggest a new feature, or you just want to
 improve `fusibile`, feel free to open an issue or a PR on the
-[remotefs-rs-fuse](https://github.com/remotefs-rs/remotefs-rs-fuse) repository.
+[remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-fuse) repository.
 
 Before contributing with AI-assisted tools, please read the
-[AI Policy](https://github.com/remotefs-rs/remotefs-rs-fuse/blob/main/AI_POLICY.md).
+[AI Policy](https://github.com/remotefs-rs/remotefs-rs/blob/main/AI_POLICY.md).
 
 ---
 
 ## Changelog ⏳
 
-View the [changelog](https://github.com/remotefs-rs/remotefs-rs-fuse/blob/main/CHANGELOG.md).
+View the [changelog](https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs-fuse/CHANGELOG.md).
 
 ---
 
@@ -231,4 +231,4 @@ View the [changelog](https://github.com/remotefs-rs/remotefs-rs-fuse/blob/main/C
 `fusibile` is licensed under the MIT license.
 
 You can read the entire
-[MIT license](https://github.com/remotefs-rs/remotefs-rs-fuse/blob/main/LICENSE).
+[MIT license](https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs-fuse/LICENSE).

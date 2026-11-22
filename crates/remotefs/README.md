@@ -1,11 +1,11 @@
 # remotefs
 
 <p align="center">
-  <img src="/assets/logo.png" alt="logo" width="256" height="256" />
+  <img src="https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/blob/main/CHANGELOG.md" target="_blank">Changelog</a>
+  <a href="https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs/CHANGELOG.md" target="_blank">Changelog</a>
   ·
   <a href="https://docs.rs/remotefs#get-started" target="_blank">Get started</a>
   ·
@@ -82,17 +82,17 @@ Otherwise, the backend crate re-exports the shared types you need.
 Backend crates are maintained separately. Choose a release compatible with
 remotefs 1 from their project documentation:
 
-- [aws-s3](https://github.com/remotefs-rs/remotefs-rs-aws-s3)
-- [ftp](https://github.com/remotefs-rs/remotefs-rs-ftp)
-- [gcs](https://github.com/remotefs-rs/remotefs-rs-gcs)
-- [kube](https://github.com/remotefs-rs/remotefs-rs-kube)
-- [memory](https://github.com/remotefs-rs/remotefs-rs-memory)
-- [smb](https://github.com/remotefs-rs/remotefs-rs-smb)
-- [ssh](https://github.com/remotefs-rs/remotefs-rs-ssh)
-- [webdav](https://github.com/remotefs-rs/remotefs-rs-webdav)
+- [aws-s3](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-aws-s3)
+- [ftp](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-ftp)
+- [gcs](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-gcs)
+- [kube](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-kube)
+- [memory](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-memory)
+- [smb](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-smb)
+- [ssh](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-ssh)
+- [webdav](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-webdav)
 
 To mount a backend as a local file system, see
-[remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs-fuse).
+[remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-fuse).
 
 ## Remote file system 💾
 
@@ -157,7 +157,7 @@ before opening a pull request.
 ## Apps using remotefs 🚀
 
 - [termscp](https://github.com/veeso/termscp)
-- [remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs-fuse)
+- [remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-fuse)
 
 ## Changelog ⏳
 

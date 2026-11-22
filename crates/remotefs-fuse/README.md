@@ -14,9 +14,9 @@
       src="https://img.shields.io/crates/l/remotefs-fuse.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-fuse?style=flat"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-fuse"
@@ -36,9 +36,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-fuse/actions/workflows/ci.yml/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-fuse"
@@ -58,7 +58,7 @@ in-memory, ...) as a local filesystem, via FUSE on Linux/macOS and Dokany on Win
 library (`Mount`, `MountOption`, `Driver`) to embed in your own project.
 
 If you're looking for a ready-to-use CLI instead, check out
-[`fusibile`](https://github.com/remotefs-rs/remotefs-rs-fuse/tree/main/crates/fusibile), which
+[`fusibile`](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/fusibile), which
 wires a chosen `remotefs` backend into `remotefs-fuse` for you.
 
 ---
@@ -70,7 +70,7 @@ wires a chosen `remotefs` backend into `remotefs-fuse` for you.
 ### Linux and macOS
 
 ```sh
-curl -sSLf https://remotefs-rs.github.io/remotefs-rs-fuse/install.sh | sh
+curl -sSLf https://remotefs-rs.github.io/remotefs-rs/install.sh | sh
 ```
 
 The script uses Homebrew when it is available and falls back to downloading the release binary,
@@ -80,7 +80,7 @@ prompt, or set `BIN_DIR` to change the install directory (default `/usr/local/bi
 ### Windows
 
 ```powershell
-irm https://remotefs-rs.github.io/remotefs-rs-fuse/install.ps1 | iex
+irm https://remotefs-rs.github.io/remotefs-rs/install.ps1 | iex
 ```
 
 ### Homebrew
@@ -97,7 +97,7 @@ cargo install fusibile --locked
 
 ### Manual download
 
-Grab an archive from the [releases page](https://github.com/remotefs-rs/remotefs-rs-fuse/releases).
+Grab an archive from the [releases page](https://github.com/remotefs-rs/remotefs-rs/releases).
 Assets are named `fusibile-v<version>-<target>.tar.gz` (`.zip` on Windows), each with a matching
 `<target>.sha256`. Prebuilt targets:
 

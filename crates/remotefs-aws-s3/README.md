@@ -18,9 +18,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/veeso/remotefs-rs-aws-s3.svg?style=plain"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-aws-s3"
@@ -40,24 +40,24 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-aws-s3/workflows/Linux/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-aws-s3/workflows/MacOS/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="MacOS CI"
   /></a>
-  <a href="https://github.com/veeso/remotefs-rs-aws-s3/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
     ><img
-      src="https://github.com/veeso/remotefs-rs-aws-s3/workflows/Windows/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="Windows CI"
   /></a>
-  <a href="https://coveralls.io/github/veeso/remotefs-rs-aws-s3"
+  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs"
     ><img
-      src="https://coveralls.io/repos/github/veeso/remotefs-rs-aws-s3/badge.svg"
+      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs-aws-s3"

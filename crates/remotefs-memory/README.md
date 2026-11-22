@@ -15,9 +15,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-memory/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-memory.svg?style=badge"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-memory"
@@ -37,9 +37,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-memory/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-memory/workflows/CI/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-memory"

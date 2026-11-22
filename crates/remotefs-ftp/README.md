@@ -19,9 +19,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/stargazers"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ftp.svg?style=badge"
+      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-ftp"
@@ -41,14 +41,14 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs-ftp/actions"
+  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs-ftp/workflows/Linux/badge.svg"
+      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="Linux CI"
   /></a>
-  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs-ftp"
+  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs"
     ><img
-      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ftp/badge.svg"
+      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs-ftp"

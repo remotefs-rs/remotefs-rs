@@ -1,14 +1,14 @@
 # remotefs SSH
 
 [![license-mit](https://img.shields.io/crates/l/remotefs-ssh.svg)](https://opensource.org/licenses/MIT)
-[![repo-stars](https://img.shields.io/github/stars/remotefs-rs/remotefs-rs-ssh?style=flat)](https://github.com/remotefs-rs/remotefs-rs-ssh/stargazers)
+[![repo-stars](https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat)](https://github.com/remotefs-rs/remotefs-rs/stargazers)
 [![downloads](https://img.shields.io/crates/d/remotefs-ssh.svg)](https://crates.io/crates/remotefs-ssh)
 [![latest-version](https://img.shields.io/crates/v/remotefs-ssh.svg)](https://crates.io/crates/remotefs-ssh)
 [![ko-fi](https://img.shields.io/badge/donate-ko--fi-red)](https://ko-fi.com/veeso)
 [![conventional-commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://conventionalcommits.org)
 
-[![Build](https://github.com/remotefs-rs/remotefs-rs-ssh/actions/workflows/ci.yml/badge.svg)](https://github.com/veeso/remotefs-rs-ssh/actions/workflows/ci.yml)
-[![coveralls](https://coveralls.io/repos/github/remotefs-rs/remotefs-rs-ssh/badge.svg)](https://coveralls.io/github/veeso/remotefs-rs-ssh)
+[![Build](https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml)
+[![coveralls](https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg)](https://coveralls.io/github/remotefs-rs/remotefs-rs)
 [![docs](https://docs.rs/remotefs-ssh/badge.svg)](https://docs.rs/remotefs-ssh)
 
 ---
