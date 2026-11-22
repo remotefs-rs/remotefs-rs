@@ -2,30 +2,31 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Changed
+
+- move remotefs crate into crates/remotefs
+
+### Build
+
+- **release:** bump every workspace crate version
+- unify crates in a cargo workspace at version 1.2.0
+
+> Every member crate shares version 1.2.0 and inherits its package metadata
+> from the workspace root. Every third-party dependency version now lives in
+> the root `[workspace.dependencies]` table, and members reference it with
+> `workspace = true`, keeping only their own features and optional flags.
+>
+> The lockfile is committed so the workspace resolves the same versions
+> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
+> 1.100.0.
+
 ## 1.0.1
 
 Released on 2026-09-15
 
-### Fixed
-
-- expose feature-gated types on docs.rs with correct cfg
-
-> Enable nightly doc_cfg behind the docsrs cfg and build every feature
-> on docs.rs so feature-gated items like Unblock and BlockOn render
-> with their "available on crate feature" badges.
-
-## 1.0.0
-
-Released on 2026-09-15
-
 ### Breaking changes
-
-- move to edition 2024 and refresh the dependency set
-
-> the crate now requires Rust 1.89.0. The `github-actions` and
-> `with-containers` features are removed: nothing in the crate was gated on
-> them. `find` now enables `dep:wildmatch`, so the implicit `wildmatch` feature
-> no longer exists; enable `find` instead.
 
 - preserve remote error sources and revise kinds
 
@@ -89,18 +90,15 @@ Released on 2026-09-15
 
 > Validate remote path syntax independently of the client platform and remove working-directory wrappers. Preserve buffered data and transfer errors across cancellation, complete bounded uploads correctly, and reuse workers for blocking I/O.
 
-### Build
+- expose feature-gated types on docs.rs with correct cfg (#34)
 
-- Breaking: move to edition 2024 and refresh the dependency set
-
-> Rewrite Cargo.toml to the shared conventions: name and version first, the
-> remaining package keys alphabetical with description last, bare version
-> requirements instead of caret ranges, and features sorted and expressed with
-> `dep:`.
+> - fix: expose feature-gated types on docs.rs with correct cfg
 >
-> Set `edition = "2024"` and declare `rust-version = "1.89.0"` so the MSRV is
-> checked rather than implied, and bump `thiserror` from 1 to 2. Also refresh
-> the maintainer e-mail to the address used by the rest of the family.
+> Enable nightly doc_cfg behind the docsrs cfg and build every feature
+> on docs.rs so feature-gated items like Unblock and BlockOn render
+> with their "available on crate feature" badges.
+>
+> - chore: release 1.0.1
 
 ## 0.3.0
 
@@ -108,11 +106,7 @@ Released on 2024-09-30
 
 ### Fixed
 
-- update readme to latest version for smb & ssh client libs. (#28)
-- cargo.toml
-- webdav docs
 - logo and docs
-- removed chrono
 - added Send bound to streams
 
 ## 0.1.0
