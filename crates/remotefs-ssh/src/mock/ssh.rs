@@ -2,6 +2,9 @@
 //!
 //! Contains mock for SSH protocol
 
+// The agent and proxy helpers are only exercised by the libssh backend tests.
+#![cfg_attr(not(feature = "libssh"), allow(dead_code))]
+
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
