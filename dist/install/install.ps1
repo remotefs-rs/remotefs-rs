@@ -19,7 +19,7 @@
     Skip the confirmation prompt during installation. Alias: -Yes.
 
 .EXAMPLE
-    irm https://remotefs-rs.github.io/remotefs-rs/install.ps1 | iex
+    irm https://veeso.github.io/remotefs-rs/install.ps1 | iex
 
 .EXAMPLE
     .\install.ps1 -Version 1.0.0 -Force
@@ -36,7 +36,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$GithubRepo = "remotefs-rs/remotefs-rs"
+$GithubRepo = "veeso/remotefs-rs"
 $IssuesUrl = "https://github.com/$GithubRepo/issues/new"
 
 # -- output helpers ----------------------------------------------------------

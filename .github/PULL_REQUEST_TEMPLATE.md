@@ -8,7 +8,7 @@ Fixes #
 
 ## Checklist
 
-- [ ] I have read the [AI Policy](https://github.com/remotefs-rs/remotefs-rs/blob/main/AI_POLICY.md) and the [contributing guidelines](https://github.com/remotefs-rs/remotefs-rs/blob/main/CONTRIBUTING.md).
+- [ ] I have read the [AI Policy](https://github.com/veeso/remotefs-rs/blob/main/AI_POLICY.md) and the [contributing guidelines](https://github.com/veeso/remotefs-rs/blob/main/CONTRIBUTING.md).
 - [ ] I have added rustdoc documentation for any new public API.
 - [ ] I have added tests covering my changes.
 - [ ] `just check` passes locally.

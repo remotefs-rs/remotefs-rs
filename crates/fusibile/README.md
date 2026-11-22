@@ -1,7 +1,7 @@
 # fusibile
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
+  <img src="https://raw.githubusercontent.com/veeso/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
 </p>
 
 <p align="center">~ A CLI to mount remote file systems locally via FUSE or Dokany ~</p>
@@ -26,9 +26,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml"
+  <a href="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
+      src="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
 </p>
@@ -39,7 +39,7 @@
 
 `fusibile` is a ready-to-use CLI built on top of
 [`remotefs-fuse`](https://crates.io/crates/remotefs-fuse) that wires a chosen
-[`remotefs`](https://github.com/remotefs-rs/remotefs-rs) backend (SFTP/SCP, FTP, AWS S3, Google
+[`remotefs`](https://github.com/veeso/remotefs-rs) backend (SFTP/SCP, FTP, AWS S3, Google
 Cloud Storage, SMB, WebDAV, Kube, in-memory, ...) straight into a local mount, via FUSE on
 Linux/macOS and Dokany on Windows.
 
@@ -213,16 +213,16 @@ system.
 Contributions, bug reports, new features, and questions are welcome! 😉
 If you have any questions or concerns, or you want to suggest a new feature, or you just want to
 improve `fusibile`, feel free to open an issue or a PR on the
-[remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-fuse) repository.
+[remotefs-fuse](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-fuse) repository.
 
 Before contributing with AI-assisted tools, please read the
-[AI Policy](https://github.com/remotefs-rs/remotefs-rs/blob/main/AI_POLICY.md).
+[AI Policy](https://github.com/veeso/remotefs-rs/blob/main/AI_POLICY.md).
 
 ---
 
 ## Changelog ⏳
 
-View the [changelog](https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs-fuse/CHANGELOG.md).
+View the [changelog](https://github.com/veeso/remotefs-rs/blob/main/crates/remotefs-fuse/CHANGELOG.md).
 
 ---
 
@@ -231,4 +231,4 @@ View the [changelog](https://github.com/remotefs-rs/remotefs-rs/blob/main/crates
 `fusibile` is licensed under the MIT license.
 
 You can read the entire
-[MIT license](https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs-fuse/LICENSE).
+[MIT license](https://github.com/veeso/remotefs-rs/blob/main/crates/remotefs-fuse/LICENSE).

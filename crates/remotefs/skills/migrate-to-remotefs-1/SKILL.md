@@ -5,7 +5,7 @@ description: Migrate a remotefs backend from the 0.3 contract to remotefs 1.
 
 # Migrate a backend to remotefs 1
 
-Read the packaged [`MIGRATION.md`](../../MIGRATION.md) and the [canonical remotefs migration guide](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md)
+Read the packaged [`MIGRATION.md`](../../MIGRATION.md) and the [canonical remotefs migration guide](https://github.com/veeso/remotefs-rs/blob/main/MIGRATION.md)
 before changing code. Inspect the target crate's `AGENTS.md`, `CLAUDE.md`,
 `CONTRIBUTING.md`, Justfile, CI, test-container recipes, and changelog. Do not
 assume this repository is the target crate or that downstream crates have

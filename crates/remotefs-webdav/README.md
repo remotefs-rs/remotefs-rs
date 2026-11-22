@@ -1,7 +1,7 @@
 # remotefs WebDAV
 
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs-webdav/CHANGELOG.md" target="_blank">Changelog</a>
+  <a href="https://github.com/veeso/remotefs-rs/blob/main/crates/remotefs-webdav/CHANGELOG.md" target="_blank">Changelog</a>
   ·
   <a href="https://docs.rs/remotefs-webdav#get-started" target="_blank">Get started</a>
   ·
@@ -18,9 +18,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
+  <a href="https://github.com/veeso/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-webdav"
@@ -40,9 +40,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
+  <a href="https://github.com/veeso/remotefs-rs/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
+      src="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-webdav"
@@ -56,7 +56,7 @@
 
 ## About remotefs-webdav ☁️
 
-remotefs-webdav is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the WebDAV protocol as specified in [RFC4918](https://www.rfc-editor.org/rfc/rfc4918).
+remotefs-webdav is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the WebDAV protocol as specified in [RFC4918](https://www.rfc-editor.org/rfc/rfc4918).
 
 ---
 

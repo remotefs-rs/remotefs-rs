@@ -19,9 +19,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
+  <a href="https://github.com/veeso/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-smb"
@@ -46,14 +46,14 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml"
+  <a href="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
+      src="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
-  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs"
+  <a href="https://coveralls.io/github/veeso/remotefs-rs"
     ><img
-      src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg"
+      src="https://coveralls.io/repos/github/veeso/remotefs-rs/badge.svg"
       alt="Coveralls"
   /></a>
   <a href="https://docs.rs/remotefs-smb"
@@ -67,7 +67,7 @@
 
 ## About remotefs-smb ☁️
 
-remotefs-smb is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support for the SMB protocol.
+remotefs-smb is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support for the SMB protocol.
 
 ---
 

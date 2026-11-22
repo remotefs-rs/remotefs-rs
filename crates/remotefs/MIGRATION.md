@@ -19,7 +19,7 @@ remotefs = "1"
 ```
 
 This document is shipped in the package and is also maintained in the
-[canonical remotefs repository](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md).
+[canonical remotefs repository](https://github.com/veeso/remotefs-rs/blob/main/MIGRATION.md).
 The [migration skill](skills/migrate-to-remotefs-1/SKILL.md) gives an agent the
 same backend-oriented checklist.
 
@@ -263,5 +263,5 @@ ln -s "$PWD/skills/migrate-to-remotefs-1" "$CODEX_HOME/skills/migrate-to-remotef
 ```
 
 When installed elsewhere, the skill points to this packaged document and the
-[canonical migration guide](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md),
+[canonical migration guide](https://github.com/veeso/remotefs-rs/blob/main/MIGRATION.md),
 so it does not depend on a relative path into this repository.
