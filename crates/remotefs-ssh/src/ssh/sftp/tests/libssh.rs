@@ -95,6 +95,10 @@ fn should_initialize_sftp_filesystem() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_append_and_copy_file() {
     let ctx = setup();
     let source = ctx.path("a.txt");
@@ -119,6 +123,10 @@ fn should_append_and_copy_file() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_honor_absolute_paths_and_ranges() {
     let ctx = setup();
     let path = ctx.path("range.txt");
@@ -142,6 +150,10 @@ fn should_honor_absolute_paths_and_ranges() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_seek_and_finish_sftp_streams() {
     let ctx = setup();
     let path = ctx.path("stream.txt");
@@ -164,6 +176,10 @@ fn should_seek_and_finish_sftp_streams() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_set_metadata_and_stat_symlink() {
     let ctx = setup();
     let target = ctx.path("target.txt");
@@ -180,6 +196,10 @@ fn should_set_metadata_and_stat_symlink() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_advertise_capabilities() {
     let ctx = setup();
     let caps = ctx.client.capabilities();

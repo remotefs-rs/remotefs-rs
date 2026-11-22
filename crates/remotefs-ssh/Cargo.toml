@@ -43,6 +43,7 @@ russh = [
   "dep:tokio",
   "remotefs/tokio",
 ]
+with-containers = []
 
 [dependencies]
 chrono = { workspace = true }

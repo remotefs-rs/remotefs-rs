@@ -1620,6 +1620,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_connect_with_identity_file_from_ssh_config() {
         let container = OpensshServer::start();
         let key_file = ssh_mock::create_key_file();
@@ -1638,6 +1642,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_disable_public_key_authentication_from_ssh_config() {
         let container = OpensshServer::start();
         let key_file = ssh_mock::create_key_file();
@@ -1664,6 +1672,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_prefer_explicit_port_over_ssh_config() {
         let container = OpensshServer::start();
         let port = container.port();
@@ -1685,6 +1697,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_use_resolved_endpoint_after_native_config_parsing() {
         let container = OpensshServer::start();
         let port = container.port();
@@ -1708,6 +1724,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_ignore_implicit_ssh_config() {
         let container = OpensshServer::start();
         let port = container.port();
@@ -1763,6 +1783,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_disable_connection_timeout_when_zero() {
         let container = OpensshServer::start();
         let opts = SshOpts::new("127.0.0.1")
@@ -1777,6 +1801,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_retry_connection_using_configured_attempts() {
         let container = OpensshServer::start();
         let (port, proxy) = ssh_mock::start_flaky_proxy(container.port(), 1);
@@ -1798,6 +1826,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_bind_interface() {
         let container = OpensshServer::start();
         let port = container.port();
@@ -1841,6 +1873,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_tcp_keep_alive() {
         let container = OpensshServer::start();
         let port = container.port();
@@ -1877,6 +1913,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     #[cfg(unix)]
     fn should_forward_configured_ssh_agent() {
         let agent = ssh_mock::TestSshAgent::start();
@@ -1903,6 +1943,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_remote_forward() {
         crate::mock::logger();
         let container = OpensshServer::start_with_tcp_forwarding();
@@ -1946,6 +1990,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     #[cfg(unix)]
     fn should_apply_remote_forward_to_unix_socket() {
         let container = OpensshServer::start_with_tcp_forwarding();

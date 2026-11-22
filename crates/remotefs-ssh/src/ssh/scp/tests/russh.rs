@@ -129,6 +129,10 @@ fn should_reject_relative_paths() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_copy_and_honor_scp_ranges() {
     let ctx = setup();
     let source = ctx.path("source.txt");
@@ -150,6 +154,10 @@ fn should_copy_and_honor_scp_ranges() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_require_size_and_reject_append() {
     let ctx = setup();
     ctx.runtime.block_on(async {
@@ -187,6 +195,10 @@ fn should_require_size_and_reject_append() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_not_seek_scp_streams_and_finish_explicitly() {
     let ctx = setup();
     let path = ctx.path("stream.txt");
@@ -242,6 +254,10 @@ fn should_not_seek_scp_streams_and_finish_explicitly() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_advertise_capabilities_and_stat_symlink() {
     let ctx = setup();
     let target = ctx.path("target.txt");
@@ -262,6 +278,10 @@ fn should_advertise_capabilities_and_stat_symlink() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_remove_special_entries_recursively_and_classify_nonempty_dirs() {
     let ctx = setup();
     let directory = ctx.path("special");
@@ -284,6 +304,10 @@ fn should_remove_special_entries_recursively_and_classify_nonempty_dirs() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_work_through_blocking_wrapper() {
     crate::mock::logger();
     let container = OpensshServer::start();
@@ -321,6 +345,10 @@ fn should_reject_current_thread_blocking_wrapper() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_list_directory_given_with_backslash_separators() {
     let ctx = setup();
     let dir = ctx.path("steam");

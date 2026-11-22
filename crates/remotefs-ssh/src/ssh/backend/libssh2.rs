@@ -1725,6 +1725,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_connect_with_identity_file_from_ssh_config() {
         let container = crate::ssh::container::OpensshServer::start();
         let key_file = ssh_mock::create_key_file();
@@ -1743,6 +1747,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_connect_with_certificate_file_from_ssh_config() {
         let (key_file, certificate_file) = ssh_mock::create_certificate_key_files();
         let container = crate::ssh::container::OpensshServer::start_with_public_key(
@@ -1766,6 +1774,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_disable_public_key_authentication_from_ssh_config() {
         let container = crate::ssh::container::OpensshServer::start();
         let key_file = ssh_mock::create_key_file();
@@ -1792,6 +1804,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_try_each_identity_file_from_ssh_config() {
         let container = crate::ssh::container::OpensshServer::start();
         let key_file = ssh_mock::create_key_file();
@@ -1819,6 +1835,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_pubkey_accepted_algorithms_from_ssh_config() {
         let container = crate::ssh::container::OpensshServer::start();
         let key_file = ssh_mock::create_key_file();
@@ -1848,6 +1868,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_connect_to_ssh_server_auth_user_password() {
         use crate::ssh::container::OpensshServer;
 
@@ -1870,6 +1894,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_connect_to_ssh_server_auth_key() {
         use crate::ssh::container::OpensshServer;
 
@@ -1886,6 +1914,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_connect_through_proxy_jump() {
         use crate::ssh::container::ProxyJumpServers;
 
@@ -1952,6 +1984,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_fail_authentication() {
         crate::mock::logger();
         let container = crate::ssh::container::OpensshServer::start();
@@ -1965,6 +2001,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_bind_address() {
         let container = crate::ssh::container::OpensshServer::start();
         let port = container.port();
@@ -2007,6 +2047,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_bind_interface() {
         let container = crate::ssh::container::OpensshServer::start();
         let port = container.port();
@@ -2037,6 +2081,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_tcp_keep_alive() {
         let container = crate::ssh::container::OpensshServer::start();
         let port = container.port();
@@ -2073,6 +2121,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_server_alive_interval() {
         let container = crate::ssh::container::OpensshServer::start();
         let port = container.port();
@@ -2094,6 +2146,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_apply_configured_remote_forward() {
         crate::mock::logger();
         let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();
@@ -2137,6 +2193,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     #[cfg(unix)]
     fn should_apply_remote_forward_to_unix_socket() {
         let container = crate::ssh::container::OpensshServer::start_with_tcp_forwarding();

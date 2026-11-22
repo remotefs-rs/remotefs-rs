@@ -95,6 +95,10 @@ fn should_initialize_scp_filesystem() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_copy_and_read_with_ranges() {
     let ctx = setup();
     let source = ctx.path("a.txt");
@@ -114,6 +118,10 @@ fn should_copy_and_read_with_ranges() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_require_size_and_reject_append() {
     let ctx = setup();
     let path = ctx.path("missing.txt");
@@ -133,6 +141,10 @@ fn should_require_size_and_reject_append() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_not_seek_scp_streams() {
     let ctx = setup();
     let path = ctx.path("stream.txt");
@@ -158,6 +170,10 @@ fn should_not_seek_scp_streams() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_stat_symlink_and_set_metadata() {
     let ctx = setup();
     let target = ctx.path("target.txt");
@@ -174,6 +190,10 @@ fn should_stat_symlink_and_set_metadata() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_advertise_capabilities() {
     let ctx = setup();
     let caps = ctx.client.capabilities();

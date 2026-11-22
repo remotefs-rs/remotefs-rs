@@ -128,6 +128,10 @@ fn should_reject_relative_paths() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_append_and_honor_ranges() {
     let ctx = setup();
     let path = ctx.path("range.txt");
@@ -155,6 +159,10 @@ fn should_append_and_honor_ranges() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_seek_and_finish_streams() {
     let ctx = setup();
     let path = ctx.path("stream.txt");
@@ -188,6 +196,10 @@ fn should_seek_and_finish_streams() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_stat_symlink_and_advertise_capabilities() {
     let ctx = setup();
     let target = ctx.path("target.txt");
@@ -206,6 +218,10 @@ fn should_stat_symlink_and_advertise_capabilities() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_copy_symlinks_and_reject_overlapping_destinations() {
     let ctx = setup();
     let source_dir = ctx.path("source");
@@ -244,6 +260,10 @@ fn should_copy_symlinks_and_reject_overlapping_destinations() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_copy_directory_tree_into_child_paths() {
     let ctx = setup();
     let source_dir = ctx.path("source");
@@ -280,6 +300,10 @@ fn should_copy_directory_tree_into_child_paths() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_list_directory_given_with_backslash_separators() {
     let ctx = setup();
     let dir = ctx.path("steam");
@@ -298,6 +322,10 @@ fn should_list_directory_given_with_backslash_separators() {
 }
 
 #[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_work_through_blocking_wrapper() {
     crate::mock::logger();
     let container = OpensshServer::start();
