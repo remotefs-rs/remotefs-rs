@@ -4,9 +4,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(feature = "tokio")]
-use fuser::Request;
-use fuser::{FileAttr, FileType, TimeOrNow};
+use fuser::{FileAttr, FileType, Request, TimeOrNow};
 use libc::c_int;
 use nix::fcntl::OFlag;
 use nix::sys::stat::SFlag;
@@ -21,6 +19,21 @@ use crate::MountOption;
 pub(crate) const BLOCK_SIZE: usize = 512;
 pub(crate) const FMODE_EXEC: c_int = 0x20;
 pub(crate) const ROOT_UID: u32 = 0;
+/// Id standing in for a caller the kernel did not identify.
+///
+/// `(uid_t)-1` is never a real owner, so such a caller matches neither the owner nor the group
+/// of a file and only ever receives the permissions granted to everyone else.
+pub(crate) const UNKNOWN_ID: u32 = u32::MAX;
+
+/// User id of the caller of `req`, or [`UNKNOWN_ID`] when the kernel did not report one.
+pub(crate) fn caller_uid(req: &Request) -> u32 {
+    req.uid().unwrap_or(UNKNOWN_ID)
+}
+
+/// Group id of the caller of `req`, or [`UNKNOWN_ID`] when the kernel did not report one.
+pub(crate) fn caller_gid(req: &Request) -> u32 {
+    req.gid().unwrap_or(UNKNOWN_ID)
+}
 
 #[cfg(test)]
 mod tests {
@@ -172,8 +185,8 @@ pub(crate) struct RequestMeta {
 impl From<&Request> for RequestMeta {
     fn from(req: &Request) -> Self {
         Self {
-            uid: req.uid(),
-            gid: req.gid(),
+            uid: caller_uid(req),
+            gid: caller_gid(req),
             pid: req.pid(),
         }
     }

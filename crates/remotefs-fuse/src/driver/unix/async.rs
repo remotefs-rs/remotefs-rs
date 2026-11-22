@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 use fuser::{
     AccessFlags as FuserAccessFlags, BsdFileFlags, FileAttr, FileHandle as FuserFileHandle,
     FileType, Filesystem, FopenFlags, Generation, INodeNo, KernelConfig, LockOwner, OpenFlags,
-    RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+    Owner, RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nix::sys::stat::SFlag;
@@ -254,6 +254,7 @@ where
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
         _flags: Option<BsdFileFlags>,
+        _kill_suid_gid: bool,
         reply: ReplyAttr,
     ) {
         let request = RequestMeta::from(req);
@@ -281,6 +282,7 @@ where
         mode: u32,
         umask: u32,
         rdev: u32,
+        _owner: Owner,
         reply: ReplyEntry,
     ) {
         let request = RequestMeta::from(req);
@@ -299,6 +301,7 @@ where
         name: &OsStr,
         mode: u32,
         umask: u32,
+        _owner: Owner,
         reply: ReplyEntry,
     ) {
         let request = RequestMeta::from(req);
@@ -330,6 +333,7 @@ where
         parent: INodeNo,
         link_name: &OsStr,
         target: &Path,
+        _owner: Owner,
         reply: ReplyEntry,
     ) {
         let request = RequestMeta::from(req);
@@ -350,6 +354,7 @@ where
         newparent: INodeNo,
         newname: &OsStr,
         flags: RenameFlags,
+        _owner: Option<Owner>,
         reply: ReplyEmpty,
     ) {
         let request = RequestMeta::from(req);
@@ -373,7 +378,14 @@ where
         reply.error(fuser::Errno::ENOSYS);
     }
 
-    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        flags: OpenFlags,
+        _kill_suid_gid: bool,
+        reply: ReplyOpen,
+    ) {
         let request = RequestMeta::from(req);
         self.spawn(move |inner| async move {
             inner.open(request, ino, flags, reply).await;
@@ -605,6 +617,8 @@ where
         mode: u32,
         umask: u32,
         flags: i32,
+        _kill_suid_gid: bool,
+        _owner: Owner,
         reply: ReplyCreate,
     ) {
         let request = RequestMeta::from(req);
