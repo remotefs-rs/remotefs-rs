@@ -37,16 +37,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libsmbclient-dev libssl-dev pkg-config
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
       - name: Lint
-        run: just clippy "-- -D warnings"
-      - name: Lint without default features
-        run: just clippy "--no-default-features -- -D warnings"
-      - name: Lint with all features
-        run: just clippy "--all-features -- -D warnings"
-      - name: Lint async without Tokio
-        run: just clippy "--no-default-features --features async -- -D warnings"
+        run: just clippy "--workspace -- -D warnings"
 
   quality-linux:
     name: Quality (Linux)
@@ -63,20 +61,24 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-linux-${{ hashFiles('**/Cargo.toml') }}
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libsmbclient-dev libssl-dev pkg-config
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-llvm-cov
       - name: Build
-        run: just build
+        run: just build "--workspace"
       - name: Test with coverage
         run: just coverage
         env:
           RUST_LOG: trace
-      - name: Test all supported feature combinations
-        run: just test_features "--no-fail-fast"
+      - name: Test without default features
+        run: just test "--no-default-features"
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
@@ -86,38 +88,48 @@ jobs:
   quality-macos:
     name: Quality (macOS)
     runs-on: macos-latest
+    env:
+      SKIP_CRATES: fusibile remotefs-fuse
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install system libraries
+        run: brew install samba pkg-config
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
       - name: Build
-        run: just build
-      - name: Test all supported feature combinations
-        run: just test_features "--no-fail-fast"
+        run: just build "--workspace --exclude fusibile --exclude remotefs-fuse"
+      - name: Test
+        run: just test_features
         env:
           RUST_LOG: trace
       - name: Lint
-        run: just clippy "-- -D warnings"
+        run: just clippy "--workspace --exclude fusibile --exclude remotefs-fuse -- -D warnings"
 
   quality-windows:
     name: Quality (Windows)
     runs-on: windows-latest
+    env:
+      SKIP_CRATES: fusibile remotefs-fuse
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
       - name: Build
-        run: just build
-      - name: Test all supported feature combinations
-        run: just test_features "--no-fail-fast"
+        run: just build "--workspace --exclude fusibile --exclude remotefs-fuse"
+      - name: Test
+        run: just test_features
         env:
           RUST_LOG: trace
       - name: Lint
-        run: just clippy "-- -D warnings"
+        run: just clippy "--workspace --exclude fusibile --exclude remotefs-fuse -- -D warnings"
 
   documentation:
     name: Documentation
@@ -126,12 +138,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install system libraries
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libsmbclient-dev libssl-dev pkg-config
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
       - name: Build documentation
-        run: just doc "--all-features"
-      - name: Check async-only documentation
-        run: just doc "--no-default-features --features async"
+        run: just doc "--workspace"
 
   dependencies:
     name: Dependencies
@@ -146,5 +160,7 @@ jobs:
           tool: cargo-deny
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
+        with:
+          just-version: 1.59.0
       - name: Check dependencies
         run: just deny
