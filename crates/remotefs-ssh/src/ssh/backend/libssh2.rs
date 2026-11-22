@@ -1946,6 +1946,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
 
     fn should_perform_shell_command_on_server() {
         crate::mock::logger();
@@ -1963,6 +1967,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
 
     fn should_perform_shell_command_on_server_and_return_exit_code() {
         crate::mock::logger();
