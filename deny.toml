@@ -26,7 +26,7 @@ ignore = [
   # Re-evaluate when testcontainers drops it or a maintained release ships.
   { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar is dev-only via testcontainers; no safe upgrade" },
   { id = "RUSTSEC-2026-0441", reason = "pin-utils is pulled in by the AWS SDK. Its upstream repository is archived with no replacement, so the fix belongs to the SDK." },
-  { id = "RUSTSEC-2026-0543", reason = "chrono is used by remotefs-ssh and remotefs-kube for timestamps. No fixed release exists, so migrating to jiff is a follow-up." },
+  { id = "RUSTSEC-2026-0543", reason = "remotefs-ssh and remotefs-kube no longer use chrono. It still arrives through russh-util, which russh pulls in for wasm32 builds, and no fixed release exists." },
 ]
 
 [licenses]

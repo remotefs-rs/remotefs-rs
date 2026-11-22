@@ -17,8 +17,8 @@ description = "remotefs implementation for kube"
 workspace = true
 
 [dependencies]
-chrono = { workspace = true }
 futures-io = { workspace = true }
+jiff = { workspace = true }
 k8s-openapi = { workspace = true, features = ["v1_37"] }
 kube = { workspace = true, features = ["client", "config", "ws"] }
 lazy-regex = { workspace = true }
