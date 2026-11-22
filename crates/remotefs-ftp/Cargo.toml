@@ -10,7 +10,7 @@ keywords = ["remotefs", "ftp-client"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.89.0"
+rust-version = { workspace = true }
 description = "remotefs FTP client library"
 
 [package.metadata.docs.rs]

@@ -17,7 +17,7 @@ keywords = ["remotefs", "ssh-client", "scp-client", "sftp-client"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.95.0"
+rust-version = { workspace = true }
 description = "remotefs SSH client library"
 
 [features]

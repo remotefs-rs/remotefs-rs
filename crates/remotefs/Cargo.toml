@@ -23,7 +23,7 @@ keywords = [
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.89.0"
+rust-version = { workspace = true }
 description = "a client library to work with all file transfer protocols"
 
 [package.metadata.docs.rs]

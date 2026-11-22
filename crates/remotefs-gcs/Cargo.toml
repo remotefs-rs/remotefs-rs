@@ -24,7 +24,7 @@ keywords = [
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.98.0"
+rust-version = { workspace = true }
 description = "Google Cloud Storage client for remotefs-rs."
 
 [features]

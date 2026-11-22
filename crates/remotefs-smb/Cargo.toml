@@ -11,7 +11,7 @@ keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.89.0"
+rust-version = { workspace = true }
 description = "remotefs SMB client library"
 
 [dependencies]

@@ -11,7 +11,7 @@ keywords = ["remotefs", "s3-client"]
 license = { workspace = true }
 readme = "README.md"
 repository = { workspace = true }
-rust-version = "1.94.1"
+rust-version = { workspace = true }
 description = "remotefs Aws S3 client library"
 
 [package.metadata.docs.rs]
