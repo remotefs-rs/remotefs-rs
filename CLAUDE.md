@@ -18,8 +18,10 @@ just release                # release build
 just test                   # unit and doc tests, one crate at a time
 just test_crate remotefs    # unit and doc tests of a single crate
 just test_features          # the same, with default features only
-just test_containers        # Docker-backed tests of remotefs-ftp and remotefs-ssh
-just coverage               # llvm-cov per crate, writes lcov.info
+just containers_up          # start the SMB and WebDAV servers their tests use
+just containers_down        # stop them
+just test_containers        # every suite, with the Docker, FUSE, and Minikube tests
+just coverage               # the same suites under llvm-cov, writes lcov.info
 just fmt                    # dprint fmt (Markdown, Rust, TOML, YAML)
 just fmt_check              # dprint check
 just clippy "-- -D warnings" # Clippy for the workspace, warnings denied
@@ -54,9 +56,14 @@ Set `SKIP_CRATES` to a space separated list of crates to leave out, for example
 `fusibile` and `remotefs-fuse` need FUSE to build: libfuse3 on Linux, macFUSE on
 macOS, and Dokany on Windows, which the Windows CI job does not install.
 
-Unit tests that start a container are marked `ignore` unless the
-`with-containers` feature is enabled. They need a running Docker daemon, so only
-the Linux CI job and `just test_containers` run them.
+Tests that need a server are marked `ignore`, or compiled out, unless the
+`with-containers` or `integration-tests` feature is enabled. `test_suites` in
+`just/test.just` lists the features every crate runs with. `just test_containers`
+and `just coverage` run those suites, so the Linux CI job covers them. They need
+a running Docker daemon, `just containers_up` for SMB and WebDAV, FUSE, and, for
+`remotefs-kube`, a Minikube cluster with `MINIKUBE_IP` set. Add a new feature
+combination to `test_suites`, not to a one-off CI step, or its tests never reach
+the coverage report.
 
 CI runs the full workspace on Linux, the FUSE crates excluded on macOS and
 Windows, and `remotefs-ssh` excluded on Windows, where OpenSSL is not installed.

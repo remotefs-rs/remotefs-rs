@@ -53,18 +53,18 @@ The toolchain is pinned in `rust-toolchain.toml`. Run `just` to list every recip
 ```sh
 just build            # build every crate
 just test             # unit and doc tests, one crate at a time
-just test_containers  # Docker-backed tests for remotefs-ftp and remotefs-ssh
+just test_containers  # every test suite, including the ones that need Docker
 just check            # the full local quality gate
 ```
 
 Some crates need system libraries. Each one is listed below.
 
-| Crate                          | System libraries                                               |
-| ------------------------------ | -------------------------------------------------------------- |
-| `remotefs-fuse`, `fusibile`    | FUSE: `libfuse3` on Linux, macFUSE on macOS, Dokany on Windows |
-| `remotefs-smb`                 | `libsmbclient` for the `pavao` client on UNIX                  |
-| `remotefs-ssh`                 | OpenSSL for the default libssh2 backend                        |
-| `remotefs-ftp`, `remotefs-ssh` | Docker, for the tests in `test_containers`                     |
+| Crate                       | System libraries                                               |
+| --------------------------- | -------------------------------------------------------------- |
+| `remotefs-fuse`, `fusibile` | FUSE: `libfuse3` on Linux, macFUSE on macOS, Dokany on Windows |
+| `remotefs-smb`              | `libsmbclient` for the `pavao` client on UNIX                  |
+| `remotefs-ssh`              | OpenSSL for the default libssh2 backend                        |
+| most backends               | Docker, for the tests in `test_containers`                     |
 
 On a machine without FUSE, set `SKIP_CRATES` to leave those crates out of
 `just test`, for example `SKIP_CRATES="fusibile remotefs-fuse" just test`.

@@ -91,8 +91,9 @@ opening a pull request: it runs the same gate as CI, for every crate.
 
 To check one crate, run its tests on their own, for example
 `cargo test -p remotefs-ssh`. Tests that start a Docker container need
-`just test_containers` and a running Docker daemon. The FUSE crates need FUSE to
-build. On a machine without it, leave them out with
+`just test_containers` and a running Docker daemon. SMB and WebDAV also need
+`just containers_up`, and `remotefs-kube` needs a Minikube cluster and
+`MINIKUBE_IP`. The FUSE crates need FUSE to build. On a machine without it, leave them out with
 `SKIP_CRATES="fusibile remotefs-fuse" just test`.
 
 Dependency versions belong in the root `Cargo.toml`, under
