@@ -83,18 +83,16 @@ remotefs-smb = "1.2"
 These features are supported:
 
 - `pavao`: enable the `libsmbclient`-based client on UNIX (_enabled by default_)
-- `smb`: enable the Rust-native async client on every platform (enables `remotefs/async` and `remotefs/tokio`)
 - `find`: enable `remotefs::find` and `remotefs::find_async` (_enabled by default_)
 - `no-log`: disable logging. By default, this library will log via the `log` crate.
 - `vendored`: build pavao with **vendored libsmbclient** (implies `pavao`)
 
-Three clients ship in this crate and can be enabled together:
+Two clients ship in this crate and can be enabled together:
 
-| Client       | Feature | Platforms | Dialects                   | System libraries  |
-| ------------ | ------- | --------- | -------------------------- | ----------------- |
-| `SmbFs`      | `smb`   | all       | SMB 2.0.2 to 3.1.1 (async) | none              |
-| `PavaoSmbFs` | `pavao` | UNIX      | SMB1 to SMB 3.1.1          | `libsmbclient`    |
-| `WNetSmbFs`  | always  | Windows   | OS managed                 | `WNet` (built in) |
+| Client       | Feature | Platforms | Dialects          | System libraries  |
+| ------------ | ------- | --------- | ----------------- | ----------------- |
+| `PavaoSmbFs` | `pavao` | UNIX      | SMB1 to SMB 3.1.1 | `libsmbclient`    |
+| `WNetSmbFs`  | always  | Windows   | OS managed        | `WNet` (built in) |
 
 ### Install dependencies (pavao client only)
 
@@ -146,77 +144,6 @@ rm -rf samba/
 ```
 
 ### Client implementation
-
-#### Rust-native client (all platforms)
-
-Enable the `smb` feature and add Tokio:
-
-```toml
-remotefs-smb = { version = "1.2", features = ["smb"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-```rust
-use std::path::Path;
-
-use remotefs::AsyncRemoteFs;
-use remotefs::fs::WriteOptions;
-use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut client = SmbFs::try_new(
-        SmbCredentials::default()
-            .server("smb://localhost:3445")
-            .share("/temp")
-            .username("test")
-            .password("test")
-            .workgroup("pavao"),
-        SmbOptions::default(),
-    )?;
-
-    client.connect().await?;
-    client.create_dir(Path::new("/cargo"), None).await?;
-    let mut source = futures::io::Cursor::new(b"hello".to_vec());
-    client
-        .write_file(
-            Path::new("/cargo/hello.txt"),
-            &WriteOptions::default(),
-            &mut source,
-        )
-        .await?;
-    client.disconnect().await?;
-    Ok(())
-}
-```
-
-Blocking code wraps the client with `into_blocking`; the result implements
-`remotefs::RemoteFs`:
-
-```rust
-use std::path::Path;
-
-use remotefs::RemoteFs;
-use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
-
-let runtime = tokio::runtime::Runtime::new().unwrap();
-let mut client = SmbFs::try_new(
-    SmbCredentials::default()
-        .server("smb://localhost:3445")
-        .share("/temp"),
-    SmbOptions::default(),
-)
-.unwrap()
-.into_blocking(runtime.handle().clone());
-client.connect().unwrap();
-for entry in client.list_dir(Path::new("/")).unwrap() {
-    println!("{}", entry.name());
-}
-client.disconnect().unwrap();
-```
-
-`SmbFs` is asynchronous and needs a Tokio runtime. `into_blocking` requires
-a multi-thread runtime and must not be called from inside an async task.
 
 #### Pavao client (UNIX)
 
@@ -287,19 +214,19 @@ built on Windows are accepted, and listed entries always use `/`. The table
 lists the `Capabilities` flags each client advertises; `exec` and `symlink`
 are unsupported everywhere.
 
-| Capability     | Rust-native (`SmbFs`) | pavao (`PavaoSmbFs`) | WNet (`WNetSmbFs`) |
-| -------------- | --------------------- | -------------------- | ------------------ |
-| `STREAM_READ`  | Yes                   | No                   | Yes                |
-| `STREAM_WRITE` | Yes                   | No                   | Yes                |
-| `APPEND`       | Yes                   | Yes                  | Yes                |
-| `RANGE_READ`   | Yes                   | Yes                  | Yes                |
-| `SEEK_READ`    | Yes                   | No                   | Yes                |
-| `SEEK_WRITE`   | Yes                   | No                   | Yes                |
-| `COPY`         | Yes                   | No                   | Yes                |
-| `SYMLINK`      | No                    | No                   | No                 |
-| `SET_METADATA` | Yes (times)           | Yes (mode)           | Yes (times)        |
-| `POSIX_MODE`   | No                    | Yes                  | No                 |
-| `EXEC`         | No                    | No                   | No                 |
+| Capability     | pavao (`PavaoSmbFs`) | WNet (`WNetSmbFs`) |
+| -------------- | -------------------- | ------------------ |
+| `STREAM_READ`  | No                   | Yes                |
+| `STREAM_WRITE` | No                   | Yes                |
+| `APPEND`       | Yes                  | Yes                |
+| `RANGE_READ`   | Yes                  | Yes                |
+| `SEEK_READ`    | No                   | Yes                |
+| `SEEK_WRITE`   | No                   | Yes                |
+| `COPY`         | No                   | Yes                |
+| `SYMLINK`      | No                   | No                 |
+| `SET_METADATA` | Yes (mode)           | Yes (times)        |
+| `POSIX_MODE`   | Yes                  | No                 |
+| `EXEC`         | No                   | No                 |
 
 ## Development 🛠️
 
@@ -324,8 +251,6 @@ and `test`, and is the required gate before opening a pull request. Most
 tests need the Samba container from `tests/docker-compose.yml` running
 locally (`docker compose -f tests/docker-compose.yml up -d --build`) before
 `just test "--no-default-features --features find,pavao,with-containers"` will pass.
-Pass `--features smb` (or `find,pavao,smb,with-containers`) to cover the
-Rust-native client; it shares the same container.
 
 See [AGENTS.md](AGENTS.md) for the full contract.
 

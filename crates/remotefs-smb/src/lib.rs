@@ -8,14 +8,8 @@
 //! [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support
 //! for the SMB protocol.
 //!
-//! Three clients are available:
+//! Two clients are available:
 //!
-//! - **Rust-native client** (`smb` feature, every platform): `SmbFs`, a
-//!   pure-Rust implementation built on the [smb](https://crates.io/crates/smb)
-//!   crate. Supports SMB 2.0.2 through 3.1.1, needs no system library, and
-//!   implements `remotefs::AsyncRemoteFs` natively on a Tokio runtime.
-//!   `SmbFs::into_blocking` returns `BlockingSmbFs`, which implements
-//!   `remotefs::RemoteFs` for blocking callers.
 //! - **pavao client** (`pavao` feature, UNIX only): `PavaoSmbFs`, a blocking
 //!   `remotefs::RemoteFs` binding to `libsmbclient` through the
 //!   [pavao](https://github.com/veeso/pavao) crate. Supports SMB1 through
@@ -23,8 +17,7 @@
 //! - **WNet client** (Windows only, always available): `WNetSmbFs`, a
 //!   blocking `remotefs::RemoteFs` built on the Win32 `WNet` API.
 //!
-//! `pavao` and `smb` can be enabled together. Every client takes absolute
-//! paths rooted at the share (`/docs/report.txt`); there is no working
+//! Every client takes absolute paths rooted at the share (`/docs/report.txt`); there is no working
 //! directory. Both `/` and `\` are accepted as separators, so paths built
 //! with `Path::join` on Windows work, and listed entries always use `/`.
 //! Check `capabilities()` before relying on streams, ranges,
@@ -44,100 +37,11 @@
 //!
 //! - `pavao`: enable the `libsmbclient`-based client on UNIX (*enabled by
 //!   default*)
-//! - `smb`: enable the Rust-native client on every platform (enables
-//!   `remotefs/async` and `remotefs/tokio`)
 //! - `find`: enable `remotefs::find` and `remotefs::find_async`. (*enabled
 //!   by default*)
 //! - `no-log`: disable logging. By default, this library will log via the
 //!   `log` crate.
 //! - `vendored`: build pavao with a vendored `libsmbclient` (implies `pavao`)
-//!
-//! ### Rust-native client (all platforms)
-//!
-//! `SmbFs` is asynchronous. Add `tokio` to your dependencies and enable the
-//! `smb` feature. `SmbFs::try_new` automatically negotiates only SMB2 through
-//! SMB3.1.1.
-//!
-//! ```rust,no_run
-//! # #[cfg(feature = "smb")]
-//! # {
-//! use std::path::Path;
-//!
-//! use remotefs::AsyncRemoteFs;
-//! use remotefs::fs::WriteOptions;
-//! use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
-//!
-//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
-//! let mut client = SmbFs::try_new(
-//!     SmbCredentials::default()
-//!         .server("smb://localhost:3445")
-//!         .share("/temp")
-//!         .username("test")
-//!         .password("test")
-//!         .workgroup("pavao"),
-//!     SmbOptions::default(),
-//! )
-//! .unwrap();
-//!
-//! client.connect().await.unwrap();
-//! client.create_dir(Path::new("/cargo"), None).await.unwrap();
-//! let mut source = futures::io::Cursor::new(b"hello".to_vec());
-//! client
-//!     .write_file(Path::new("/cargo/hello.txt"), &WriteOptions::default(), &mut source)
-//!     .await
-//!     .unwrap();
-//! client.disconnect().await.unwrap();
-//! # });
-//! # }
-//! ```
-//!
-//! Blocking code wraps the client with `into_blocking`; the result implements
-//! `remotefs::RemoteFs` and can be boxed as `Box<dyn RemoteFs>`:
-//!
-//! ```rust,no_run
-//! # #[cfg(feature = "smb")]
-//! # {
-//! use std::path::Path;
-//!
-//! use remotefs::RemoteFs;
-//! use remotefs_smb::{BlockingSmbFs, SmbCredentials, SmbFs, SmbOptions};
-//!
-//! let runtime = tokio::runtime::Runtime::new().unwrap();
-//! let mut client: BlockingSmbFs = SmbFs::try_new(
-//!     SmbCredentials::default()
-//!         .server("smb://localhost:3445")
-//!         .share("/temp"),
-//!     SmbOptions::default(),
-//! )
-//! .unwrap()
-//! .into_blocking(runtime.handle().clone());
-//! client.connect().unwrap();
-//! for entry in client.list_dir(Path::new("/")).unwrap() {
-//!     println!("{}", entry.name());
-//! }
-//! client.disconnect().unwrap();
-//! # }
-//! ```
-//!
-//! To select a narrower inclusive range explicitly, use
-//! `SmbFs::try_new_with_dialect`:
-//!
-//! ```rust,no_run
-//! # #[cfg(feature = "smb")]
-//! # {
-//! use remotefs_smb::{SmbCredentials, SmbDialect, SmbFs, SmbOptions};
-//!
-//! let _client = SmbFs::try_new_with_dialect(
-//!     SmbCredentials::default()
-//!         .server("smb://server.example")
-//!         .share("/documents"),
-//!     SmbOptions::default(),
-//!     SmbDialect::Smb300,
-//!     SmbDialect::Smb311,
-//! )
-//! .unwrap();
-//! # }
-//! ```
 //!
 //! ### Pavao client (UNIX)
 //!
@@ -213,7 +117,6 @@
 // -- crates
 #[cfg(any(
     all(target_family = "unix", feature = "pavao"),
-    feature = "smb",
     target_family = "windows",
 ))]
 #[macro_use]
@@ -222,9 +125,6 @@ extern crate log;
 mod client;
 
 pub use client::SmbDialect;
-#[cfg(feature = "smb")]
-#[cfg_attr(docsrs, doc(cfg(feature = "smb")))]
-pub use client::{BlockingSmbFs, SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions};
 #[cfg(all(target_family = "unix", feature = "pavao"))]
 #[cfg_attr(docsrs, doc(cfg(all(target_family = "unix", feature = "pavao"))))]
 pub use client::{
@@ -237,7 +137,6 @@ pub use client::{WNetSmbCredentials, WNetSmbFs};
 // -- utils
 #[cfg(any(
     all(target_family = "unix", feature = "pavao"),
-    feature = "smb",
     target_family = "windows",
 ))]
 pub(crate) mod utils;

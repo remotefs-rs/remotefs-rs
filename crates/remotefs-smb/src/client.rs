@@ -32,14 +32,12 @@ pub enum SmbDialect {
 
 #[cfg(any(
     all(target_family = "unix", feature = "pavao"),
-    feature = "smb",
     target_family = "windows",
     test,
 ))]
 const AUTO_MIN_DIALECT: SmbDialect = SmbDialect::Smb202;
 #[cfg(any(
     all(target_family = "unix", feature = "pavao"),
-    feature = "smb",
     target_family = "windows",
     test,
 ))]
@@ -80,10 +78,3 @@ pub use unix::*;
 mod windows;
 #[cfg(target_family = "windows")]
 pub use windows::*;
-
-// -- rust-native client (smb crate)
-
-#[cfg(feature = "smb")]
-mod rust_smb;
-#[cfg(feature = "smb")]
-pub use rust_smb::{BlockingSmbFs, SmbCredentials, SmbEncryptionLevel, SmbFs, SmbOptions};

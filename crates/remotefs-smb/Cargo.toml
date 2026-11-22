@@ -1,60 +1,48 @@
 [package]
 name = "remotefs-smb"
-version = "1.0.1"
-authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-smb"
-edition = "2024"
+edition = { workspace = true }
 homepage = "https://veeso.github.io/remotefs-rs-smb/"
 include = ["src/**/*", "examples/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs-smb"
+repository = { workspace = true }
 rust-version = "1.89.0"
 description = "remotefs SMB client library"
 
 [dependencies]
-futures-io = { version = "0.3", optional = true }
-futures-util = { version = "0.3", optional = true }
-log = "0.4"
-remotefs = "1"
-smb = { version = "0.11", default-features = false, features = ["async", "compress", "encrypt", "sign"], optional = true }
-tokio = { version = "1", features = ["rt"], optional = true }
+log = { workspace = true }
+remotefs = { workspace = true }
 
 [target."cfg(target_family = \"unix\")"]
 [target."cfg(target_family = \"unix\")".dependencies]
-libc = { version = "0.2", optional = true }
-pavao = { version = "0.3", optional = true }
+libc = { workspace = true, optional = true }
+pavao = { workspace = true, optional = true }
 
 [target."cfg(target_family = \"windows\")"]
 [target."cfg(target_family = \"windows\")".dependencies]
-filetime = "0.2"
-windows-sys = { version = "0.61", features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
+filetime = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
 
 [dev-dependencies]
-anyhow = "1"
-argh = "0.1"
-env_logger = "0.11"
-futures = "0.3"
-pretty_assertions = "1"
-rpassword = "7"
-serial_test = "3"
-tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = { workspace = true }
+argh = { workspace = true }
+env_logger = { workspace = true }
+futures = { workspace = true }
+pretty_assertions = { workspace = true }
+rpassword = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["find", "pavao"]
 # clients
 pavao = ["dep:libc", "dep:pavao"]
-smb = [
-  "dep:futures-io",
-  "dep:futures-util",
-  "dep:smb",
-  "dep:tokio",
-  "remotefs/async",
-  "remotefs/tokio",
-]
 # misc
 find = ["remotefs/find"]
 no-log = ["log/max_level_off"]
@@ -63,7 +51,7 @@ vendored = ["pavao", "pavao/vendored"]
 with-containers = []
 
 [package.metadata.docs.rs]
-features = ["find", "pavao", "smb"]
+features = ["find", "pavao"]
 no-default-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 default-target = "x86_64-unknown-linux-gnu"
@@ -73,8 +61,3 @@ targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 name = "tree"
 path = "examples/tree.rs"
 required-features = ["pavao"]
-
-[[example]]
-name = "tree_rs"
-path = "examples/tree_rs.rs"
-required-features = ["smb"]

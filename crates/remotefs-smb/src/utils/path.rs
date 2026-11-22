@@ -55,7 +55,7 @@ impl SharePath {
     }
 
     /// Returns whether this is the share root.
-    #[cfg_attr(not(feature = "smb"), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn is_root(&self) -> bool {
         self.components.is_empty()
     }
@@ -83,7 +83,7 @@ impl SharePath {
     }
 
     /// Returns the path of a direct child.
-    #[cfg_attr(not(any(feature = "smb", target_family = "windows")), allow(dead_code))]
+    #[cfg_attr(not(target_family = "windows"), allow(dead_code))]
     pub fn child(&self, name: &str) -> Self {
         let mut components = self.components.clone();
         components.push(name.to_string());
@@ -91,7 +91,7 @@ impl SharePath {
     }
 
     /// Returns whether `other` is this path or one of its descendants.
-    #[cfg_attr(not(any(feature = "smb", target_family = "windows")), allow(dead_code))]
+    #[cfg_attr(not(target_family = "windows"), allow(dead_code))]
     pub fn is_same_or_descendant(&self, other: &Self) -> bool {
         other.components.starts_with(&self.components)
     }
