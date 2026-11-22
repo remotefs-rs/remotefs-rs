@@ -77,6 +77,8 @@ jobs:
         run: just coverage
         env:
           RUST_LOG: trace
+      - name: Test with Docker containers
+        run: just test_containers
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
@@ -87,7 +89,7 @@ jobs:
     name: Quality (macOS)
     runs-on: macos-latest
     env:
-      SKIP_CRATES: fusibile remotefs-fuse remotefs-ftp remotefs-ssh
+      SKIP_CRATES: fusibile remotefs-fuse
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
