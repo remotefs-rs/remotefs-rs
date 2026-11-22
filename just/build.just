@@ -13,3 +13,13 @@ release args="":
 [confirm("Are you sure you want to clean the build artifacts?")]
 clean:
   cargo clean
+
+# Build a static musl Linux release binary of fusibile in a pinned Alpine container.
+[group('build')]
+build_musl target:
+  dist/release/build_musl.sh {{ target }}
+
+# Build a release binary of fusibile for a target triple.
+[group('build')]
+build_release target features="":
+  cargo build --locked --release --target {{ target }} -p fusibile {{ features }}

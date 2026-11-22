@@ -1,18 +1,26 @@
-# Preview unreleased Conventional Commits for a version.
+# Preview the unreleased commits of fusibile's next release, without the header.
 [group('changelog')]
-changelog_preview version:
-  git-cliff --config cliff.toml --unreleased --tag "v{{ version }}" --strip all
+fusibile_release_notes version:
+  git-cliff --config cliff.toml --unreleased --tag "fusibile-v{{ version }}" --tag-pattern "^fusibile-v?[0-9]" --include-path "crates/fusibile/**" --strip header
 
-# Generate CHANGELOG.md through the requested version.
+# Regenerate every crate's CHANGELOG.md from its own history. With a version, the
+# unreleased commits become that crate's release, tagged <crate>-v<version>.
 [group('changelog')]
-changelog version:
-  git-cliff --config cliff.toml --tag "v{{ version }}" --output CHANGELOG.md
-  just fmt CHANGELOG.md
-
-# Tag a version and create a GitHub release with the changelog section as notes. Does not publish to crates.io.
-[group('changelog')]
-gh_release version:
-  notes="$(just changelog_preview {{ version }})" && \
-  git tag "v{{ version }}" && \
-  git push origin "v{{ version }}" && \
-  echo "$notes" | gh release create "v{{ version }}" --title "v{{ version }}" --notes-file -
+changelog_all version="":
+  #!/usr/bin/env bash
+  set -eo pipefail
+  set -f
+  cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' | while read -r crate; do
+    case "$crate" in
+      remotefs) pattern='^(v|remotefs-v)[0-9]'; prefix=remotefs; include="--include-path crates/remotefs/** --include-path src/**" ;;
+      remotefs-fuse) pattern='^(fusibile|remotefs-fuse)-v?[0-9]'; prefix=remotefs-fuse; include="--include-path crates/remotefs-fuse/**" ;;
+      fusibile) pattern='^fusibile-v?[0-9]'; prefix=fusibile; include="--include-path crates/fusibile/**" ;;
+      *) pattern="^${crate}-v?[0-9]"; prefix="$crate"; include="--include-path crates/${crate}/**" ;;
+    esac
+    if [ -n "{{ version }}" ]; then
+      git-cliff --config cliff.toml --tag-pattern "$pattern" $include --tag "${prefix}-v{{ version }}" --output "crates/${crate}/CHANGELOG.md"
+    else
+      git-cliff --config cliff.toml --tag-pattern "$pattern" $include --output "crates/${crate}/CHANGELOG.md"
+    fi
+    dprint fmt "crates/${crate}/CHANGELOG.md" > /dev/null
+  done

@@ -58,4 +58,5 @@ check:
   just clippy "-- -D warnings"
   just doc
   just deny
+  just test_scripts
   just test
