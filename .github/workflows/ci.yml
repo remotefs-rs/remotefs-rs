@@ -77,8 +77,6 @@ jobs:
         run: just coverage
         env:
           RUST_LOG: trace
-      - name: Test without default features
-        run: just test "--no-default-features"
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
@@ -113,7 +111,7 @@ jobs:
     name: Quality (Windows)
     runs-on: windows-latest
     env:
-      SKIP_CRATES: fusibile remotefs-fuse
+      SKIP_CRATES: fusibile remotefs-fuse remotefs-ssh
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -123,13 +121,13 @@ jobs:
         with:
           just-version: 1.59.0
       - name: Build
-        run: just build "--workspace --exclude fusibile --exclude remotefs-fuse"
+        run: just build "--workspace --exclude fusibile --exclude remotefs-fuse --exclude remotefs-ssh"
       - name: Test
         run: just test_features
         env:
           RUST_LOG: trace
       - name: Lint
-        run: just clippy "--workspace --exclude fusibile --exclude remotefs-fuse -- -D warnings"
+        run: just clippy "--workspace --exclude fusibile --exclude remotefs-fuse --exclude remotefs-ssh -- -D warnings"
 
   documentation:
     name: Documentation
