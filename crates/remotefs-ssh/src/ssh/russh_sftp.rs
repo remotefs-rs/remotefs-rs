@@ -23,7 +23,8 @@ pub type BlockingRusshSftpFs<T> = remotefs::adapters::blocking::BlockOn<RusshSft
 
 /// Native asynchronous SFTP client backed by [`russh`].
 ///
-/// Every path passed to this client must be absolute. Use [`Self::into_blocking`]
+/// Entry paths must be absolute. Symlink targets are stored verbatim
+/// and may be relative. Use [`Self::into_blocking`]
 /// when an application needs the blocking [`remotefs::RemoteFs`] contract.
 pub struct RusshSftpFs<T>
 where
@@ -133,7 +134,7 @@ where
                     ),
                 )
             })?;
-            return sftp.symlink(target, dest).await;
+            return sftp.symlink(dest, target).await;
         }
 
         let mut reader = sftp.open_read(src, &ReadOptions::default()).await?;
@@ -259,7 +260,7 @@ where
         let path = path_utils::remote_path(path)?;
         let path = path.as_ref();
         let target = remotefs::path::ensure_symlink_target(target)?;
-        self.sftp()?.symlink(target, path).await
+        self.sftp()?.symlink(path, target).await
     }
 
     async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {

@@ -9,6 +9,8 @@ mod interface;
 mod keepalive;
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 mod socket;
+#[cfg(any(feature = "libssh", all(feature = "libssh2", any(windows, test))))]
+mod symlink;
 
 #[cfg(feature = "libssh")]
 #[cfg_attr(docsrs, doc(cfg(feature = "libssh")))]
@@ -41,6 +43,19 @@ use crate::SshOpts;
 
 #[cfg(any(feature = "libssh", feature = "libssh2", feature = "russh"))]
 const MAX_FORWARD_CONNECTIONS: usize = 64;
+
+/// Translates an SSH_FXP_STATUS code, retaining the operation's fallback for generic failures.
+#[cfg(any(feature = "libssh", feature = "libssh2"))]
+fn sftp_error_kind(code: u32, fallback: remotefs::RemoteErrorType) -> remotefs::RemoteErrorType {
+    use remotefs::RemoteErrorType;
+    match code {
+        2 | 10 => RemoteErrorType::NoSuchFileOrDirectory,
+        3 => RemoteErrorType::PermissionDenied,
+        11 => RemoteErrorType::AlreadyExists,
+        18 => RemoteErrorType::DirectoryNotEmpty,
+        _ => fallback,
+    }
+}
 
 /// SSH session trait for the blocking backends.
 ///
@@ -137,7 +152,7 @@ pub trait Sftp: Send + Sync {
     fn stat(&self, path: &Path) -> RemoteResult<File>;
 
     /// Creates a symlink at `path` pointing to `target`.
-    fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()>;
+    fn symlink(&self, target: &Path, path: &Path) -> RemoteResult<()>;
 
     /// Deletes the file or symlink at `path`.
     fn unlink(&self, path: &Path) -> RemoteResult<()>;

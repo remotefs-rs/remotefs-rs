@@ -20,6 +20,8 @@ mod russh_sftp;
 mod scp;
 mod sftp;
 mod stream;
+#[cfg(test)]
+mod symlink_tests;
 
 pub use ssh2_config::ParseRule;
 
@@ -86,6 +88,45 @@ impl SshAgentIdentity {
     }
 }
 
+/// Operand order used by an SFTP v3 server for symlink creation.
+///
+/// # Examples
+///
+/// ```
+/// use remotefs_ssh::{SftpSymlinkOrder, SshOpts};
+/// let opts = SshOpts::new("files.example.org").sftp_symlink_order(SftpSymlinkOrder::LinkFirst);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SftpSymlinkOrder {
+    /// SFTP v3 draft order, used by the libssh server.
+    LinkFirst,
+    /// OpenSSH order, also used by compatible subsystems.
+    TargetFirst,
+}
+
+impl SftpSymlinkOrder {
+    fn from_banner(banner: &[u8], fallback: Self) -> Self {
+        let software = banner
+            .splitn(3, |&byte| byte == b'-')
+            .nth(2)
+            .unwrap_or_default();
+        if software.starts_with(b"libssh_") {
+            Self::LinkFirst
+        } else if software.starts_with(b"OpenSSH_") {
+            Self::TargetFirst
+        } else {
+            fallback
+        }
+    }
+
+    fn operands<'a>(self, link: &'a Path, target: &'a Path) -> (&'a Path, &'a Path) {
+        match self {
+            Self::LinkFirst => (link, target),
+            Self::TargetFirst => (target, link),
+        }
+    }
+}
+
 /// Ssh options;
 /// used to build and configure SCP/SFTP client.
 ///
@@ -100,6 +141,7 @@ impl SshAgentIdentity {
 /// This applies also to ciphers and key exchange methods.
 ///
 pub struct SshOpts {
+    sftp_symlink_order: Option<SftpSymlinkOrder>,
     /// hostname of the remote ssh server
     host: String,
     /// Port of the remote ssh server
@@ -145,6 +187,7 @@ impl SshOpts {
     /// Other options can be specified with other constructors.
     pub fn new<S: AsRef<str>>(host: S) -> Self {
         Self {
+            sftp_symlink_order: None,
             host: host.as_ref().to_string(),
             port: None,
             username: None,
@@ -157,6 +200,29 @@ impl SshOpts {
             home_dir: None,
             ssh_agent_identity: None,
         }
+    }
+
+    /// Sets the operand order for the server's SFTP symlink operation.
+    ///
+    /// Use this when the SFTP subsystem differs from the SSH software named in the banner.
+    /// By default OpenSSH uses target-first and libssh uses link-first. For unknown banners,
+    /// the libssh2 and russh clients use target-first and the libssh client uses link-first.
+    /// With an explicit order, the libssh client opens an additional SFTP channel for symlink creation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use remotefs_ssh::{SftpSymlinkOrder, SshOpts};
+    /// let opts = SshOpts::new("files.example.org").sftp_symlink_order(SftpSymlinkOrder::LinkFirst);
+    /// ```
+    pub fn sftp_symlink_order(mut self, order: SftpSymlinkOrder) -> Self {
+        self.sftp_symlink_order = Some(order);
+        self
+    }
+
+    #[cfg(any(feature = "russh", feature = "libssh2", test))]
+    fn symlink_order(&self, detected: SftpSymlinkOrder) -> SftpSymlinkOrder {
+        self.sftp_symlink_order.unwrap_or(detected)
     }
 
     /// Specify the port the remote server is listening to.

@@ -38,7 +38,8 @@ pub const SFTP_CAPABILITIES: Capabilities = Capabilities::STREAM_READ
 /// Blocking SFTP filesystem client.
 ///
 /// The client is generic over the SSH backend ([`crate::LibSsh2Session`] or
-/// `crate::LibSshSession`). Every path must be absolute.
+/// `crate::LibSshSession`). Entry paths must be absolute. Symlink targets are stored verbatim
+/// and may be relative.
 ///
 /// # Examples
 ///

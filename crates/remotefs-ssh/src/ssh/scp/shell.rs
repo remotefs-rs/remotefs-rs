@@ -39,8 +39,23 @@ pub(crate) const DEFAULT_FILE_MODE: u32 = 0o644;
 
 /// Quotes a path for a POSIX shell command line.
 pub(crate) fn quote(path: &Path) -> String {
-    let path = path.to_string_lossy().replace('\'', "'\\''");
-    format!("'{path}'")
+    use std::fmt::Write as _;
+
+    let mut quoted = String::from("'");
+    for chunk in path.as_os_str().as_encoded_bytes().utf8_chunks() {
+        quoted.push_str(&chunk.valid().replace('\'', r"'\''"));
+        // An invalid UTF-8 sequence contains no newline, so command substitution
+        // reproduces its bytes without stripping any part of the path.
+        if !chunk.invalid().is_empty() {
+            quoted.push_str(r#"'"$(printf '"#);
+            for byte in chunk.invalid() {
+                write!(quoted, "\\{byte:03o}").expect("writing to a String");
+            }
+            quoted.push_str(r#"')"'"#);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 /// Command that succeeds only on hosts with GNU `stat`.
@@ -152,10 +167,14 @@ pub(crate) fn mkdir_command(path: &Path, mode: Option<UnixPex>) -> String {
     format!("mkdir -m {mode:o} {path}", path = quote(path))
 }
 
-/// `ln -s` command creating `path` pointing at `target`.
+/// Creates exactly `path`, including when another process creates a directory there first.
+///
+/// Perl calls symlink(2) directly on BSD hosts. GNU and BusyBox ln support -T.
 pub(crate) fn symlink_command(path: &Path, target: &Path) -> String {
     format!(
-        "ln -s -- {target} {path}",
+        "set -- {target} {path}; if command -v perl >/dev/null; then \
+         perl -e 'symlink($ARGV[0], $ARGV[1]) or die $!' -- \"$@\"; \
+         else ln -sT -- \"$@\"; fi",
         target = quote(target),
         path = quote(path)
     )
@@ -454,14 +473,6 @@ mod tests {
         assert_eq!(list_command(p), "unset LANG; ls -la '/tmp/a b/'");
         assert_eq!(stat_command(p, true), "ls -ld '/tmp/a b'");
         assert_eq!(
-            symlink_command(Path::new("/l"), Path::new("/t")),
-            "ln -s -- '/t' '/l'"
-        );
-        assert_eq!(
-            symlink_command(Path::new("/l"), Path::new("-f")),
-            "ln -s -- '-f' '/l'"
-        );
-        assert_eq!(
             rename_command(Path::new("/a"), Path::new("/b")),
             "mv -f '/a' '/b'"
         );
@@ -472,6 +483,29 @@ mod tests {
         assert_eq!(
             exists_command(Path::new("/tmp/it's")),
             "test -e '/tmp/it'\\''s' || test -L '/tmp/it'\\''s'"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_create_symlink_at_exact_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("link");
+        let target = Path::new("-f");
+        let run = |entry: &Path| {
+            std::process::Command::new("sh")
+                .args(["-c", &symlink_command(entry, target)])
+                .output()
+                .unwrap()
+        };
+        assert!(run(&link).status.success());
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        assert!(!run(tmp.path()).status.success());
+        assert_eq!(
+            std::fs::symlink_metadata(tmp.path().join("-f"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
         );
     }
 

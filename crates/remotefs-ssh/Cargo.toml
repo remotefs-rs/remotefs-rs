@@ -58,7 +58,7 @@ log = { workspace = true }
 openssl = { workspace = true, optional = true }
 remotefs = { workspace = true }
 russh = { workspace = true, optional = true }
-russh-sftp = { workspace = true, optional = true }
+russh-sftp = { workspace = true, features = ["raw-string"], optional = true }
 socket2 = { workspace = true, optional = true }
 ssh-key = { workspace = true, optional = true }
 ssh2 = { workspace = true, optional = true }

@@ -69,7 +69,7 @@
 //! }
 //! ```
 //!
-//! Backends receive absolute paths. [`path::ensure_absolute`] validates remote
+//! Backends receive absolute entry paths. Symbolic link targets can be relative. [`path::ensure_absolute`] validates remote
 //! POSIX, drive, and UNC roots independently of the client platform. Use `find`
 //! or `find_async` with an explicit absolute root for recursive search.
 //! Streams are owned and must be consumed by calling `finish`; dropping one

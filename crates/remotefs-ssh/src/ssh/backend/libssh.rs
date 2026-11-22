@@ -34,7 +34,8 @@ use crate::utils::path as path_utils;
 ///
 /// See <https://docs.rs/libssh-rs/0.3.6/libssh_rs/struct.Session.html>
 pub struct LibSshSession {
-    session: Mutex<libssh_rs::Session>,
+    symlink_order: Option<crate::SftpSymlinkOrder>,
+    session: Arc<Mutex<libssh_rs::Session>>,
     operation_lock: Arc<Mutex<()>>,
     forward_agent: bool,
     remote_forward_ports: Vec<u16>,
@@ -45,7 +46,9 @@ pub struct LibSshSession {
 ///
 /// See <https://docs.rs/libssh-rs/0.3.6/libssh_rs/struct.Sftp.html>
 pub struct LibSshSftp {
+    symlink_order: Option<crate::SftpSymlinkOrder>,
     inner: Mutex<libssh_rs::Sftp>,
+    session: Arc<Mutex<libssh_rs::Session>>,
     operation_lock: Arc<Mutex<()>>,
 }
 
@@ -597,7 +600,8 @@ impl SshSession for LibSshSession {
             setup_libssh_remote_forwards(opts, &ssh_config)?;
 
         Ok(Self {
-            session: Mutex::new(session),
+            symlink_order: opts.sftp_symlink_order,
+            session: Arc::new(Mutex::new(session)),
             operation_lock: Arc::new(Mutex::new(())),
             forward_agent,
             remote_forward_ports,
@@ -812,7 +816,9 @@ impl SshSession for LibSshSession {
         session
             .sftp()
             .map(|sftp| LibSshSftp {
+                symlink_order: self.symlink_order,
                 inner: Mutex::new(sftp),
+                session: Arc::clone(&self.session),
                 operation_lock: Arc::clone(&self.operation_lock),
             })
             .map_err(|e| RemoteError::with_source(RemoteErrorType::ProtocolError, e))
@@ -992,11 +998,32 @@ impl Sftp for LibSshSftp {
             .map_err(|err| sftp_error(err, RemoteErrorType::StatFailed))
     }
 
-    fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+    fn symlink(&self, target: &Path, path: &Path) -> RemoteResult<()> {
         let inner = self.inner();
-        inner
-            .symlink(conv_path_to_str(path), conv_path_to_str(target))
-            .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied))
+        if self.symlink_order.is_none()
+            && let (Some(target), Some(path)) = (target.to_str(), path.to_str())
+        {
+            return inner
+                .symlink(target, path)
+                .map_err(|err| sftp_error(err, RemoteErrorType::FileCreateDenied));
+        }
+        let session = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+        let protocol_error = |err| RemoteError::with_source(RemoteErrorType::ProtocolError, err);
+        let channel = session.new_channel().map_err(protocol_error)?;
+        channel.open_session().map_err(protocol_error)?;
+        channel.request_subsystem("sftp").map_err(protocol_error)?;
+        let order = match self.symlink_order {
+            Some(order) => order,
+            None => crate::SftpSymlinkOrder::from_banner(
+                session
+                    .get_server_banner()
+                    .map_err(protocol_error)?
+                    .as_bytes(),
+                crate::SftpSymlinkOrder::LinkFirst,
+            ),
+        };
+        let (first, second) = order.operands(path, target);
+        super::symlink::request(channel.stdout(), channel.stdin(), first, second)
     }
 
     fn unlink(&self, path: &Path) -> RemoteResult<()> {
@@ -1027,13 +1054,7 @@ fn sftp_status(err: &libssh_rs::Error) -> Option<u32> {
 }
 
 fn sftp_error(err: libssh_rs::Error, fallback: RemoteErrorType) -> RemoteError {
-    let kind = match sftp_status(&err) {
-        Some(2 | 10) => RemoteErrorType::NoSuchFileOrDirectory,
-        Some(3) => RemoteErrorType::PermissionDenied,
-        Some(11) => RemoteErrorType::AlreadyExists,
-        Some(18) => RemoteErrorType::DirectoryNotEmpty,
-        _ => fallback,
-    };
+    let kind = sftp_status(&err).map_or(fallback, |code| super::sftp_error_kind(code, fallback));
     RemoteError::with_source(kind, err)
 }
 

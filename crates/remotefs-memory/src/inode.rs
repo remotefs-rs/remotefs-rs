@@ -57,7 +57,7 @@ impl Inode {
                 .accessed(SystemTime::now())
                 .mode(UnixPex::from(0o777))
                 .symlink(target.clone()),
-            content: Some(target.to_string_lossy().as_bytes().to_vec()),
+            content: Some(target.as_os_str().as_encoded_bytes().to_vec()),
             identity: Arc::new(()),
         }
     }

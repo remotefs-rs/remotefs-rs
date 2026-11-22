@@ -33,8 +33,23 @@ pub fn join(parent: &Path, name: &str) -> PathBuf {
 
 /// Quote `path` for `/bin/sh` with single quotes.
 pub fn shell_quote(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    format!("'{raw}'", raw = raw.replace('\'', r"'\''"))
+    use std::fmt::Write as _;
+
+    let mut quoted = String::from("'");
+    for chunk in path.as_os_str().as_encoded_bytes().utf8_chunks() {
+        quoted.push_str(&chunk.valid().replace('\'', r"'\''"));
+        // An invalid UTF-8 sequence contains no newline, so command substitution
+        // reproduces its bytes without stripping any part of the path.
+        if !chunk.invalid().is_empty() {
+            quoted.push_str(r#"'"$(printf '"#);
+            for byte in chunk.invalid() {
+                write!(quoted, "\\{byte:03o}").expect("writing to a String");
+            }
+            quoted.push_str(r#"')"'"#);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 #[cfg(test)]

@@ -22,7 +22,8 @@ pub type BlockingRusshScpFs<T> = remotefs::adapters::blocking::BlockOn<RusshScpF
 
 /// Native asynchronous SCP client backed by [`russh`].
 ///
-/// Every path passed to this client must be absolute. SCP uploads require a
+/// Entry paths must be absolute. Symlink targets are stored verbatim
+/// and may be relative. SCP uploads require a
 /// `WriteOptions::size_hint`; SCP streams are not seekable and do not append.
 pub struct RusshScpFs<T>
 where
@@ -317,6 +318,9 @@ where
         let path = path_utils::remote_path(path)?;
         let path = path.as_ref();
         let target = remotefs::path::ensure_symlink_target(target)?;
+        if self.exists(path).await? {
+            return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
+        }
         self.assert_ok(
             &shell::symlink_command(path, target),
             RemoteErrorType::FileCreateDenied,

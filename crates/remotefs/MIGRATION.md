@@ -9,10 +9,11 @@ and optional
 traits now use shared receivers for operations, owned streams for transfers,
 and explicit transfer completion.
 
-The backend remains responsible for protocol behavior. Every filesystem path
-must be absolute; working-directory state and relative-path resolution are
-removed. Recursive search takes an explicit absolute root, and runtime
-adaptation is available through adapters. Start by updating the root dependency:
+The backend remains responsible for protocol behavior. Entry paths must be
+absolute. Symlink targets are stored verbatim and may be relative. The client
+no longer tracks a working directory. Recursive search takes an explicit
+absolute root, and runtime adaptation is available through adapters. Start by
+updating the root dependency:
 
 ```toml
 remotefs = "1"
@@ -29,7 +30,7 @@ same backend-oriented checklist.
 | ------------------------------------ | ---------------------------------------------------------- |
 | `&mut self` operations               | `&self` operations; lifecycle keeps mutable receivers      |
 | `connect() -> RemoteResult<Welcome>` | `connect() -> RemoteResult<()>`; `Welcome` is removed      |
-| `pwd` / `change_dir`                 | removed; pass absolute paths to every operation            |
+| `pwd` / `change_dir`                 | removed; pass absolute entry paths                         |
 | `find` / `iter_search`               | `find` / `find_async` free functions with an explicit root |
 | `setstat`                            | `set_metadata(&SetMetadata)`                               |
 | `mov`                                | `rename`                                                   |
@@ -78,7 +79,7 @@ no generic banner replacement.
 
 ### Absolute paths
 
-The backend receives absolute paths:
+The backend receives absolute entry paths:
 
 ```rust
 use std::path::Path;
@@ -134,8 +135,10 @@ than deadlocking or silently sharing the socket.
 
 Update a backend in this order:
 
-1. Remove backend cwd state and path resolution. Validate that every required
-   backend operation receives an absolute path.
+1. Remove backend cwd state and path resolution. Validate entry paths with
+   `path::ensure_absolute`. For `symlink(path, target)`, validate the target
+   with `path::ensure_symlink_target` and store it verbatim, including relative
+   and dangling targets.
 2. Change safe operations to `&self`. Wrap mutable protocol handles behind the
    backend's synchronization primitive for the blocking trait.
 3. Implement `capabilities()` accurately, including range, seek, stream,
@@ -172,7 +175,7 @@ seeking, ranges, or concurrent transfers.
 Consumers should:
 
 - connect before placing a client in an `Arc`;
-- pass explicit absolute paths to every filesystem operation;
+- pass absolute entry paths and supply the desired symlink target verbatim;
 - call `find` or `find_async` with an explicit absolute root;
 - use range offsets for partial reads and check `capabilities()` before
   requiring native behavior;

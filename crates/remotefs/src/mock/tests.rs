@@ -17,11 +17,14 @@ fn fixture_seeding_preserves_entry_kinds() {
     let link = directory.join("link");
     fs.seed_dir(&directory);
     fs.seed_file(&file, b"data");
-    fs.seed_symlink(&link, &file);
+    let target = Path::new("../README.md");
+    fs.seed_symlink(&link, target);
 
     assert!(fs.stat(&directory).unwrap().is_dir());
     assert!(fs.stat(&file).unwrap().is_file());
-    assert!(fs.stat(&link).unwrap().is_symlink());
+    let entry = fs.stat(&link).unwrap();
+    assert!(entry.is_symlink());
+    assert_eq!(entry.metadata().symlink.as_deref(), Some(target));
 }
 
 #[test]
@@ -206,13 +209,17 @@ fn should_create_symlinks_with_absolute_and_relative_targets() {
         ("abs", absolute_existing.as_path()),
         ("abs-missing", absolute_missing.as_path()),
         ("rel", Path::new("../sibling/target.txt")),
+        ("dir-spelling", Path::new("../sibling//./dir/")),
         ("rel-missing", Path::new("../missing.txt")),
     ] {
         let link = directory.join(name);
         fs.symlink(&link, target).unwrap();
         let entry = fs.stat(&link).unwrap();
         assert!(entry.is_symlink());
-        assert_eq!(entry.metadata().symlink.as_deref(), Some(target));
+        assert_eq!(
+            entry.metadata().symlink.as_ref().unwrap().as_os_str(),
+            target.as_os_str()
+        );
     }
     assert_eq!(
         fs.symlink(&directory.join("other"), Path::new(""))

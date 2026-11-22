@@ -38,7 +38,7 @@
 //!
 //! let mut client = MemoryFs::new(tree);
 //! client.connect().unwrap();
-//! // Every path is absolute; there is no working directory.
+//! // Entry paths are absolute. Symlink targets can be relative.
 //! assert!(client.stat(Path::new("/tmp")).unwrap().is_dir());
 //! ```
 //!
@@ -153,7 +153,7 @@ pub(crate) fn lock_tree(tree: &Mutex<FsTree>) -> RemoteResult<MutexGuard<'_, FsT
 /// Use the [`node!`] macro to create the tree or use the [`orange_trees`] crate to create it programmatically.
 ///
 /// The tree contains nodes identified by a [`PathBuf`] and a value of type [`Inode`].
-/// Every path passed to the client must be absolute; the tree root is `/`.
+/// Entry paths start at the tree root `/`. Symlink targets can be relative.
 pub struct MemoryFs {
     tree: Arc<Mutex<FsTree>>,
     connected: AtomicBool,
@@ -594,8 +594,8 @@ impl RemoteFs for MemoryFs {
     }
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        self.validate(path)?;
         remotefs::path::ensure_symlink_target(target)?;
+        self.validate(path)?;
         debug!("symlink({path:?}, {target:?})");
         let path = path.to_path_buf();
         let parent_path = Self::parent_of(&path)?;

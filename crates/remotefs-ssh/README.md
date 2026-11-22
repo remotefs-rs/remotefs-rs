@@ -63,7 +63,8 @@ these features are supported:
 The blocking `SftpFs` and `ScpFs` clients use the `libssh2` or `libssh` backends.
 The `russh` backend provides native asynchronous `RusshSftpFs` and `RusshScpFs`
 clients, plus blocking wrappers for applications that need the `RemoteFs` trait.
-Every path passed to a client must be absolute.
+Entry paths must be absolute. A symlink target such as `../README.md` is stored verbatim.
+SCP symlink creation requires Perl or an `ln` that supports `-T` on the server.
 
 ### libssh2 / libssh example
 
@@ -175,7 +176,7 @@ always supported and are omitted.
 
 ## Migrating from 0.9
 
-- Paths are absolute only.
+- Entry paths are absolute. Symlink targets may be relative.
 - `pwd` and `change_dir` were removed.
 - `connect` returns `()`; the server banner is available through `SftpFs::banner` and `ScpFs::banner` for the `libssh2` and `libssh` backends.
 - `open_file` and `create_file` became `read_file` and `write_file`, using `ReadOptions` and `WriteOptions`.

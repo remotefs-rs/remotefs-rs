@@ -11,8 +11,8 @@
 //! It exposes two async client types implementing
 //! [`remotefs::AsyncRemoteFs`]: [`KubeContainerFs`], which talks to a single
 //! container, and [`KubeMultiPodFs`], which exposes every pod and container
-//! in a namespace as one abstract file system. Every path must be an absolute
-//! POSIX path; there is no working directory.
+//! in a namespace as one abstract file system. Entry paths are absolute POSIX paths.
+//! Symlink targets are stored verbatim inside the container and can be relative.
 //!
 //! ## Get started
 //!

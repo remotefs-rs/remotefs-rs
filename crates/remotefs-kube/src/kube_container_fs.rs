@@ -34,12 +34,16 @@ static LS_RE: Lazy<Regex> = lazy_regex!(
 
 const WRITER_STDIN_BUF_SIZE: usize = 64 * 1024;
 
-/// `ln -s` command creating `path` pointing at `target`.
+/// Creates exactly `path`, including when another process creates a directory there first.
+///
+/// Perl calls symlink(2) directly on BSD hosts. GNU and BusyBox ln support -T.
 ///
 /// Options end before the operands because a relative target may start with `-`.
 fn symlink_command(path: &Path, target: &Path) -> String {
     format!(
-        "ln -s -- {target} {path}",
+        "set -- {target} {path}; if command -v perl >/dev/null; then \
+         perl -e 'symlink($ARGV[0], $ARGV[1]) or die $!' -- \"$@\"; \
+         else ln -sT -- \"$@\"; fi",
         target = path_utils::shell_quote(target),
         path = path_utils::shell_quote(path)
     )
@@ -61,7 +65,7 @@ pub type BlockingKubeContainerFs = remotefs::adapters::blocking::BlockOn<KubeCon
 ///
 /// The client shells out to POSIX utilities (`cat`, `ls`, `rm`, ...) inside
 /// the container over the pod exec stream, since Kubernetes has no native
-/// remote file system API. Every path must be an absolute POSIX path.
+/// remote file system API. Entry paths are absolute POSIX paths. Symlink targets may be relative.
 ///
 /// # Examples
 ///
@@ -768,12 +772,32 @@ mod test {
         assert!(!caps.contains(Capabilities::SEEK_WRITE));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn should_end_symlink_options_before_the_target() {
-        assert_eq!(
-            symlink_command(Path::new("/l"), Path::new("-f")),
-            "ln -s -- '-f' '/l'"
-        );
+    fn should_store_non_utf8_symlink_target() {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::process::Command;
+
+        let target = std::ffi::OsStr::from_bytes(b"../\xff'\n");
+        let tmp = Command::new("mktemp").arg("-d").output().unwrap();
+        assert!(tmp.status.success());
+        let dir = Path::new(std::ffi::OsStr::from_bytes(
+            tmp.stdout.strip_suffix(b"\n").unwrap(),
+        ));
+        let link = dir.join("link");
+        let command = symlink_command(&link, Path::new(target));
+        let status = Command::new("sh").arg("-c").arg(command).status().unwrap();
+        let stored = std::fs::read_link(&link);
+        let occupied = Command::new("sh")
+            .args(["-c", &symlink_command(dir, Path::new("-f"))])
+            .output()
+            .unwrap();
+        let nested = std::fs::symlink_metadata(dir.join("-f"));
+        std::fs::remove_dir_all(dir).unwrap();
+        assert!(status.success());
+        assert_eq!(stored.unwrap().as_os_str(), target);
+        assert!(!occupied.status.success());
+        assert_eq!(nested.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     }
 
     #[tokio::test]
@@ -1462,13 +1486,17 @@ mod test {
                 ("abs", target.as_path()),
                 ("abs-missing", missing.as_path()),
                 ("rel", Path::new("../sibling/target.txt")),
+                ("dir-spelling", Path::new("../sibling//./dir/")),
                 ("rel-missing", Path::new("../missing.txt")),
             ] {
                 let link = dir.join(name);
                 client.symlink(&link, link_target).await.unwrap();
                 let entry = client.stat(&link).await.unwrap();
                 assert!(entry.is_symlink());
-                assert_eq!(entry.metadata().symlink.as_deref(), Some(link_target));
+                assert_eq!(
+                    entry.metadata().symlink.as_ref().unwrap().as_os_str(),
+                    link_target.as_os_str()
+                );
             }
             assert_eq!(
                 read(&client, &dir.join("rel"), &ReadOptions::default()).await,

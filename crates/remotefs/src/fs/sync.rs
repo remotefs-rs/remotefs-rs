@@ -101,7 +101,8 @@ pub trait RemoteFs: Send + Sync {
     /// target is resolved by the remote host against the parent directory of
     /// `path` when the link is followed. The target does not need to exist, so
     /// dangling links can be created. Backends do not normalize, absolutize, or
-    /// check the target.
+    /// check the target. For example, a link at `/project/docs/readme` with target
+    /// `../README.md` refers to `/project/README.md`.
     ///
     /// # Errors
     ///
@@ -109,7 +110,7 @@ pub trait RemoteFs: Send + Sync {
     /// `target` is empty, [`crate::fs::RemoteErrorType::AlreadyExists`] when backends can
     /// detect an existing entry at `path`, and
     /// [`crate::fs::RemoteErrorType::UnsupportedFeature`] when the backend cannot create
-    /// symlinks.
+    /// symlinks. Unsupported backends may return this error before validating either operand.
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()>;
 
     /// Opens an absolute file path for a ranged read.
