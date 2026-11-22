@@ -313,6 +313,10 @@ impl RemoteFs for WNetSmbFs {
         }
     }
 
+    #[expect(
+        deprecated,
+        reason = "filetime also updates directories and read-only files, which std::fs::set_times cannot open on Windows"
+    )]
     fn set_metadata(&self, path: &Path, metadata: &SetMetadata) -> RemoteResult<()> {
         let (_, local) = self.resolve(path)?;
         if metadata.mode.is_some() || metadata.uid.is_some() || metadata.gid.is_some() {
