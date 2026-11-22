@@ -5,6 +5,7 @@
 mod credentials;
 mod file_stream;
 
+use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{self, Seek};
 use std::path::{Path, PathBuf};
@@ -59,6 +60,15 @@ pub struct WNetSmbFs {
     remote_name: String,
     credentials: WNetSmbCredentials,
     connected: bool,
+}
+
+impl fmt::Debug for WNetSmbFs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WNetSmbFs")
+            .field("remote_name", &self.remote_name)
+            .field("connected", &self.connected)
+            .finish_non_exhaustive()
+    }
 }
 
 impl WNetSmbFs {
@@ -453,8 +463,6 @@ impl RemoteFs for WNetSmbFs {
 #[cfg(test)]
 mod test {
     use pretty_assertions::assert_eq;
-    use remotefs::fs::Capabilities;
-    use remotefs::{RemoteErrorType, RemoteFs};
 
     use super::*;
 
