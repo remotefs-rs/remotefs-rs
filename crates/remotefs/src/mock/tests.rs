@@ -1,5 +1,7 @@
 //! Additional in-memory fixture tests.
 
+use std::path::Path;
+
 use super::MockRemoteFs;
 #[cfg(feature = "async")]
 use crate::fs::ReadOptions;
@@ -188,4 +190,34 @@ fn async_mock_does_not_commit_after_finish_failure() {
         assert_eq!(fs.unfinished_count(), 0);
         assert!(!RemoteFs::exists(&fs, &path).unwrap());
     });
+}
+
+#[test]
+fn should_create_symlinks_with_absolute_and_relative_targets() {
+    let fs = MockRemoteFs::connected();
+    let directory = MockRemoteFs::path("directory");
+    let sibling = MockRemoteFs::path("sibling");
+    fs.seed_dir(&directory);
+    fs.seed_dir(&sibling);
+    fs.seed_file(&sibling.join("target.txt"), b"data");
+    let absolute_existing = sibling.join("target.txt");
+    let absolute_missing = sibling.join("missing.txt");
+    for (name, target) in [
+        ("abs", absolute_existing.as_path()),
+        ("abs-missing", absolute_missing.as_path()),
+        ("rel", Path::new("../sibling/target.txt")),
+        ("rel-missing", Path::new("../missing.txt")),
+    ] {
+        let link = directory.join(name);
+        fs.symlink(&link, target).unwrap();
+        let entry = fs.stat(&link).unwrap();
+        assert!(entry.is_symlink());
+        assert_eq!(entry.metadata().symlink.as_deref(), Some(target));
+    }
+    assert_eq!(
+        fs.symlink(&directory.join("other"), Path::new(""))
+            .unwrap_err()
+            .kind(),
+        RemoteErrorType::InvalidPath
+    );
 }

@@ -182,26 +182,26 @@ system trait method.
 Note: `connect()`, `disconnect()` and `is_connected()` **MUST** always be
 supported, and are omitted from the table.
 
-| Client/Method  | KubeContainerFs | KubeMultiPodFs       |
-| -------------- | --------------- | -------------------- |
-| append_file    | Yes             | Yes                  |
-| append         | Yes             | Yes                  |
-| copy           | Yes             | Yes (same container) |
-| create_dir     | Yes             | Yes                  |
-| create         | Yes             | Yes                  |
-| exec           | Yes             | No                   |
-| exists         | Yes             | Yes                  |
-| list_dir       | Yes             | Yes                  |
-| open           | Yes             | Yes                  |
-| read_file      | Yes             | Yes                  |
-| remove_dir_all | Yes             | Yes                  |
-| remove_dir     | Yes             | Yes                  |
-| remove_file    | Yes             | Yes                  |
-| rename         | Yes             | Yes (same container) |
-| set_metadata   | Yes             | Yes                  |
-| stat           | Yes             | Yes                  |
-| symlink        | Yes             | Yes (same container) |
-| write_file     | Yes             | Yes                  |
+| Client/Method  | KubeContainerFs | KubeMultiPodFs                           |
+| -------------- | --------------- | ---------------------------------------- |
+| append_file    | Yes             | Yes                                      |
+| append         | Yes             | Yes                                      |
+| copy           | Yes             | Yes (same container)                     |
+| create_dir     | Yes             | Yes                                      |
+| create         | Yes             | Yes                                      |
+| exec           | Yes             | No                                       |
+| exists         | Yes             | Yes                                      |
+| list_dir       | Yes             | Yes                                      |
+| open           | Yes             | Yes                                      |
+| read_file      | Yes             | Yes                                      |
+| remove_dir_all | Yes             | Yes                                      |
+| remove_dir     | Yes             | Yes                                      |
+| remove_file    | Yes             | Yes                                      |
+| rename         | Yes             | Yes (same container)                     |
+| set_metadata   | Yes             | Yes                                      |
+| stat           | Yes             | Yes                                      |
+| symlink        | Yes             | Yes (absolute targets in same container) |
+| write_file     | Yes             | Yes                                      |
 
 ### Migrating from 0.4
 

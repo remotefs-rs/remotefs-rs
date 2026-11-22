@@ -16,6 +16,7 @@ just build                  # cargo build --all-targets for the workspace
 just build "--workspace --exclude fusibile --exclude remotefs-fuse"
 just release                # release build
 just test                   # unit and doc tests, one crate at a time
+just test_crate remotefs    # unit and doc tests of a single crate
 just test_features          # the same, with default features only
 just test_containers        # Docker-backed tests of remotefs-ftp and remotefs-ssh
 just coverage               # llvm-cov per crate, writes lcov.info

@@ -428,8 +428,14 @@ impl AsyncRemoteFs for KubeMultiPodFs {
     }
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        let (fs, path, target) = self.same_container_targets(path, target)?;
-        fs.symlink(&path, &target).await
+        remotefs::path::ensure_symlink_target(target)?;
+        if remotefs::path::ensure_absolute(target).is_ok() {
+            let (fs, path, target) = self.same_container_targets(path, target)?;
+            fs.symlink(&path, &target).await
+        } else {
+            let (fs, path) = self.container_target(path)?;
+            fs.symlink(&path, target).await
+        }
     }
 
     async fn open(&self, path: &Path, opts: &ReadOptions) -> RemoteResult<AsyncReadStream> {
@@ -501,6 +507,38 @@ mod test {
                 .unwrap_err()
                 .kind(),
             RemoteErrorType::InvalidPath
+        );
+    }
+
+    #[tokio::test]
+    async fn should_route_symlink_targets_before_connection() {
+        let client = KubeMultiPodFs::new();
+        let link = Path::new("/pod/container/tmp/link");
+        for target in ["../target", "/pod/container/tmp/target"] {
+            assert_eq!(
+                client
+                    .symlink(link, Path::new(target))
+                    .await
+                    .unwrap_err()
+                    .kind(),
+                RemoteErrorType::NotConnected
+            );
+        }
+        assert_eq!(
+            client
+                .symlink(link, Path::new(""))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
+        );
+        assert_eq!(
+            client
+                .symlink(Path::new("/pod"), Path::new("target"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::NotConnected
         );
     }
 
@@ -593,6 +631,49 @@ mod test {
         fn pod_path(tempdir: &Path) -> PathBuf {
             let pod = tempdir.iter().nth(1).unwrap().to_string_lossy();
             PathBuf::from(format!("/{pod}"))
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_create_symlinks_with_absolute_and_relative_targets() {
+            let (pods, client, tempdir) = setup_client().await;
+            let container_root = pod_path(&tempdir).join("alpine");
+            let inner =
+                |path: &Path| Path::new("/").join(path.strip_prefix(&container_root).unwrap());
+            let dir = tempdir.join("dir");
+            let sibling = tempdir.join("sibling");
+            client.create_dir(&dir, None).await.unwrap();
+            client.create_dir(&sibling, None).await.unwrap();
+            let target = sibling.join("target.txt");
+            write(&client, &target, "data").await;
+            let missing = sibling.join("missing.txt");
+            let inner_target = inner(&target);
+            let inner_missing = inner(&missing);
+            for (name, link_target, stored) in [
+                ("abs", target.as_path(), inner_target.as_path()),
+                ("abs-missing", missing.as_path(), inner_missing.as_path()),
+                (
+                    "rel",
+                    Path::new("../sibling/target.txt"),
+                    Path::new("../sibling/target.txt"),
+                ),
+                (
+                    "rel-missing",
+                    Path::new("../missing.txt"),
+                    Path::new("../missing.txt"),
+                ),
+            ] {
+                let link = dir.join(name);
+                client.symlink(&link, link_target).await.unwrap();
+                let entry = client.stat(&link).await.unwrap();
+                assert!(entry.is_symlink());
+                assert_eq!(entry.metadata().symlink.as_deref(), Some(stored));
+            }
+            assert_eq!(
+                read(&client, &dir.join("rel"), &ReadOptions::default()).await,
+                b"data"
+            );
+            finalize_client(pods, client).await;
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

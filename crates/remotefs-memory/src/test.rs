@@ -88,7 +88,7 @@ fn should_validate_all_paths_before_checking_connection() {
     );
     assert_eq!(
         client
-            .symlink(Path::new("/link"), Path::new("relative"))
+            .symlink(Path::new("relative"), Path::new("/link"))
             .unwrap_err()
             .kind(),
         RemoteErrorType::InvalidPath
@@ -339,22 +339,44 @@ fn should_make_symlink() {
             .kind(),
         RemoteErrorType::AlreadyExists
     );
+    client.remove_file(link).unwrap();
+    assert!(client.exists(Path::new("/tmp/target")).unwrap());
+    finalize_client(client);
+}
+
+#[test]
+fn should_create_symlinks_with_absolute_and_relative_targets() {
+    let client = setup_client();
+    client.create_dir(Path::new("/tmp/dir"), None).unwrap();
+    client.create_dir(Path::new("/tmp/sibling"), None).unwrap();
+    let mut stream = client
+        .create(
+            Path::new("/tmp/sibling/target.txt"),
+            &WriteOptions::default(),
+        )
+        .unwrap();
+    stream.write_all(b"data").unwrap();
+    stream.finish().unwrap();
+    for (link, target) in [
+        ("/tmp/dir/abs", "/tmp/sibling/target.txt"),
+        ("/tmp/dir/abs-missing", "/tmp/sibling/missing.txt"),
+        ("/tmp/dir/rel", "../sibling/target.txt"),
+        ("/tmp/dir/rel-missing", "../missing.txt"),
+        ("/tmp/dir/escape", "../../../../x"),
+        ("/tmp/dir/self", "self"),
+    ] {
+        client.symlink(Path::new(link), Path::new(target)).unwrap();
+        let entry = client.stat(Path::new(link)).unwrap();
+        assert!(entry.is_symlink());
+        assert_eq!(entry.metadata().symlink.as_deref(), Some(Path::new(target)));
+    }
     assert_eq!(
         client
-            .symlink(Path::new("/tmp/other"), Path::new("/tmp/nope"))
-            .unwrap_err()
-            .kind(),
-        RemoteErrorType::NoSuchFileOrDirectory
-    );
-    assert_eq!(
-        client
-            .symlink(Path::new("/tmp/other"), Path::new("target"))
+            .symlink(Path::new("/tmp/empty"), Path::new(""))
             .unwrap_err()
             .kind(),
         RemoteErrorType::InvalidPath
     );
-    client.remove_file(link).unwrap();
-    assert!(client.exists(Path::new("/tmp/target")).unwrap());
     finalize_client(client);
 }
 

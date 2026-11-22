@@ -947,7 +947,7 @@ impl AsyncRemoteFs for TokioFtpFs {
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         remote_path(path)?;
-        remote_path(target)?;
+        remotefs::path::ensure_symlink_target(target)?;
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
@@ -1153,7 +1153,7 @@ mod tests {
             client.copy(relative, absolute).await,
             client.copy(absolute, relative).await,
             client.symlink(relative, absolute).await,
-            client.symlink(absolute, relative).await,
+            client.symlink(absolute, Path::new("")).await,
         ] {
             assert_eq!(result.unwrap_err().kind(), RemoteErrorType::InvalidPath);
         }
@@ -1161,6 +1161,7 @@ mod tests {
             client.set_metadata(absolute, &SetMetadata::default()).await,
             client.copy(absolute, absolute).await,
             client.symlink(absolute, absolute).await,
+            client.symlink(absolute, relative).await,
         ] {
             assert_eq!(
                 result.unwrap_err().kind(),

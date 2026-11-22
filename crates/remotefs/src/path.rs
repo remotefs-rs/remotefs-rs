@@ -55,6 +55,39 @@ pub fn ensure_absolute(path: &Path) -> RemoteResult<&Path> {
     }
 }
 
+/// Verifies that a symbolic link target is usable as link content.
+///
+/// The target is the content of the link, not a path the client resolves. It is
+/// stored verbatim by every backend: a relative target is resolved by the remote
+/// host against the parent directory of the link when the link is followed, the
+/// target does not need to exist, and no normalization, absolutization, or
+/// separator rewriting takes place. Only an empty target is refused. The original
+/// target is returned unchanged.
+///
+/// # Errors
+///
+/// Returns [`RemoteErrorType::InvalidPath`] when the target is empty.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// assert!(remotefs::path::ensure_symlink_target(Path::new("../file")).is_ok());
+/// assert!(remotefs::path::ensure_symlink_target(Path::new("/missing")).is_ok());
+/// assert!(remotefs::path::ensure_symlink_target(Path::new("")).is_err());
+/// ```
+pub fn ensure_symlink_target(target: &Path) -> RemoteResult<&Path> {
+    if target.as_os_str().is_empty() {
+        Err(RemoteError::with_message(
+            RemoteErrorType::InvalidPath,
+            "symlink target must not be empty",
+        ))
+    } else {
+        Ok(target)
+    }
+}
+
 pub(crate) fn file_name(path: &Path) -> Option<String> {
     let path = path.as_os_str().to_string_lossy();
     let bytes = path.as_bytes();
@@ -81,6 +114,30 @@ mod tests {
     use std::path::Path;
 
     use crate::fs::{RemoteErrorType, RemoteResult};
+
+    #[test]
+    fn symlink_target_accepts_any_non_empty_path() -> RemoteResult<()> {
+        for input in [
+            "target",
+            "../sibling/file",
+            ".",
+            "/abs/missing",
+            r"C:\x",
+            "a\\b",
+        ] {
+            assert_eq!(
+                super::ensure_symlink_target(Path::new(input))?,
+                Path::new(input)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn symlink_target_rejects_empty_path() {
+        let error = super::ensure_symlink_target(Path::new("")).unwrap_err();
+        assert_eq!(error.kind(), RemoteErrorType::InvalidPath);
+    }
 
     #[test]
     fn rejects_relative_paths() {

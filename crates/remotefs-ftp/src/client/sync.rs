@@ -983,7 +983,7 @@ impl RemoteFs for FtpFs {
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         remote_path(path)?;
-        remote_path(target)?;
+        remotefs::path::ensure_symlink_target(target)?;
         Err(RemoteError::new(RemoteErrorType::UnsupportedFeature))
     }
 
@@ -1104,7 +1104,7 @@ mod tests {
             client.copy(relative, absolute),
             client.copy(absolute, relative),
             client.symlink(relative, absolute),
-            client.symlink(absolute, relative),
+            client.symlink(absolute, Path::new("")),
         ] {
             assert_eq!(result.unwrap_err().kind(), RemoteErrorType::InvalidPath);
         }
@@ -1112,6 +1112,7 @@ mod tests {
             client.set_metadata(absolute, &SetMetadata::default()),
             client.copy(absolute, absolute),
             client.symlink(absolute, absolute),
+            client.symlink(absolute, relative),
         ] {
             assert_eq!(
                 result.unwrap_err().kind(),

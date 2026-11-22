@@ -475,7 +475,7 @@ impl RemoteFs for MockRemoteFs {
 
     fn symlink(&self, path: &Path, target: &Path) -> crate::RemoteResult<()> {
         crate::path::ensure_absolute(path)?;
-        crate::path::ensure_absolute(target)?;
+        crate::path::ensure_symlink_target(target)?;
         self.ensure_connected()?;
         if !self.has_capability(Capabilities::SYMLINK) {
             return Self::unsupported();
