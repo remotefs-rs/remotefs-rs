@@ -2155,6 +2155,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_connect_twice_and_should_expose_banner() {
         crate::log_init();
         let container = AsyncPureFtpRunner::start().await;
@@ -2169,6 +2173,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_reuse_the_passive_builder_after_reconnect() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2181,6 +2189,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_write_and_read_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2214,6 +2226,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_stream_write_flush_and_finish() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2235,6 +2251,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_honor_read_offset_and_length() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2288,6 +2308,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_reject_a_second_transfer_while_one_is_alive() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2328,6 +2352,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_release_the_client_when_a_stream_is_dropped() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2346,6 +2374,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_require_reconnect_when_a_partial_read_is_dropped() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2371,6 +2403,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_append_to_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2398,6 +2434,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_append_to_file() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2415,6 +2455,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_copy_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2432,6 +2476,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_create_directory() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2449,6 +2497,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_create_directory_cause_already_exists() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2464,6 +2516,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_create_directory() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2479,6 +2535,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_create_file() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2496,6 +2556,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_open_file() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2518,6 +2582,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_report_bad_file_for_wrong_type_operations() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2550,6 +2618,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_exec_command() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2570,6 +2642,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_exec_command() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2580,6 +2656,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_tell_whether_file_exists() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2598,6 +2678,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_list_dir() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2622,6 +2706,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_reject_listing_a_regular_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2641,6 +2729,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_classify_missing_creation_parents_as_missing() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2678,6 +2770,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_classify_missing_rename_destination_parent_as_missing() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2702,6 +2798,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_rename_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2721,6 +2821,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_rename_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2742,6 +2846,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_remove_dir_all() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2763,6 +2871,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_remove_dir_all() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2778,6 +2890,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_remove_dir() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2790,6 +2906,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_remove_dir() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2807,6 +2927,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_remove_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2827,6 +2951,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_set_metadata() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2847,6 +2975,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_stat_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2867,6 +2999,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_stat_root() {
         with_client(|client, _| {
             Box::pin(async move {
@@ -2880,6 +3016,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_stat_file() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2893,6 +3033,10 @@ mod container_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_not_make_symlink() {
         with_client(|client, dir| {
             Box::pin(async move {
@@ -2911,6 +3055,10 @@ mod container_tests {
 
     #[cfg(feature = "find")]
     #[tokio::test(flavor = "multi_thread")]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     async fn should_find_files_from_an_absolute_root() {
         with_client(|client, dir| {
             Box::pin(async move {

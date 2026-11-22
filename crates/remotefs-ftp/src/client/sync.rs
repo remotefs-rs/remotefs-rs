@@ -2292,6 +2292,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_connect_twice_and_should_expose_banner() {
         crate::log_init();
         let container = Arc::new(SyncPureFtpRunner::start());
@@ -2306,6 +2310,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_reuse_the_passive_builder_after_reconnect() {
         with_client(|client, dir| {
             client.disconnect().unwrap();
@@ -2315,6 +2323,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_write_and_read_file() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2343,6 +2355,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_stream_write_flush_and_finish() {
         with_client(|client, dir| {
             let p = dir.join("stream.txt");
@@ -2361,6 +2377,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_honor_read_offset_and_length() {
         with_client(|client, dir| {
             let p = dir.join("range.bin");
@@ -2406,6 +2426,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_reject_a_second_transfer_while_one_is_alive() {
         with_client(|client, dir| {
             let a = dir.join("a.txt");
@@ -2441,6 +2465,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_release_the_client_when_a_stream_is_dropped() {
         with_client(|client, dir| {
             let a = dir.join("a.txt");
@@ -2455,6 +2483,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_append_to_file() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2477,6 +2509,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_append_to_file() {
         with_client(|client, _| {
             let p = Path::new("/tmp/aaaaaaa/hbbbbb/a.txt");
@@ -2490,6 +2526,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_copy_file() {
         with_client(|client, dir| {
             assert_eq!(
@@ -2503,6 +2543,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_create_directory() {
         with_client(|client, dir| {
             assert!(
@@ -2515,6 +2559,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_create_directory_cause_already_exists() {
         with_client(|client, dir| {
             let p = dir.join("mydir");
@@ -2527,6 +2575,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_create_directory() {
         with_client(|client, _| {
             assert!(
@@ -2538,6 +2590,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_create_file() {
         with_client(|client, _| {
             let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
@@ -2551,6 +2607,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_open_file() {
         with_client(|client, _| {
             let mut dest = Vec::new();
@@ -2569,6 +2629,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_report_bad_file_for_wrong_type_operations() {
         with_client(|client, dir| {
             let directory = dir.join("directory");
@@ -2596,6 +2660,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_exec_command() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2611,6 +2679,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_exec_command() {
         with_client(|client, _| {
             assert!(client.exec("echo 5").is_err());
@@ -2618,6 +2690,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_tell_whether_file_exists() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2632,6 +2708,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_list_dir() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2652,6 +2732,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_reject_listing_a_regular_file() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2667,6 +2751,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_classify_missing_creation_parents_as_missing() {
         with_client(|client, dir| {
             let missing = dir.join("missing");
@@ -2699,6 +2787,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_classify_missing_rename_destination_parent_as_missing() {
         with_client(|client, dir| {
             let source = dir.join("source.txt");
@@ -2715,6 +2807,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_rename_file() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2730,6 +2826,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_rename_file() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2747,6 +2847,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_remove_dir_all() {
         with_client(|client, dir| {
             let sub = dir.join("test");
@@ -2761,6 +2865,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_remove_dir_all() {
         with_client(|client, _| {
             assert!(
@@ -2772,6 +2880,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_remove_dir() {
         with_client(|client, dir| {
             let sub = dir.join("test");
@@ -2781,6 +2893,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_remove_dir() {
         with_client(|client, dir| {
             let sub = dir.join("test");
@@ -2794,6 +2910,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_remove_file() {
         with_client(|client, dir| {
             let p = dir.join("a.txt");
@@ -2810,6 +2930,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_set_metadata() {
         with_client(|client, dir| {
             assert_eq!(
@@ -2826,6 +2950,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_stat_file() {
         with_client(|client, dir| {
             let p = dir.join("a.sh");
@@ -2842,6 +2970,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_stat_root() {
         with_client(|client, _| {
             let entry = client.stat(Path::new("/")).unwrap();
@@ -2852,6 +2984,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_stat_file() {
         with_client(|client, dir| {
             assert_eq!(
@@ -2862,6 +2998,10 @@ mod test {
     }
 
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_not_make_symlink() {
         with_client(|client, dir| {
             assert_eq!(
@@ -2876,6 +3016,10 @@ mod test {
 
     #[cfg(feature = "find")]
     #[test]
+    #[cfg_attr(
+        not(feature = "with-containers"),
+        ignore = "needs Docker, run with --features with-containers"
+    )]
     fn should_find_files_from_an_absolute_root() {
         with_client(|client, dir| {
             let sub = dir.join("nested");

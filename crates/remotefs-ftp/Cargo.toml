@@ -51,6 +51,7 @@ tokio-rustls-ring = [
   "suppaftp/tokio-rustls-ring",
   "tokio",
 ]
+with-containers = []
 
 [dependencies]
 futures-io = { workspace = true, optional = true }
