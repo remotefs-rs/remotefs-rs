@@ -1,0 +1,41 @@
+{
+  "workspace_root": "/w",
+  "packages": [
+    {
+      "name": "remotefs",
+      "manifest_path": "/w/crates/remotefs/Cargo.toml",
+      "dependencies": []
+    },
+    {
+      "name": "remotefs-memory",
+      "manifest_path": "/w/crates/remotefs-memory/Cargo.toml",
+      "dependencies": [
+        { "name": "remotefs", "kind": null, "path": "/w/crates/remotefs" }
+      ]
+    },
+    {
+      "name": "remotefs-ssh",
+      "manifest_path": "/w/crates/remotefs-ssh/Cargo.toml",
+      "dependencies": [
+        { "name": "remotefs", "kind": null, "path": "/w/crates/remotefs" }
+      ]
+    },
+    {
+      "name": "remotefs-fuse",
+      "manifest_path": "/w/crates/remotefs-fuse/Cargo.toml",
+      "dependencies": [
+        { "name": "remotefs", "kind": null, "path": "/w/crates/remotefs" },
+        { "name": "remotefs-memory", "kind": "dev", "path": "/w/crates/remotefs-memory" }
+      ]
+    },
+    {
+      "name": "fusibile",
+      "manifest_path": "/w/crates/fusibile/Cargo.toml",
+      "dependencies": [
+        { "name": "remotefs-fuse", "kind": null, "path": "/w/crates/remotefs-fuse" },
+        { "name": "remotefs-ssh", "kind": null, "path": "/w/crates/remotefs-ssh" },
+        { "name": "remotefs-memory", "kind": null, "path": "/w/crates/remotefs-memory" }
+      ]
+    }
+  ]
+}
