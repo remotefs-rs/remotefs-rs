@@ -1,6 +1,5 @@
 //! Tokio-to-blocking stream fixtures.
 
-use std::future::Future;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::pin::Pin;
 use std::sync::mpsc;

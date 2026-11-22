@@ -72,7 +72,6 @@ mod tests {
     use std::io::Cursor;
 
     use pretty_assertions::assert_eq;
-    use remotefs::fs::ReadOptions;
 
     use super::*;
 

@@ -185,6 +185,7 @@ impl Image for OpensshServerImage {
     }
 }
 
+#[derive(Debug)]
 pub struct OpensshServer {
     container: Container<OpensshServerImage>,
 }
@@ -235,6 +236,7 @@ Host scp
 }
 
 /// Mock ssh key storage
+#[derive(Debug)]
 pub struct MockSshKeyStorage {
     key: NamedTempFile,
 }

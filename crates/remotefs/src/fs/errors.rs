@@ -210,7 +210,6 @@ pub enum RemoteErrorType {
 #[cfg(test)]
 mod test {
     use std::error::Error;
-    use std::io;
 
     use pretty_assertions::assert_eq;
 

@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::pin::Pin;

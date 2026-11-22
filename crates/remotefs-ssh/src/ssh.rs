@@ -3,6 +3,7 @@
 //! implements the file transfer for SSH based protocols: SFTP and SCP
 
 // -- ext
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -121,6 +122,19 @@ pub struct SshOpts {
     home_dir: Option<PathBuf>,
     /// Ssh agent configuration for authentication
     ssh_agent_identity: Option<SshAgentIdentity>,
+}
+
+impl fmt::Debug for SshOpts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SshOpts")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("connection_timeout", &self.connection_timeout)
+            .field("config_file", &self.config_file)
+            .field("methods", &self.methods)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SshOpts {

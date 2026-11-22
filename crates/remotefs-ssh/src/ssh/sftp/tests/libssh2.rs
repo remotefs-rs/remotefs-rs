@@ -1,9 +1,7 @@
 use std::io::{Cursor, Read as _, Seek as _, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use pretty_assertions::assert_eq;
-use remotefs::RemoteFs;
-use remotefs::fs::{Capabilities, ReadOptions, SetMetadata, UnixPex, WriteOptions};
 use ssh2_config::ParseRule;
 
 use super::*;

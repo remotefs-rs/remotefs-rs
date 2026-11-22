@@ -3,6 +3,7 @@
 //! UNIX implementation of Smb fs client
 
 // -- exports
+use std::fmt;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -98,6 +99,14 @@ pub(crate) fn pavao_error(kind: RemoteErrorType, error: pavao::SmbError) -> Remo
 pub struct PavaoSmbFs {
     client: SmbClient,
     connected: bool,
+}
+
+impl fmt::Debug for PavaoSmbFs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PavaoSmbFs")
+            .field("connected", &self.connected)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PavaoSmbFs {
@@ -442,10 +451,8 @@ mod test {
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
-    use remotefs::fs::{Capabilities, ReadOptions};
     #[cfg(feature = "with-containers")]
     use remotefs::fs::{SetMetadata, WriteOptions};
-    use remotefs::{RemoteErrorType, RemoteFs};
     use serial_test::serial;
 
     use super::*;
@@ -489,7 +496,7 @@ mod test {
             SmbDialect::Nt1,
         );
         assert_eq!(
-            result.err().expect("inverted bounds must fail").kind(),
+            result.expect_err("inverted bounds must fail").kind(),
             RemoteErrorType::BadAddress,
         );
     }

@@ -13,6 +13,9 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 description = "remotefs implementation for kube"
 
+[lints]
+workspace = true
+
 [dependencies]
 chrono = { workspace = true }
 futures-io = { workspace = true }

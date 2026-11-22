@@ -1,6 +1,5 @@
 //! Asynchronous I/O fixtures for stream and contract tests.
 
-use std::future::Future;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::pin::Pin;

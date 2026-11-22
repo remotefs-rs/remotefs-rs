@@ -4,7 +4,7 @@
 //! command's exit status; dropping a stream without finishing aborts the
 //! remote command (best effort, logged) and never counts as completion.
 
-use std::future::{Future, poll_fn};
+use std::future::poll_fn;
 use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;

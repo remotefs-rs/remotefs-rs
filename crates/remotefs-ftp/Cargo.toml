@@ -17,6 +17,9 @@ description = "remotefs FTP client library"
 features = ["find", "rustls-aws-lc-rs", "tokio-rustls-aws-lc-rs"]
 rustdoc-args = ["--cfg", "docsrs"]
 
+[lints]
+workspace = true
+
 [features]
 default = ["find"]
 find = ["remotefs/find"]

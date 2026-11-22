@@ -20,6 +20,9 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 description = "remotefs SSH client library"
 
+[lints]
+workspace = true
+
 [features]
 default = ["find", "libssh2"]
 find = ["remotefs/find"]

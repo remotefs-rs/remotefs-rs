@@ -1,7 +1,6 @@
 //! Asynchronous stream types for the russh backend.
 
 use std::collections::VecDeque;
-use std::future::Future;
 use std::io::{self, SeekFrom};
 use std::pin::Pin;
 use std::sync::Arc;

@@ -5,6 +5,7 @@ mod scp;
 mod stream;
 
 use std::borrow::Cow;
+use std::fmt;
 use std::future::Future as _;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -37,7 +38,7 @@ use crate::utils::path as path_utils;
 /// by the caller if stricter security is required.
 ///
 /// You can implement your own [`Handler`] and use it with [`RusshSession`] if you want a different behaviour.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct NoCheckServerKey;
 
 impl Handler for NoCheckServerKey {
@@ -853,6 +854,20 @@ where
     remote_forwards: Vec<RegisteredRemoteForward>,
 }
 
+impl<T> fmt::Debug for RusshSession<T>
+where
+    T: Handler + Default + Send + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RusshSession")
+            .field("forward_agent", &self.forward_agent)
+            .field("remote_forward_ports", &self.remote_forward_ports)
+            .field("remote_forwards", &self.remote_forwards)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
 enum RegisteredRemoteForward {
     Tcp { address: String, port: u32 },
     StreamLocal(String),

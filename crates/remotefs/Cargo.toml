@@ -30,6 +30,9 @@ description = "a client library to work with all file transfer protocols"
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[lints]
+workspace = true
+
 [features]
 async = ["dep:async-trait", "dep:futures-io"]
 default = ["find"]

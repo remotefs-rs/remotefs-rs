@@ -18,6 +18,9 @@ description = "remotefs Aws S3 client library"
 features = ["tokio"]
 rustdoc-args = ["--cfg", "docsrs"]
 
+[lints]
+workspace = true
+
 [dependencies]
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }

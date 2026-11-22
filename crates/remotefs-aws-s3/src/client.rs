@@ -580,7 +580,6 @@ pub(crate) fn http_range(opts: &ReadOptions) -> Option<String> {
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
     #[cfg(any(feature = "with-s3-ci", feature = "with-containers"))]
     use std::path::PathBuf;
 

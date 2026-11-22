@@ -1,6 +1,5 @@
 //! Bounded duplex-pipe transfer workers.
 
-use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;

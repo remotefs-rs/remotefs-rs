@@ -103,10 +103,8 @@ fn invalid(message: &str) -> RemoteError {
 
 #[cfg(test)]
 mod test {
-    use std::path::{Path, PathBuf};
 
     use pretty_assertions::assert_eq;
-    use remotefs::RemoteErrorType;
 
     use super::*;
 
