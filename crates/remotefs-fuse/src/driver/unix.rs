@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 use fuser::{
     AccessFlags as FuserAccessFlags, BsdFileFlags, FileAttr, FileHandle as FuserFileHandle,
     FileType, Filesystem, FopenFlags, Generation, INodeNo, KernelConfig, LockOwner, OpenFlags,
-    RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+    Owner, RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use inode::Inode;
@@ -87,6 +87,7 @@ where
         chgtime: Option<SystemTime>,
         bkuptime: Option<SystemTime>,
         flags: Option<BsdFileFlags>,
+        _kill_suid_gid: bool,
         reply: ReplyAttr,
     ) {
         self.with_inner(|inner| {
@@ -109,6 +110,7 @@ where
         mode: u32,
         umask: u32,
         rdev: u32,
+        _owner: Owner,
         reply: ReplyEntry,
     ) {
         self.with_inner(|inner| inner.mknod(req, parent, name, mode, umask, rdev, reply));
@@ -121,6 +123,7 @@ where
         name: &OsStr,
         mode: u32,
         umask: u32,
+        _owner: Owner,
         reply: ReplyEntry,
     ) {
         self.with_inner(|inner| inner.mkdir(req, parent, name, mode, umask, reply));
@@ -140,6 +143,7 @@ where
         parent: INodeNo,
         link_name: &OsStr,
         target: &Path,
+        _owner: Owner,
         reply: ReplyEntry,
     ) {
         self.with_inner(|inner| inner.symlink(req, parent, link_name, target, reply));
@@ -153,6 +157,7 @@ where
         newparent: INodeNo,
         newname: &OsStr,
         flags: RenameFlags,
+        _owner: Option<Owner>,
         reply: ReplyEmpty,
     ) {
         self.with_inner(|inner| inner.rename(req, parent, name, newparent, newname, flags, reply));
@@ -169,7 +174,14 @@ where
         self.with_inner(|inner| inner.link(req, ino, newparent, newname, reply));
     }
 
-    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(
+        &self,
+        req: &Request,
+        ino: INodeNo,
+        flags: OpenFlags,
+        _kill_suid_gid: bool,
+        reply: ReplyOpen,
+    ) {
         self.with_inner(|inner| inner.open(req, ino, flags, reply));
     }
 
@@ -327,6 +339,8 @@ where
         mode: u32,
         umask: u32,
         flags: i32,
+        _kill_suid_gid: bool,
+        _owner: Owner,
         reply: ReplyCreate,
     ) {
         self.with_inner(|inner| inner.create(req, parent, name, mode, umask, flags, reply));
@@ -374,8 +388,12 @@ where
             }
         };
 
-        self.state
-            .check_access(&parent, request.uid(), request.gid(), access_mask)
+        self.state.check_access(
+            &parent,
+            state::caller_uid(request),
+            state::caller_gid(request),
+            access_mask,
+        )
     }
 
     /// Read up to `buffer.len()` bytes of `path` at `offset`; see [`transfer::read_at`].
@@ -544,10 +562,12 @@ where
             Ok(res) => res,
         };
 
-        if !self
-            .state
-            .check_access(&file, req.uid(), req.gid(), AccessFlags::F_OK)
-        {
+        if !self.state.check_access(
+            &file,
+            state::caller_uid(req),
+            state::caller_gid(req),
+            AccessFlags::F_OK,
+        ) {
             error!("No access to file: {path:?}");
             reply.error(fuser::Errno::EACCES);
             return;
@@ -625,10 +645,12 @@ where
             }
         };
 
-        if !self
-            .state
-            .check_access(&file, req.uid(), req.gid(), AccessFlags::W_OK)
-        {
+        if !self.state.check_access(
+            &file,
+            state::caller_uid(req),
+            state::caller_gid(req),
+            AccessFlags::W_OK,
+        ) {
             error!("No access to file: {}", file.path().display());
             reply.error(fuser::Errno::EACCES);
             return;
@@ -1021,10 +1043,12 @@ where
             }
         };
 
-        if !self
-            .state
-            .check_access(&file, req.uid(), req.gid(), mode.access_mask)
-        {
+        if !self.state.check_access(
+            &file,
+            state::caller_uid(req),
+            state::caller_gid(req),
+            mode.access_mask,
+        ) {
             error!("No access to file: {}", file.path().display());
             reply.error(fuser::Errno::EACCES);
             return;
@@ -1276,10 +1300,12 @@ where
             }
         };
 
-        if self
-            .state
-            .check_access(&file, req.uid(), req.gid(), mode.access_mask)
-        {
+        if self.state.check_access(
+            &file,
+            state::caller_uid(req),
+            state::caller_gid(req),
+            mode.access_mask,
+        ) {
             let fh = self
                 .state
                 .file_handlers
@@ -1541,8 +1567,8 @@ where
 
         if self.state.check_access(
             &file,
-            req.uid(),
-            req.gid(),
+            state::caller_uid(req),
+            state::caller_gid(req),
             AccessFlags::from_bits_truncate(mask.bits()),
         ) {
             reply.ok();
