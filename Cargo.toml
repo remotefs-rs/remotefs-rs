@@ -1,53 +1,105 @@
-[package]
-name = "remotefs"
-version = "1.0.1"
+[workspace]
+members = [
+  "crates/fusibile",
+  "crates/remotefs",
+  "crates/remotefs-aws-s3",
+  "crates/remotefs-ftp",
+  "crates/remotefs-fuse",
+  "crates/remotefs-gcs",
+  "crates/remotefs-kube",
+  "crates/remotefs-memory",
+  "crates/remotefs-smb",
+  "crates/remotefs-ssh",
+  "crates/remotefs-webdav",
+]
+resolver = "3"
+
+[workspace.package]
+version = "1.2.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
-categories = ["network-programming"]
-documentation = "https://docs.rs/remotefs"
 edition = "2024"
-include = [
-  "src/**/*",
-  "LICENSE",
-  "README.md",
-  "CHANGELOG.md",
-  "MIGRATION.md",
-  "skills/migrate-to-remotefs-1/SKILL.md",
-]
-keywords = [
-  "scp-client",
-  "sftp-client",
-  "ftp-client",
-  "s3-client",
-  "kube-client",
-]
 license = "MIT"
-readme = "README.md"
 repository = "https://github.com/remotefs-rs/remotefs-rs"
-rust-version = "1.89.0"
-description = "a client library to work with all file transfer protocols"
 
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+[workspace.lints.rust]
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
 
-[features]
-async = ["dep:async-trait", "dep:futures-io"]
-default = ["find"]
-# misc
-find = ["dep:wildmatch"]
-no-log = ["log/max_level_off"]
-tokio = ["async", "dep:tokio", "dep:tokio-util"]
-
-[dependencies]
-async-trait = { version = "0.1", optional = true }
-futures-io = { version = "0.3", optional = true }
-log = "0.4"
-thiserror = "2"
-tokio = { version = "1", default-features = false, features = ["io-util", "rt", "sync"], optional = true }
-tokio-util = { version = "0.7", default-features = false, features = ["compat", "io-util"], optional = true }
-wildmatch = { version = "2", optional = true }
-
-[dev-dependencies]
+[workspace.dependencies]
+anyhow = "1"
+argh = "0.1"
+async-trait = "0.1"
+aws-config = "1"
+aws-credential-types = "1"
+aws-sdk-s3 = { version = "1", default-features = false }
+aws-smithy-types = "1"
+bytes = "1"
+chrono = "0.4"
+clap = { version = "4", default-features = false }
+criterion = "0.8"
+dashmap = "6"
+dav-xml-client = { version = "0.2", default-features = false }
+dirs = "7"
+dokan = "0.3"
+dokan-sys = "0.3"
 env_logger = "0.11"
+filetime = "0.2"
+fuser = "0.18"
+futures = "0.3"
+futures-io = "0.3"
+futures-util = { version = "0.3", default-features = false }
+google-cloud-auth = "1"
+google-cloud-gax = "1"
+google-cloud-storage = "1"
+http = "1"
+if-addrs = "0.15"
+k8s-openapi = "0.28"
+kube = "4"
+lazy-regex = "3"
+libc = "0.2"
+libssh-rs = "0.3"
+log = "0.4"
+nix = "0.31"
+openssl = "0.10"
+orange-trees = "0.1"
+path-slash = "0.2"
+pavao = "0.3"
 pretty_assertions = "1"
+rand = "0.10"
+remotefs = { version = "1.2.0", path = "crates/remotefs" }
+remotefs-aws-s3 = { version = "1.2.0", path = "crates/remotefs-aws-s3" }
+remotefs-ftp = { version = "1.2.0", path = "crates/remotefs-ftp" }
+remotefs-fuse = { version = "1.2.0", path = "crates/remotefs-fuse" }
+remotefs-gcs = { version = "1.2.0", path = "crates/remotefs-gcs" }
+remotefs-kube = { version = "1.2.0", path = "crates/remotefs-kube" }
+remotefs-memory = { version = "1.2.0", path = "crates/remotefs-memory" }
+remotefs-smb = { version = "1.2.0", path = "crates/remotefs-smb", default-features = false }
+remotefs-ssh = { version = "1.2.0", path = "crates/remotefs-ssh", default-features = false }
+remotefs-webdav = { version = "1.2.0", path = "crates/remotefs-webdav" }
+rpassword = "7"
+russh = "0.65"
+russh-sftp = "3"
+rustls-pki-types = "1"
+seahash = "4"
+serde_json = "1"
+serial_test = "4"
+socket2 = "0.6"
+ssh-key = "0.7.0-rc.11"
+ssh2 = "0.9"
+ssh2-config = "0.9"
+suppaftp = "12"
 tempfile = "3"
+testcontainers = "0.28"
+thiserror = "2"
+tokio = "1"
+tokio-util = { version = "0.7", default-features = false }
+uuid = "1"
+webpki-roots = "1"
+widestring = "0.4"
+wildmatch = "2"
+winapi = "0.3"
+windows-sys = "0.61"

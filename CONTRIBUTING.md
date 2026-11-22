@@ -84,6 +84,21 @@ At the moment, these kind of contributions are more appreciated and should be pr
 
 For any other kind of contribution, especially for new features, please submit a new issue first.
 
+## Working in the workspace
+
+Every crate lives under `crates/` and has its own README. Run `just check` before
+opening a pull request: it runs the same gate as CI, for every crate.
+
+To check one crate, run its tests on their own, for example
+`cargo test -p remotefs-ssh`. Tests that start a Docker container need
+`just test_containers` and a running Docker daemon. The FUSE crates need FUSE to
+build. On a machine without it, leave them out with
+`SKIP_CRATES="fusibile remotefs-fuse" just test`.
+
+Dependency versions belong in the root `Cargo.toml`, under
+`[workspace.dependencies]`. A member crate references them with
+`workspace = true`.
+
 ## Pull Request Process
 
 Let's make it simple and clear:
@@ -91,10 +106,10 @@ Let's make it simple and clear:
 1. Open a PR with an **appropriate label** (e.g. bug, enhancement, ...).
 2. Write a **properly documentation** for your software compliant with **rustdoc** standard.
 3. Write tests for your code. This doesn't apply necessarily for implementation regarding the user-interface module (`ui/activities`) and (if a test server is not available) for file transfers.
-4. Check your code with `cargo clippy`.
+4. Check your code with `just clippy "-- -D warnings"`.
 5. Check if the CI for your commits reports three-green.
 6. Report changes to the PR you opened, writing a report of what you changed and what you have introduced.
-7. Update the `CHANGELOG.md` file with details of changes to the application. In changelog report changes under a chapter called `PR{PULL_REQUEST_NUMBER}` (e.g. PR12).
+7. Write Conventional Commits. Each crate's `CHANGELOG.md` is generated from them, so do not edit those files by hand.
 8. Assign a maintainer to the reviewers.
 9. Wait for a maintainer to fullfil the acceptance tests
 10. Wait for a maintainer to complete the acceptance tests

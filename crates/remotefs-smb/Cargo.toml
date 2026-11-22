@@ -1,0 +1,63 @@
+[package]
+name = "remotefs-smb"
+version = { workspace = true }
+authors = { workspace = true }
+categories = ["network-programming"]
+documentation = "https://docs.rs/remotefs-smb"
+edition = { workspace = true }
+homepage = "https://veeso.github.io/remotefs-rs-smb/"
+include = ["src/**/*", "examples/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+keywords = ["remotefs", "smb-client", "smb", "smb2", "smb3"]
+license = { workspace = true }
+readme = "README.md"
+repository = { workspace = true }
+rust-version = "1.89.0"
+description = "remotefs SMB client library"
+
+[dependencies]
+log = { workspace = true }
+remotefs = { workspace = true }
+
+[target."cfg(target_family = \"unix\")"]
+[target."cfg(target_family = \"unix\")".dependencies]
+libc = { workspace = true, optional = true }
+pavao = { workspace = true, optional = true }
+
+[target."cfg(target_family = \"windows\")"]
+[target."cfg(target_family = \"windows\")".dependencies]
+filetime = { workspace = true }
+windows-sys = { workspace = true, features = ["Win32_NetworkManagement_WNet", "Win32_Foundation"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+argh = { workspace = true }
+env_logger = { workspace = true }
+futures = { workspace = true }
+pretty_assertions = { workspace = true }
+rpassword = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[features]
+default = ["find", "pavao"]
+# clients
+pavao = ["dep:libc", "dep:pavao"]
+# misc
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+vendored = ["pavao", "pavao/vendored"]
+# tests
+with-containers = []
+
+[package.metadata.docs.rs]
+features = ["find", "pavao"]
+no-default-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+[[example]]
+name = "tree"
+path = "examples/tree.rs"
+required-features = ["pavao"]

@@ -1,0 +1,45 @@
+[package]
+name = "remotefs-webdav"
+version = { workspace = true }
+authors = { workspace = true }
+categories = ["network-programming"]
+documentation = "https://docs.rs/remotefs-webdav"
+edition = { workspace = true }
+homepage = "https://github.com/remotefs-rs/remotefs-rs-webdav"
+include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+keywords = ["remotefs", "webdav", "webdav-client", "rfc4918"]
+license = { workspace = true }
+readme = "README.md"
+repository = { workspace = true }
+rust-version = "1.94.1"
+description = "remotefs WebDAV client library"
+
+[features]
+default = ["find"]
+# misc
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+tokio = ["dep:tokio", "remotefs/tokio"]
+# tests
+with-containers = []
+
+[dependencies]
+dav-xml-client = { workspace = true, features = ["native-tls", "reqwest"] }
+futures = { workspace = true }
+futures-io = { workspace = true }
+http = { workspace = true }
+log = { workspace = true }
+remotefs = { workspace = true, features = ["async"] }
+tokio = { workspace = true, features = ["rt"], optional = true }
+
+[dev-dependencies]
+dav-xml-client = { workspace = true, features = ["mock", "native-tls", "reqwest"] }
+env_logger = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

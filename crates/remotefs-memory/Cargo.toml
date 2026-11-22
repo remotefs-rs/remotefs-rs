@@ -1,0 +1,29 @@
+[package]
+name = "remotefs-memory"
+version = { workspace = true }
+authors = { workspace = true }
+categories = ["simulation"]
+documentation = "https://docs.rs/remotefs-memory"
+edition = { workspace = true }
+include = ["src/**/*", "./LICENSE", "./README.md", "./CHANGELOG.md"]
+keywords = ["remotefs", "memory"]
+license = { workspace = true }
+readme = "README.md"
+repository = { workspace = true }
+rust-version = "1.89"
+description = "remotefs implementation for volatile memory. Good for testing and simulation."
+
+[dependencies]
+log = { workspace = true }
+orange-trees = { workspace = true }
+remotefs = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
+
+[lib]
+name = "remotefs_memory"
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]

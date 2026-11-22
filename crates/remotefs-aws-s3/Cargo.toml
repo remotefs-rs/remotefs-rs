@@ -1,0 +1,52 @@
+[package]
+name = "remotefs-aws-s3"
+version = { workspace = true }
+authors = { workspace = true }
+categories = ["network-programming"]
+documentation = "https://docs.rs/remotefs-aws-s3"
+edition = { workspace = true }
+homepage = "https://github.com/remotefs-rs/remotefs-rs-aws-s3"
+include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
+keywords = ["remotefs", "s3-client"]
+license = { workspace = true }
+readme = "README.md"
+repository = { workspace = true }
+rust-version = "1.94.1"
+description = "remotefs Aws S3 client library"
+
+[package.metadata.docs.rs]
+features = ["tokio"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+aws-config = { workspace = true }
+aws-credential-types = { workspace = true }
+aws-sdk-s3 = { workspace = true, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
+aws-smithy-types = { workspace = true, features = ["byte-stream-poll-next"] }
+bytes = { workspace = true }
+futures-io = { workspace = true }
+log = { workspace = true }
+remotefs = { workspace = true, features = ["async"] }
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+env_logger = { workspace = true }
+futures = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+testcontainers = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+
+[features]
+default = ["find"]
+# misc
+find = ["remotefs/find"]
+no-log = ["log/max_level_off"]
+tokio = ["remotefs/tokio"]
+# tests
+with-containers = []
+with-s3-ci = []
+
+[target."cfg(target_os = \"windows\")"]
+[target."cfg(target_os = \"windows\")".dependencies]
+path-slash = { workspace = true }
