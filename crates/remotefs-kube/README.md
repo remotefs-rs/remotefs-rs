@@ -15,9 +15,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
+  <a href="https://github.com/veeso/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-kube"
@@ -41,7 +41,7 @@
 
 ## About remotefs-kube ☁️
 
-remotefs-kube is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), giving shell-level access to the containers of a Kubernetes pod.
+remotefs-kube is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), giving shell-level access to the containers of a Kubernetes pod.
 
 ## Get started
 
@@ -205,7 +205,7 @@ supported, and are omitted from the table.
 
 ### Migrating from 0.4
 
-See the [remotefs migration guide](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md)
+See the [remotefs migration guide](https://github.com/veeso/remotefs-rs/blob/main/MIGRATION.md)
 for upstream API changes and the [1.0.0 changelog](CHANGELOG.md) for this
 client's migration details.
 

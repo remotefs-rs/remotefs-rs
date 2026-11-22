@@ -69,13 +69,13 @@ release:
 
 - GitHub Pages is enabled for this repository, with the source set to GitHub
   Actions. The install scripts are served from
-  <https://remotefs-rs.github.io/remotefs-rs/>.
+  <https://veeso.github.io/remotefs-rs/>.
 - The repository secret `RELEASE_PAT` is a token with contents write access. The
   workflow uses it to push the version commit and the tags, and to create the
   GitHub release.
 - crates.io trusted publishing is configured for each of the eleven crates, with
-  the repository `remotefs-rs/remotefs-rs` and the workflow `release.yml`.
-- The Homebrew tap `remotefs-rs/homebrew-fusibile` exists and is writable with
+  the repository `veeso/remotefs-rs` and the workflow `release.yml`.
+- The Homebrew tap `veeso/homebrew-fusibile` exists and is writable with
   `RELEASE_PAT`.
 
 ## Changelogs

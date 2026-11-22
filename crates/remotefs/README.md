@@ -1,11 +1,11 @@
 # remotefs
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
+  <img src="https://raw.githubusercontent.com/veeso/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/blob/main/crates/remotefs/CHANGELOG.md" target="_blank">Changelog</a>
+  <a href="https://github.com/veeso/remotefs-rs/blob/main/crates/remotefs/CHANGELOG.md" target="_blank">Changelog</a>
   ·
   <a href="https://docs.rs/remotefs#get-started" target="_blank">Get started</a>
   ·
@@ -18,15 +18,15 @@
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-teal.svg" alt="License-MIT" /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"><img src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=plain" alt="Repo stars" /></a>
+  <a href="https://github.com/veeso/remotefs-rs/stargazers"><img src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=plain" alt="Repo stars" /></a>
   <a href="https://crates.io/crates/remotefs"><img src="https://img.shields.io/crates/d/remotefs.svg" alt="Downloads counter" /></a>
   <a href="https://crates.io/crates/remotefs"><img src="https://img.shields.io/crates/v/remotefs.svg" alt="Latest version" /></a>
   <a href="https://ko-fi.com/veeso"><img src="https://img.shields.io/badge/donate-ko--fi-red" alt="Ko-fi" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml"><img src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://coveralls.io/github/remotefs-rs/remotefs-rs"><img src="https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg" alt="Coveralls" /></a>
+  <a href="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml"><img src="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://coveralls.io/github/veeso/remotefs-rs"><img src="https://coveralls.io/repos/github/veeso/remotefs-rs/badge.svg" alt="Coveralls" /></a>
   <a href="https://docs.rs/remotefs"><img src="https://docs.rs/remotefs/badge.svg" alt="Docs" /></a>
 </p>
 
@@ -82,17 +82,17 @@ Otherwise, the backend crate re-exports the shared types you need.
 Backend crates are maintained separately. Choose a release compatible with
 remotefs 1 from their project documentation:
 
-- [aws-s3](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-aws-s3)
-- [ftp](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-ftp)
-- [gcs](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-gcs)
-- [kube](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-kube)
-- [memory](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-memory)
-- [smb](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-smb)
-- [ssh](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-ssh)
-- [webdav](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-webdav)
+- [aws-s3](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-aws-s3)
+- [ftp](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-ftp)
+- [gcs](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-gcs)
+- [kube](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-kube)
+- [memory](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-memory)
+- [smb](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-smb)
+- [ssh](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-ssh)
+- [webdav](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-webdav)
 
 To mount a backend as a local file system, see
-[remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-fuse).
+[remotefs-fuse](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-fuse).
 
 ## Remote file system 💾
 
@@ -157,7 +157,7 @@ before opening a pull request.
 ## Apps using remotefs 🚀
 
 - [termscp](https://github.com/veeso/termscp)
-- [remotefs-fuse](https://github.com/remotefs-rs/remotefs-rs/tree/main/crates/remotefs-fuse)
+- [remotefs-fuse](https://github.com/veeso/remotefs-rs/tree/main/crates/remotefs-fuse)
 
 ## Changelog ⏳
 

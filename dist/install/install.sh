@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # shellcheck shell=dash
 
-# Installer for fusibile <https://github.com/remotefs-rs/remotefs-rs>
+# Installer for fusibile <https://github.com/veeso/remotefs-rs>
 #
 # Options
 #
@@ -23,10 +23,10 @@
 
 set -eu
 
-GITHUB_REPO="remotefs-rs/remotefs-rs"
+GITHUB_REPO="veeso/remotefs-rs"
 GITHUB_URL="https://github.com/${GITHUB_REPO}"
 ISSUES_URL="${GITHUB_URL}/issues/new"
-BREW_FORMULA="remotefs-rs/fusibile/fusibile"
+BREW_FORMULA="veeso/fusibile/fusibile"
 VERSION=""
 FORCE=""
 SUDO=""
@@ -69,7 +69,7 @@ Downloads and installs the latest fusibile release for your platform, using
 Homebrew when available.
 
 USAGE:
-    curl -sSLf https://remotefs-rs.github.io/remotefs-rs/install.sh | sh -s -- [OPTIONS]
+    curl -sSLf https://veeso.github.io/remotefs-rs/install.sh | sh -s -- [OPTIONS]
 
 OPTIONS:
     -y, -f, --yes, --force       Skip the confirmation prompt
@@ -158,7 +158,7 @@ detect_arch() {
 
 unsupported() {
     error "$1"
-    info "On Windows, use the PowerShell installer instead: irm https://remotefs-rs.github.io/remotefs-rs/install.ps1 | iex"
+    info "On Windows, use the PowerShell installer instead: irm https://veeso.github.io/remotefs-rs/install.ps1 | iex"
     info "Alternatively you can install fusibile with Cargo <https://www.rust-lang.org/tools/install>: cargo install fusibile --locked"
     exit 1
 }

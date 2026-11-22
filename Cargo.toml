@@ -19,7 +19,7 @@ version = "1.2.0"
 authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/remotefs-rs/remotefs-rs"
+repository = "https://github.com/veeso/remotefs-rs"
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"

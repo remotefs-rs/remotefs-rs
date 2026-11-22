@@ -1,7 +1,7 @@
 # remotefs-memory
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/remotefs-rs/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
+  <img src="https://raw.githubusercontent.com/veeso/remotefs-rs/main/assets/logo.png" alt="logo" width="256" height="256" />
 </p>
 
 <p align="center">~ A remotefs implementation for testing and simulation ~</p>
@@ -15,9 +15,9 @@
       src="https://img.shields.io/badge/License-MIT-teal.svg"
       alt="License-MIT"
   /></a>
-  <a href="https://github.com/remotefs-rs/remotefs-rs/stargazers"
+  <a href="https://github.com/veeso/remotefs-rs/stargazers"
     ><img
-      src="https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat"
+      src="https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=flat"
       alt="Repo stars"
   /></a>
   <a href="https://crates.io/crates/remotefs-memory"
@@ -37,9 +37,9 @@
   /></a>
 </p>
 <p align="center">
-  <a href="https://github.com/remotefs-rs/remotefs-rs/actions"
+  <a href="https://github.com/veeso/remotefs-rs/actions"
     ><img
-      src="https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg"
+      src="https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml/badge.svg"
       alt="CI"
   /></a>
   <a href="https://docs.rs/remotefs-memory"

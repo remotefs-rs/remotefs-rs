@@ -1,21 +1,21 @@
 # remotefs SSH
 
 [![license-mit](https://img.shields.io/crates/l/remotefs-ssh.svg)](https://opensource.org/licenses/MIT)
-[![repo-stars](https://img.shields.io/github/stars/remotefs-rs/remotefs-rs.svg?style=flat)](https://github.com/remotefs-rs/remotefs-rs/stargazers)
+[![repo-stars](https://img.shields.io/github/stars/veeso/remotefs-rs.svg?style=flat)](https://github.com/veeso/remotefs-rs/stargazers)
 [![downloads](https://img.shields.io/crates/d/remotefs-ssh.svg)](https://crates.io/crates/remotefs-ssh)
 [![latest-version](https://img.shields.io/crates/v/remotefs-ssh.svg)](https://crates.io/crates/remotefs-ssh)
 [![ko-fi](https://img.shields.io/badge/donate-ko--fi-red)](https://ko-fi.com/veeso)
 [![conventional-commits](https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white)](https://conventionalcommits.org)
 
-[![Build](https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/remotefs-rs/remotefs-rs/actions/workflows/ci.yml)
-[![coveralls](https://coveralls.io/repos/github/remotefs-rs/remotefs-rs/badge.svg)](https://coveralls.io/github/remotefs-rs/remotefs-rs)
+[![Build](https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/veeso/remotefs-rs/actions/workflows/ci.yml)
+[![coveralls](https://coveralls.io/repos/github/veeso/remotefs-rs/badge.svg)](https://coveralls.io/github/veeso/remotefs-rs)
 [![docs](https://docs.rs/remotefs-ssh/badge.svg)](https://docs.rs/remotefs-ssh)
 
 ---
 
 ## About remotefs-ssh ☁️
 
-remotefs-ssh is a client implementation for [remotefs](https://github.com/remotefs-rs/remotefs-rs), providing support
+remotefs-ssh is a client implementation for [remotefs](https://github.com/veeso/remotefs-rs), providing support
 for the SFTP/SCP protocol.
 
 ---
@@ -184,7 +184,7 @@ always supported and are omitted.
 - `mov` became `rename`.
 - `setstat` became `set_metadata`.
 - `SftpFs::russh(opts, runtime)` became `RusshSftpFs::new(opts)` for async use, or `RusshSftpFs::new(opts).into_blocking(handle)` for blocking use.
-- See the [canonical migration guide](https://github.com/remotefs-rs/remotefs-rs/blob/main/MIGRATION.md).
+- See the [canonical migration guide](https://github.com/veeso/remotefs-rs/blob/main/MIGRATION.md).
 
 ---
 

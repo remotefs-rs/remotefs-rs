@@ -361,7 +361,7 @@ jobs:
       - name: Checkout homebrew tap
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: remotefs-rs/homebrew-fusibile
+          repository: veeso/homebrew-fusibile
           token: ${{ secrets.RELEASE_PAT }}
           path: tap
           persist-credentials: true
@@ -374,12 +374,12 @@ jobs:
           SHA_MAC_X64=$(cat dl/x86_64-apple-darwin.sha256)
           SHA_LIN_ARM=$(cat dl/aarch64-unknown-linux-musl.sha256)
           SHA_LIN_X64=$(cat dl/x86_64-unknown-linux-musl.sha256)
-          BASE="https://github.com/remotefs-rs/remotefs-rs/releases/download/fusibile-v$VERSION"
+          BASE="https://github.com/veeso/remotefs-rs/releases/download/fusibile-v$VERSION"
           mkdir -p tap/Formula
           cat > tap/Formula/fusibile.rb <<EOF
           class Fusibile < Formula
             desc "Mount remote file systems locally via FUSE or Dokany"
-            homepage "https://github.com/remotefs-rs/remotefs-rs"
+            homepage "https://github.com/veeso/remotefs-rs"
             license "MIT"
             version "$VERSION"
 
