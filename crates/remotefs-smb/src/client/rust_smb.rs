@@ -28,10 +28,10 @@ use smb::{
     FileDispositionInformation, FileIdBothDirectoryInformation, FileNetworkOpenInformation,
     FileRenameInformation, GetLen, ReadAt, Resource, ResourceHandle, UncPath,
 };
-use stream::{close_file, write_all_at, SmbReadStream, SmbWriteStream, IO_CHUNK_SIZE};
+use stream::{IO_CHUNK_SIZE, SmbReadStream, SmbWriteStream, close_file, write_all_at};
 use tokio::runtime::Handle;
 
-use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
+use super::{AUTO_MAX_DIALECT, AUTO_MIN_DIALECT, SmbDialect};
 use crate::utils::path::SharePath;
 
 /// A blocking view of [`SmbFs`] that implements [`remotefs::RemoteFs`].
@@ -736,11 +736,11 @@ mod test {
     #[cfg(feature = "with-containers")]
     use futures::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, Cursor};
     use pretty_assertions::assert_eq;
+    #[cfg(feature = "with-containers")]
+    use remotefs::RemoteFs;
     use remotefs::fs::{Capabilities, ReadOptions};
     #[cfg(feature = "with-containers")]
     use remotefs::fs::{SetMetadata, WriteOptions};
-    #[cfg(feature = "with-containers")]
-    use remotefs::RemoteFs;
     #[cfg(feature = "with-containers")]
     use serial_test::serial;
     use tokio::runtime::{Builder, Runtime};
@@ -975,14 +975,16 @@ mod test {
             .unwrap();
         assert!(out.is_empty());
         let mut out = Vec::new();
-        assert!(client
-            .read_file(
-                Path::new("/cargo-test/missing.txt"),
-                &ReadOptions::default().length(0),
-                &mut out
-            )
-            .await
-            .is_err());
+        assert!(
+            client
+                .read_file(
+                    Path::new("/cargo-test/missing.txt"),
+                    &ReadOptions::default().length(0),
+                    &mut out
+                )
+                .await
+                .is_err()
+        );
         finalize_client(client).await;
     }
 
@@ -1063,14 +1065,16 @@ mod test {
         assert_eq!(client.stat(p).await.unwrap().metadata().size, Some(25));
         // append creates a missing file but not a missing directory
         let mut source = Cursor::new(b"x".to_vec());
-        assert!(client
-            .append_file(
-                Path::new("/tmp/aaaaaaa/hbbbbb/a.txt"),
-                &WriteOptions::default(),
-                &mut source
-            )
-            .await
-            .is_err());
+        assert!(
+            client
+                .append_file(
+                    Path::new("/tmp/aaaaaaa/hbbbbb/a.txt"),
+                    &WriteOptions::default(),
+                    &mut source
+                )
+                .await
+                .is_err()
+        );
         finalize_client(client).await;
     }
 
@@ -1107,10 +1111,12 @@ mod test {
             client.create_dir(dir, None).await.unwrap_err().kind(),
             RemoteErrorType::AlreadyExists
         );
-        assert!(client
-            .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None)
-            .await
-            .is_err());
+        assert!(
+            client
+                .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None)
+                .await
+                .is_err()
+        );
         let mut source = Cursor::new(b"x".to_vec());
         client
             .write_file(
@@ -1126,20 +1132,24 @@ mod test {
         assert_eq!(entries[0].name(), "a.txt");
         assert_eq!(entries[0].extension().as_deref(), Some("txt"));
         assert_eq!(entries[0].metadata().size, Some(1));
-        assert!(client
-            .list_dir(Path::new("/tmp/auhhfh/hfhjfhf/"))
-            .await
-            .is_err());
+        assert!(
+            client
+                .list_dir(Path::new("/tmp/auhhfh/hfhjfhf/"))
+                .await
+                .is_err()
+        );
         assert_eq!(
             client.remove_dir(dir).await.unwrap_err().kind(),
             RemoteErrorType::DirectoryNotEmpty
         );
         client.remove_dir_all(dir).await.unwrap();
         assert!(!client.exists(dir).await.unwrap());
-        assert!(client
-            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-            .await
-            .is_err());
+        assert!(
+            client
+                .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                .await
+                .is_err()
+        );
         finalize_client(client).await;
     }
 
@@ -1182,10 +1192,12 @@ mod test {
         client.rename(p, dest).await.unwrap();
         assert!(!client.exists(p).await.unwrap());
         assert!(client.exists(dest).await.unwrap());
-        assert!(client
-            .rename(dest, Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"))
-            .await
-            .is_err());
+        assert!(
+            client
+                .rename(dest, Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"))
+                .await
+                .is_err()
+        );
         client.copy(dest, p).await.unwrap();
         let mut out = Vec::new();
         client
@@ -1204,14 +1216,18 @@ mod test {
             .copy(dir, Path::new("/cargo-test/dir2"))
             .await
             .unwrap();
-        assert!(client
-            .exists(Path::new("/cargo-test/dir2/c.txt"))
-            .await
-            .unwrap());
-        assert!(client
-            .copy(p, Path::new("/tmp/aaa/bbbb/ccc/b.txt"))
-            .await
-            .is_err());
+        assert!(
+            client
+                .exists(Path::new("/cargo-test/dir2/c.txt"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            client
+                .copy(p, Path::new("/tmp/aaa/bbbb/ccc/b.txt"))
+                .await
+                .is_err()
+        );
         client.remove_file(dest).await.unwrap();
         assert_eq!(
             client.remove_file(dest).await.unwrap_err().kind(),

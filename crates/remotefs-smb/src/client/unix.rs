@@ -19,7 +19,7 @@ use remotefs::fs::{
 };
 use remotefs::{RemoteError, RemoteErrorType, RemoteFs, RemoteResult};
 
-use super::{SmbDialect, AUTO_MAX_DIALECT, AUTO_MIN_DIALECT};
+use super::{AUTO_MAX_DIALECT, AUTO_MIN_DIALECT, SmbDialect};
 use crate::utils::path::SharePath;
 use crate::utils::smb as smb_utils;
 
@@ -692,16 +692,22 @@ mod test {
         let client = init_client();
         let p = Path::new("/tmp/ahsufhauiefhuiashf/hfhfhfhf");
         let mut reader = Cursor::new(b"x".to_vec());
-        assert!(client
-            .write_file(p, &WriteOptions::default(), &mut reader)
-            .is_err());
-        assert!(client
-            .append_file(p, &WriteOptions::default(), &mut reader)
-            .is_err());
+        assert!(
+            client
+                .write_file(p, &WriteOptions::default(), &mut reader)
+                .is_err()
+        );
+        assert!(
+            client
+                .append_file(p, &WriteOptions::default(), &mut reader)
+                .is_err()
+        );
         let mut out = Vec::new();
-        assert!(client
-            .read_file(p, &ReadOptions::default(), &mut out)
-            .is_err());
+        assert!(
+            client
+                .read_file(p, &ReadOptions::default(), &mut out)
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -717,9 +723,11 @@ mod test {
             client.create_dir(dir, None).unwrap_err().kind(),
             RemoteErrorType::AlreadyExists
         );
-        assert!(client
-            .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None)
-            .is_err());
+        assert!(
+            client
+                .create_dir(Path::new("/tmp/werfgjwerughjwurih/iwerjghiwgui"), None)
+                .is_err()
+        );
         let mut reader = Cursor::new(b"x".to_vec());
         client
             .write_file(
@@ -736,9 +744,11 @@ mod test {
         assert!(client.remove_dir(dir).is_err());
         client.remove_dir_all(dir).unwrap();
         assert!(!client.exists(dir).unwrap());
-        assert!(client
-            .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
-            .is_err());
+        assert!(
+            client
+                .remove_dir_all(Path::new("/tmp/aaaaaa/asuhi"))
+                .is_err()
+        );
         finalize_client(client);
     }
 
@@ -779,9 +789,11 @@ mod test {
         client.rename(p, dest).unwrap();
         assert!(!client.exists(p).unwrap());
         assert!(client.exists(dest).unwrap());
-        assert!(client
-            .rename(dest, Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"))
-            .is_err());
+        assert!(
+            client
+                .rename(dest, Path::new("/tmp/wuefhiwuerfh/whjhh/b.txt"))
+                .is_err()
+        );
         client.remove_file(dest).unwrap();
         assert!(!client.exists(dest).unwrap());
         assert_eq!(

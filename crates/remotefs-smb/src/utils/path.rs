@@ -158,8 +158,10 @@ mod test {
     fn should_detect_same_or_descendant_paths() {
         let source = SharePath::parse(Path::new("/cargo-test")).unwrap();
         assert!(source.is_same_or_descendant(&source));
-        assert!(source
-            .is_same_or_descendant(&SharePath::parse(Path::new("/cargo-test/nested")).unwrap()));
+        assert!(
+            source
+                .is_same_or_descendant(&SharePath::parse(Path::new("/cargo-test/nested")).unwrap())
+        );
         assert!(
             !source.is_same_or_descendant(&SharePath::parse(Path::new("/cargo-testing")).unwrap())
         );

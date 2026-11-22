@@ -159,8 +159,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```rust
 use std::path::Path;
 
-use remotefs::fs::WriteOptions;
 use remotefs::AsyncRemoteFs;
+use remotefs::fs::WriteOptions;
 use remotefs_smb::{SmbCredentials, SmbFs, SmbOptions};
 
 #[tokio::main]

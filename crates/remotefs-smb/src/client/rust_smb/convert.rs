@@ -153,8 +153,8 @@ mod test {
     use std::time::{Duration, UNIX_EPOCH};
 
     use pretty_assertions::assert_eq;
-    use remotefs::fs::{FileType, UnixPex};
     use remotefs::RemoteErrorType;
+    use remotefs::fs::{FileType, UnixPex};
     use smb::binrw_util::prelude::FileTime;
     use smb::{FileAttributes, FileNetworkOpenInformation, Status, UncPath};
 
