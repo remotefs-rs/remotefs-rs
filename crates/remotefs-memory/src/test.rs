@@ -1,11 +1,8 @@
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use pretty_assertions::assert_eq;
-use remotefs::fs::{Capabilities, FileType, ReadOptions, SetMetadata, UnixPex, WriteOptions};
-use remotefs::{RemoteErrorType, RemoteFs};
+use remotefs::fs::FileType;
 
 use super::*;
 

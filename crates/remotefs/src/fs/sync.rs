@@ -168,7 +168,6 @@ pub trait RemoteFs: Send + Sync {
 
 #[cfg(test)]
 mod test {
-    use std::io::{Read, Write};
 
     use super::*;
     use crate::RemoteErrorType;

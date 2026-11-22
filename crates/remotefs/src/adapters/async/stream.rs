@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod tests;
 
-use std::future::{Future, poll_fn};
+use std::future::poll_fn;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::pin::Pin;
 use std::sync::Arc;

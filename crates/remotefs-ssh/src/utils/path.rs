@@ -136,8 +136,6 @@ pub(crate) fn parent_with(path: &Path, backslash_is_separator: bool) -> Option<&
 
 #[cfg(test)]
 mod test {
-    use std::borrow::Cow;
-    use std::path::Path;
 
     use pretty_assertions::assert_eq;
     use remotefs::RemoteErrorType;

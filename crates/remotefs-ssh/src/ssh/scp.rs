@@ -5,6 +5,7 @@
 //! Filesystem operations run POSIX shell commands over the SSH session and
 //! transfers use the SCP protocol. SCP has no append and no native ranges.
 
+use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
@@ -75,6 +76,18 @@ where
     opts: SshOpts,
     /// Cached `stat(1)` flavor for the remote host; probed lazily on first use.
     stat_flavor: Mutex<Option<StatFlavor>>,
+}
+
+impl<S> fmt::Debug for ScpFs<S>
+where
+    S: SshSession,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScpFs")
+            .field("connected", &self.session.is_some())
+            .field("opts", &self.opts)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(feature = "libssh2")]

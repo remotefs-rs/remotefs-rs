@@ -97,6 +97,7 @@ mod stream;
 #[cfg(test)]
 mod test;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -160,6 +161,14 @@ pub struct MemoryFs {
     get_uid: Box<dyn Fn() -> u32 + Send + Sync>,
     // Fn to get gid
     get_gid: Box<dyn Fn() -> u32 + Send + Sync>,
+}
+
+impl fmt::Debug for MemoryFs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryFs")
+            .field("connected", &self.connected)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MemoryFs {

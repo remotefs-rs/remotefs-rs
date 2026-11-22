@@ -54,6 +54,7 @@ impl From<ssh2::MethodType> for MethodType {
 
 /// Ssh key method.
 /// Defined by [`MethodType`] (see ssh2 docs) and the list of supported algorithms.
+#[derive(Debug)]
 pub struct KeyMethod {
     pub(crate) method_type: MethodType,
     algos: Vec<String>,

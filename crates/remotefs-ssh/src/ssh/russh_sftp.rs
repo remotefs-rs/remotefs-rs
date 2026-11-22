@@ -1,5 +1,6 @@
 //! Asynchronous SFTP client over russh.
 
+use std::fmt;
 use std::path::Path;
 
 use remotefs::fs::{
@@ -31,6 +32,18 @@ where
     session: Option<RusshSession<T>>,
     sftp: Option<RusshSftp>,
     opts: SshOpts,
+}
+
+impl<T> fmt::Debug for RusshSftpFs<T>
+where
+    T: Handler + Default + Send + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RusshSftpFs")
+            .field("connected", &self.session.is_some())
+            .field("opts", &self.opts)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> RusshSftpFs<T>

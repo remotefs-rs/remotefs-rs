@@ -508,13 +508,10 @@ mod container_tests;
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
 
     use dav_xml_client::transport::MockTransport;
     use futures::io::{AsyncReadExt as _, Cursor};
     use pretty_assertions::assert_eq;
-    use remotefs::RemoteErrorType;
-    use remotefs::fs::{Capabilities, ReadOptions, SetMetadata, WriteOptions};
 
     use super::*;
 

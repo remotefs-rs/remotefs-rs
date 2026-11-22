@@ -40,10 +40,7 @@ pub fn shell_quote(path: &Path) -> String {
 #[cfg(test)]
 mod test {
 
-    use std::path::PathBuf;
-
     use pretty_assertions::assert_eq;
-    use remotefs::RemoteErrorType;
 
     use super::*;
 

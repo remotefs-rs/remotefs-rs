@@ -7,7 +7,6 @@
 //! The upload is completed only by [`AsyncRemoteWrite::finish`]; a dropped
 //! writer aborts the multipart upload on a best-effort basis.
 
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs as _};
 use std::path::{Path, PathBuf};
@@ -34,6 +35,14 @@ pub struct LibSsh2Session {
     session: Mutex<ssh2::Session>,
 }
 
+impl fmt::Debug for LibSsh2Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LibSsh2Session")
+            .field("remote_forward_ports", &self.remote_forward_ports)
+            .finish_non_exhaustive()
+    }
+}
+
 impl LibSsh2Session {
     fn session(&self) -> MutexGuard<'_, ssh2::Session> {
         self.session.lock().unwrap_or_else(PoisonError::into_inner)
@@ -48,6 +57,12 @@ struct LibSsh2Transport {
 /// A wrapper around [`ssh2::Sftp`] to provide a SFTP client for [`LibSsh2Session`]
 pub struct LibSsh2Sftp {
     inner: ssh2::Sftp,
+}
+
+impl fmt::Debug for LibSsh2Sftp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LibSsh2Sftp").finish_non_exhaustive()
+    }
 }
 
 /// Authentication method

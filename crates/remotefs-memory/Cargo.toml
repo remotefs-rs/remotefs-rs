@@ -13,6 +13,9 @@ repository = { workspace = true }
 rust-version = { workspace = true }
 description = "remotefs implementation for volatile memory. Good for testing and simulation."
 
+[lints]
+workspace = true
+
 [dependencies]
 log = { workspace = true }
 orange-trees = { workspace = true }

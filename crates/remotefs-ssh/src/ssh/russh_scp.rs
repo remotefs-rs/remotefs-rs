@@ -1,5 +1,6 @@
 //! Asynchronous SCP client over russh.
 
+use std::fmt;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::SystemTime;
@@ -30,6 +31,18 @@ where
     session: Option<RusshSession<T>>,
     opts: SshOpts,
     stat_flavor: Mutex<Option<shell::StatFlavor>>,
+}
+
+impl<T> fmt::Debug for RusshScpFs<T>
+where
+    T: Handler + Default + Send + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RusshScpFs")
+            .field("connected", &self.session.is_some())
+            .field("opts", &self.opts)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<T> RusshScpFs<T>

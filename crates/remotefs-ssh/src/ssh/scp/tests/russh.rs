@@ -1,10 +1,9 @@
 use std::io::{ErrorKind, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
 use pretty_assertions::assert_eq;
-use remotefs::fs::{AsyncRemoteFs, Capabilities, ReadOptions, UnixPex, WriteOptions};
-use remotefs::{RemoteErrorType, RemoteFs};
+use remotefs::fs::AsyncRemoteFs;
 use ssh2_config::ParseRule;
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _, AsyncWriteExt as _};
 

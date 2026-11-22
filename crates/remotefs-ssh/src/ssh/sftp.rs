@@ -2,6 +2,7 @@
 //!
 //! Blocking SFTP client implementing [`RemoteFs`].
 
+use std::fmt;
 use std::io::{self, Write as _};
 use std::path::Path;
 
@@ -70,6 +71,18 @@ where
     session: Option<S>,
     sftp: Option<S::Sftp>,
     opts: SshOpts,
+}
+
+impl<S> fmt::Debug for SftpFs<S>
+where
+    S: SshSession,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SftpFs")
+            .field("connected", &self.session.is_some())
+            .field("opts", &self.opts)
+            .finish_non_exhaustive()
+    }
 }
 
 #[cfg(feature = "libssh2")]

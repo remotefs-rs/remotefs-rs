@@ -1,7 +1,6 @@
 //! Runtime-neutral asynchronous streams for remote transfers.
 
 use std::fmt;
-use std::future::Future;
 use std::io::{self, SeekFrom};
 use std::pin::Pin;
 use std::task::{Context, Poll};

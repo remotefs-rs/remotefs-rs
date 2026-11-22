@@ -2,6 +2,7 @@
 
 mod stream;
 
+use std::fmt;
 use std::io::Read as _;
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
@@ -131,6 +132,17 @@ impl Drop for ExclusiveStream<'_> {
             self.client.lock().replace(stream);
         }
         self.client.transfer_active.store(false, Ordering::SeqCst);
+    }
+}
+
+impl fmt::Debug for FtpFs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FtpFs")
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
     }
 }
 
@@ -1071,14 +1083,14 @@ impl RemoteFs for FtpFs {
 mod tests {
     use std::error::Error as _;
     use std::io::{BufRead as _, BufReader, Write as _};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpListener;
     use std::thread;
     use std::time::Duration;
 
     use suppaftp::list::ParseError;
     use suppaftp::types::Response;
 
-    use super::super::list::{decode_list_bytes, parse_list_lines, validate_list_child_name};
+    use super::super::list::validate_list_child_name;
     use super::super::scripted::*;
     use super::*;
 
@@ -2137,7 +2149,6 @@ mod test {
     use std::error::Error as _;
     use std::io::{Cursor, Write as _};
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     use pretty_assertions::assert_eq;
 

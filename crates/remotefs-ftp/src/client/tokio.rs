@@ -2,7 +2,7 @@
 
 mod stream;
 
-use std::future::Future;
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::pin::Pin;
@@ -162,6 +162,17 @@ impl StreamGuard<'_> {
     /// Releases the lock and records the operation as completed.
     fn complete(self) {
         self.operation.complete();
+    }
+}
+
+impl fmt::Debug for TokioFtpFs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokioFtpFs")
+            .field("hostname", &self.hostname)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
     }
 }
 
@@ -1124,8 +1135,6 @@ async fn read_list_bytes(
 mod tests {
     use std::io::BufReader;
     use std::net::TcpListener;
-    use std::path::Path;
-    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
@@ -1912,15 +1921,11 @@ mod tests {
 mod container_tests {
     use std::collections::HashMap;
     use std::error::Error as _;
-    use std::future::Future;
-    use std::path::{Path, PathBuf};
-    use std::pin::Pin;
-    use std::sync::Arc;
+    use std::path::PathBuf;
 
     use futures::io::Cursor;
     use futures::{AsyncReadExt as _, AsyncWriteExt as _};
     use pretty_assertions::assert_eq;
-    use remotefs::fs::UnixPex;
 
     use super::*;
     use crate::test_container::AsyncPureFtpRunner;

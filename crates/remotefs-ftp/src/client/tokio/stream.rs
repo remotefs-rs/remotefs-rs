@@ -11,7 +11,6 @@
 //! `426` followed by `226` while suppaftp drains a single deferred reply.
 //! Dropped uploads and downloads at EOF rely on that deferred drain instead.
 
-use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io};
