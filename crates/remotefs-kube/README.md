@@ -49,8 +49,8 @@ First of all you need to add **remotefs** and **remotefs-kube** to your project 
 
 ```toml
 [dependencies]
-remotefs = { version = "1", features = ["async"] }
-remotefs-kube = "1"
+remotefs = { version = "1.2", features = ["async"] }
+remotefs-kube = "1.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

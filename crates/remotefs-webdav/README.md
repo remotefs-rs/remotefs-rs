@@ -67,8 +67,8 @@ Add `remotefs` and `remotefs-webdav` to your project dependencies:
 ```toml
 [dependencies]
 futures = "0.3"
-remotefs = "1"
-remotefs-webdav = "1"
+remotefs = "1.2"
+remotefs-webdav = "1.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

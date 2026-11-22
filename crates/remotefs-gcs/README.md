@@ -19,8 +19,8 @@ Add the library to `Cargo.toml`:
 
 ```toml
 [dependencies]
-remotefs = "1"
-remotefs-gcs = "1"
+remotefs = "1.2"
+remotefs-gcs = "1.2"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```

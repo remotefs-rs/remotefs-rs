@@ -72,8 +72,8 @@ for the FTP/FTPS protocols.
 First of all, add `remotefs-ftp` to your project dependencies:
 
 ```toml
-remotefs = "1"
-remotefs-ftp = "1"
+remotefs = "1.2"
+remotefs-ftp = "1.2"
 ```
 
 ### Tokio client

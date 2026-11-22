@@ -25,8 +25,8 @@ for the SFTP/SCP protocol.
 First of all, add `remotefs-ssh` to your project dependencies:
 
 ```toml
-remotefs = "1"
-remotefs-ssh = "1"
+remotefs = "1.2"
+remotefs-ssh = "1.2"
 ```
 
 > [!NOTE]

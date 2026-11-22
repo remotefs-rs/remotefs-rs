@@ -80,8 +80,8 @@ remotefs-aws-s3 is a client implementation for [remotefs](https://github.com/rem
 First of all, add `remotefs` and `remotefs-aws-s3` to your project dependencies:
 
 ```toml
-remotefs = "1"
-remotefs-aws-s3 = "1"
+remotefs = "1.2"
+remotefs-aws-s3 = "1.2"
 ```
 
 these features are supported:

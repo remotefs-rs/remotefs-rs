@@ -76,8 +76,8 @@ remotefs-smb is a client implementation for [remotefs](https://github.com/remote
 First of all, add `remotefs-smb` to your project dependencies:
 
 ```toml
-remotefs = "1"
-remotefs-smb = "1"
+remotefs = "1.2"
+remotefs-smb = "1.2"
 ```
 
 These features are supported:
@@ -152,7 +152,7 @@ rm -rf samba/
 Enable the `smb` feature and add Tokio:
 
 ```toml
-remotefs-smb = { version = "1", features = ["smb"] }
+remotefs-smb = { version = "1.2", features = ["smb"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

@@ -56,8 +56,8 @@
 Add `remotefs-memory` to your `Cargo.toml`:
 
 ```toml
-remotefs = "1"
-remotefs-memory = "1"
+remotefs = "1.2"
+remotefs-memory = "1.2"
 ```
 
 `MemoryFs` implements the blocking `remotefs::RemoteFs` trait from remotefs 1.

@@ -62,7 +62,7 @@ file managers, backup jobs, and FUSE mounts.
 Add remotefs to your dependencies:
 
 ```toml
-remotefs = "1"
+remotefs = "1.2"
 ```
 
 The supported features are:
