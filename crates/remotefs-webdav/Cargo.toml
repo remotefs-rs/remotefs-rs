@@ -1,16 +1,16 @@
 [package]
 name = "remotefs-webdav"
-version = "1.0.0"
-authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-webdav"
-edition = "2024"
+edition = { workspace = true }
 homepage = "https://github.com/remotefs-rs/remotefs-rs-webdav"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = ["remotefs", "webdav", "webdav-client", "rfc4918"]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs-webdav"
+repository = { workspace = true }
 rust-version = "1.94.1"
 description = "remotefs WebDAV client library"
 
@@ -24,21 +24,21 @@ tokio = ["dep:tokio", "remotefs/tokio"]
 with-containers = []
 
 [dependencies]
-dav-xml-client = { version = "0.2", default-features = false, features = ["native-tls", "reqwest"] }
-futures = "0.3"
-futures-io = "0.3"
-http = "1"
-log = "0.4"
-remotefs = { version = "1", features = ["async"] }
-tokio = { version = "1", default-features = false, features = ["rt"], optional = true }
+dav-xml-client = { workspace = true, features = ["native-tls", "reqwest"] }
+futures = { workspace = true }
+futures-io = { workspace = true }
+http = { workspace = true }
+log = { workspace = true }
+remotefs = { workspace = true, features = ["async"] }
+tokio = { workspace = true, features = ["rt"], optional = true }
 
 [dev-dependencies]
-dav-xml-client = { version = "0.2", default-features = false, features = ["mock", "native-tls", "reqwest"] }
-env_logger = "0.11"
-pretty_assertions = "1"
-serial_test = "4"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-uuid = { version = "1", features = ["v4"] }
+dav-xml-client = { workspace = true, features = ["mock", "native-tls", "reqwest"] }
+env_logger = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [package.metadata.docs.rs]
 all-features = true

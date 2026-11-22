@@ -1,10 +1,10 @@
 [package]
 name = "remotefs-ssh"
-version = "1.1.2"
-authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-ssh"
-edition = "2024"
+edition = { workspace = true }
 include = [
   "benches/**/*",
   "examples/**/*",
@@ -14,9 +14,9 @@ include = [
   "CHANGELOG.md",
 ]
 keywords = ["remotefs", "ssh-client", "scp-client", "sftp-client"]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs-ssh"
+repository = { workspace = true }
 rust-version = "1.95.0"
 description = "remotefs SSH client library"
 
@@ -45,31 +45,31 @@ russh = [
 ]
 
 [dependencies]
-chrono = "0.4"
-futures-io = { version = "0.3", optional = true }
-if-addrs = { version = "0.15", optional = true }
-lazy-regex = "3"
-libssh-rs = { version = "0.3", optional = true }
-log = "0.4"
-openssl = { version = "0.10", optional = true }
-remotefs = "1"
-russh = { version = "0.65", optional = true }
-russh-sftp = { version = "3", optional = true }
-socket2 = { version = "0.6", optional = true }
-ssh-key = { version = "0.7.0-rc.11", optional = true }
-ssh2 = { version = "0.9", optional = true }
-ssh2-config = "0.9"
-tokio = { version = "1", default-features = false, features = ["io-util", "net", "rt", "time"], optional = true }
+chrono = { workspace = true }
+futures-io = { workspace = true, optional = true }
+if-addrs = { workspace = true, optional = true }
+lazy-regex = { workspace = true }
+libssh-rs = { workspace = true, optional = true }
+log = { workspace = true }
+openssl = { workspace = true, optional = true }
+remotefs = { workspace = true }
+russh = { workspace = true, optional = true }
+russh-sftp = { workspace = true, optional = true }
+socket2 = { workspace = true, optional = true }
+ssh-key = { workspace = true, optional = true }
+ssh2 = { workspace = true, optional = true }
+ssh2-config = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net", "rt", "time"], optional = true }
 
 [dev-dependencies]
-criterion = "0.8"
-env_logger = "0.11"
-pretty_assertions = "1"
-rand = "0.10"
-rpassword = "7"
-tempfile = "3"
-testcontainers = { version = "0.28", features = ["blocking"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+criterion = { workspace = true }
+env_logger = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+rpassword = { workspace = true }
+tempfile = { workspace = true }
+testcontainers = { workspace = true, features = ["blocking"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,25 +1,25 @@
 [package]
 name = "remotefs-memory"
-version = "1.0.0"
-authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["simulation"]
 documentation = "https://docs.rs/remotefs-memory"
-edition = "2024"
+edition = { workspace = true }
 include = ["src/**/*", "./LICENSE", "./README.md", "./CHANGELOG.md"]
 keywords = ["remotefs", "memory"]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs-memory"
+repository = { workspace = true }
 rust-version = "1.89"
 description = "remotefs implementation for volatile memory. Good for testing and simulation."
 
 [dependencies]
-log = "0.4"
-orange-trees = "0.1"
-remotefs = "1"
+log = { workspace = true }
+orange-trees = { workspace = true }
+remotefs = { workspace = true }
 
 [dev-dependencies]
-pretty_assertions = "1"
+pretty_assertions = { workspace = true }
 
 [lib]
 name = "remotefs_memory"

@@ -1,15 +1,15 @@
 [package]
 name = "remotefs-ftp"
-version = "1.0.0"
-authors = ["Christian Visintin <christian.visintin1997@gmail.com>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-ftp"
-edition = "2024"
+edition = { workspace = true }
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
 keywords = ["remotefs", "ftp-client"]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs-ftp"
+repository = { workspace = true }
 rust-version = "1.89.0"
 description = "remotefs FTP client library"
 
@@ -53,22 +53,22 @@ tokio-rustls-ring = [
 ]
 
 [dependencies]
-futures-io = { version = "0.3", optional = true }
-log = "0.4"
-remotefs = "1"
-rustls-pki-types = { version = "1", optional = true }
-suppaftp = "12"
-tokio = { version = "1", default-features = false, features = ["io-util", "net"], optional = true }
-webpki-roots = { version = "1", optional = true }
+futures-io = { workspace = true, optional = true }
+log = { workspace = true }
+remotefs = { workspace = true }
+rustls-pki-types = { workspace = true, optional = true }
+suppaftp = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "net"], optional = true }
+webpki-roots = { workspace = true, optional = true }
 
 [dev-dependencies]
-env_logger = "0.11"
-futures = "0.3"
-pretty_assertions = "1"
-rand = "0.10"
-testcontainers = { version = "0.28", features = ["blocking"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+env_logger = { workspace = true }
+futures = { workspace = true }
+pretty_assertions = { workspace = true }
+rand = { workspace = true }
+testcontainers = { workspace = true, features = ["blocking"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
-path-slash = "0.2"
+path-slash = { workspace = true }

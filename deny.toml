@@ -10,7 +10,22 @@ feature-depth = 1
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 unmaintained = "all"
-ignore = []
+ignore = [
+  # russh vulnerability (ssh, fuse) and smb -> sspi -> picky -> rsa: Marvin
+  # timing side channel. No patched rsa release exists. Revisit on every
+  # smb/sspi/russh bump.
+  { id = "RUSTSEC-2023-0071", reason = "no fixed rsa release; transitive through sspi/picky and russh" },
+  # smb -> sspi -> picky -> crypto-bigint: RUSTSEC-2026-0387 (timing
+  # variability in constant-time big-integer operations). `smb` 0.11 pins `sspi`
+  # to `=0.18.7`, and `sspi` pins `crypto-bigint` to `=0.7.0-rc.8`, so
+  # `cargo update` cannot reach the patched 0.7.6 or later. Revisit on every
+  # `smb`/`sspi` bump; `smb` 0.12 may release the pin.
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.7.0-rc.8 pinned exactly by sspi 0.18.7 via smb 0.11; no patched version reachable" },
+  # astral-tokio-tar: unmaintained (RUSTSEC-2026-0440), no safe upgrade. Dev
+  # dependency only, pulled by testcontainers for the container tests.
+  # Re-evaluate when testcontainers drops it or a maintained release ships.
+  { id = "RUSTSEC-2026-0440", reason = "astral-tokio-tar is dev-only via testcontainers; no safe upgrade" },
+]
 
 [licenses]
 unused-allowed-license = "allow"
@@ -34,6 +49,18 @@ confidence-threshold = 0.8
 
 [licenses.private]
 ignore = false
+
+# The optional `vendored` feature (pavao/vendored) compiles Samba's own
+# libsmbclient sources in-tree via pavao-src/pavao-sys, which are GPL-3.0
+# because Samba itself is. pavao (MIT) is unaffected; scope the exception to
+# just the vendoring helper crates rather than allowing GPL-3.0 project-wide.
+[[licenses.exceptions]]
+allow = ["GPL-3.0"]
+name = "pavao-src"
+
+[[licenses.exceptions]]
+allow = ["GPL-3.0"]
+name = "pavao-sys"
 
 [bans]
 multiple-versions = "warn"

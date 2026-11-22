@@ -1,9 +1,9 @@
 [package]
 name = "remotefs-gcs"
-version = "1.0.0"
-authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["filesystem", "network-programming"]
-edition = "2024"
+edition = { workspace = true }
 homepage = "https://github.com/remotefs-rs/remotefs-rs-gcs"
 include = [
   "/CHANGELOG.md",
@@ -21,9 +21,9 @@ keywords = [
   "remotefs",
   "storage",
 ]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs-gcs"
+repository = { workspace = true }
 rust-version = "1.98.0"
 description = "Google Cloud Storage client for remotefs-rs."
 
@@ -36,22 +36,22 @@ with-containers = []
 with-gcs-ci = []
 
 [dependencies]
-bytes = "1"
-futures-io = "0.3"
-google-cloud-auth = "1"
-google-cloud-gax = "1"
-google-cloud-storage = "1"
-log = "0.4"
-remotefs = { version = "1", features = ["async"] }
-tempfile = "3"
-tokio = { version = "1", features = ["rt", "sync"] }
+bytes = { workspace = true }
+futures-io = { workspace = true }
+google-cloud-auth = { workspace = true }
+google-cloud-gax = { workspace = true }
+google-cloud-storage = { workspace = true }
+log = { workspace = true }
+remotefs = { workspace = true, features = ["async"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync"] }
 
 [dev-dependencies]
-env_logger = "0.11"
-futures = "0.3"
-pretty_assertions = "1"
-testcontainers = { version = "0.28", features = ["http_wait"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+env_logger = { workspace = true }
+futures = { workspace = true }
+pretty_assertions = { workspace = true }
+testcontainers = { workspace = true, features = ["http_wait"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lib]
 name = "remotefs_gcs"
@@ -59,7 +59,7 @@ path = "src/lib.rs"
 
 [target."cfg(target_os = \"windows\")"]
 [target."cfg(target_os = \"windows\")".dependencies]
-path-slash = "0.2"
+path-slash = { workspace = true }
 
 [lints.rust]
 ambiguous_negative_literals = "warn"
@@ -102,10 +102,3 @@ unnecessary_safety_comment = "warn"
 unnecessary_safety_doc = "warn"
 unneeded_field_pattern = "warn"
 unused_result_ok = "warn"
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = 3
-panic = "abort"
-strip = true

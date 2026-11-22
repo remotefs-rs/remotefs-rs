@@ -2,15 +2,15 @@
 name = "remotefs-fuse"
 version = { workspace = true }
 authors = { workspace = true }
-categories = { workspace = true }
+categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs-fuse"
 edition = { workspace = true }
-include = ["src/**/*", "LICENSE"]
-keywords = { workspace = true }
+include = ["src/**/*", "LICENSE", "README.md"]
+keywords = ["remote-fs", "fuse-driver", "fuse"]
 license = { workspace = true }
-readme = "../../README.md"
+readme = "README.md"
 repository = { workspace = true }
-rust-version = { workspace = true }
+rust-version = "1.94.1"
 description = "A FUSE Driver for remote-fs"
 
 [lints]

@@ -1,10 +1,10 @@
 [package]
 name = "remotefs"
-version = "1.0.1"
-authors = ["Christian Visintin <christian.visintin@veeso.dev>"]
+version = { workspace = true }
+authors = { workspace = true }
 categories = ["network-programming"]
 documentation = "https://docs.rs/remotefs"
-edition = "2024"
+edition = { workspace = true }
 include = [
   "src/**/*",
   "LICENSE",
@@ -20,9 +20,9 @@ keywords = [
   "s3-client",
   "kube-client",
 ]
-license = "MIT"
+license = { workspace = true }
 readme = "README.md"
-repository = "https://github.com/remotefs-rs/remotefs-rs"
+repository = { workspace = true }
 rust-version = "1.89.0"
 description = "a client library to work with all file transfer protocols"
 
@@ -39,15 +39,15 @@ no-log = ["log/max_level_off"]
 tokio = ["async", "dep:tokio", "dep:tokio-util"]
 
 [dependencies]
-async-trait = { version = "0.1", optional = true }
-futures-io = { version = "0.3", optional = true }
-log = "0.4"
-thiserror = "2"
-tokio = { version = "1", default-features = false, features = ["io-util", "rt", "sync"], optional = true }
-tokio-util = { version = "0.7", default-features = false, features = ["compat", "io-util"], optional = true }
-wildmatch = { version = "2", optional = true }
+async-trait = { workspace = true, optional = true }
+futures-io = { workspace = true, optional = true }
+log = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "rt", "sync"], optional = true }
+tokio-util = { workspace = true, features = ["compat", "io-util"], optional = true }
+wildmatch = { workspace = true, optional = true }
 
 [dev-dependencies]
-env_logger = "0.11"
-pretty_assertions = "1"
-tempfile = "3"
+env_logger = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
