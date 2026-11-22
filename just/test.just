@@ -46,3 +46,9 @@ coverage output="lcov.info" args="":
         cargo llvm-cov --no-report --lib -p "$crate" {{ args }}
       done
   cargo llvm-cov report --lcov --output-path {{ output }}
+
+# Run the unit tests that start Docker containers (remotefs-ftp and remotefs-ssh).
+# They are ignored by default and need a running Docker daemon.
+[group('test')]
+test_containers args="":
+  cargo test -p remotefs-ftp -p remotefs-ssh --lib --features with-containers {{ args }}
