@@ -4904,10 +4904,10 @@ dependencies = [
 name = "remotefs-kube"
 version = "1.2.0"
 dependencies = [
- "chrono",
  "env_logger",
  "futures",
  "futures-io",
+ "jiff 0.2.46",
  "k8s-openapi",
  "kube",
  "lazy-regex",
@@ -4955,11 +4955,11 @@ dependencies = [
 name = "remotefs-ssh"
 version = "1.2.0"
 dependencies = [
- "chrono",
  "criterion",
  "env_logger",
  "futures-io",
  "if-addrs",
+ "jiff 0.2.46",
  "lazy-regex",
  "libssh-rs",
  "log",

@@ -49,9 +49,9 @@ russh = [
 with-containers = []
 
 [dependencies]
-chrono = { workspace = true }
 futures-io = { workspace = true, optional = true }
 if-addrs = { workspace = true, optional = true }
+jiff = { workspace = true }
 lazy-regex = { workspace = true }
 libssh-rs = { workspace = true, optional = true }
 log = { workspace = true }
