@@ -1,0 +1,11 @@
+version: "3"
+services:
+  webdav:
+    image: bytemark/webdav
+    restart: always
+    ports:
+      - "3080:80"
+    environment:
+      AUTH_TYPE: Basic
+      USERNAME: alice
+      PASSWORD: secret1234
