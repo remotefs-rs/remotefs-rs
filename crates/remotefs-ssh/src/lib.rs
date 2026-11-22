@@ -20,7 +20,7 @@
 //!
 //! - `libssh2`: the default backend, using the `libssh2` C library. Blocking [`SftpFs`] / [`ScpFs`].
 //! - `libssh`: alternative backend using the `libssh` C library. Blocking [`SftpFs`] / [`ScpFs`].
-//! - `russh`: pure-Rust backend. Native asynchronous [`RusshSftpFs`] / [`RusshScpFs`]
+//! - `russh`: pure-Rust backend. Native asynchronous `RusshSftpFs` / `RusshScpFs`
 //!   implementing [`remotefs::AsyncRemoteFs`], plus blocking wrappers via `into_blocking`.
 //!
 //! Each C backend can be built with the vendored version of the library:
@@ -87,7 +87,7 @@
 //!
 //! The `russh` backend needs a Tokio runtime driving its futures and a type
 //! implementing `russh::client::Handler` for server key verification.
-//! [`NoCheckServerKey`] accepts every host key.
+//! `NoCheckServerKey` accepts every host key.
 //!
 //! ```rust,no_run
 //! # #[cfg(feature = "russh")]

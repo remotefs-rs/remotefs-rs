@@ -93,7 +93,7 @@
 //!
 //! ### Blocking usage
 //!
-//! Enable the `tokio` feature and call [`AwsS3Fs::into_blocking`] to get a
+//! Enable the `tokio` feature and call `AwsS3Fs::into_blocking` to get a
 //! `BlockingAwsS3Fs`, which implements [`remotefs::RemoteFs`] and can be
 //! stored as `Box<dyn RemoteFs>`. It must not be called from inside an async
 //! context, and the handle must belong to a multi-thread Tokio runtime.

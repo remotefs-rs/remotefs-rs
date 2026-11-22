@@ -25,7 +25,7 @@ use crate::stream::write::S3Writer;
 /// Aws S3 file system client.
 ///
 /// The client implements [`AsyncRemoteFs`]. With the `tokio` feature,
-/// [`AwsS3Fs::into_blocking`] returns a `BlockingAwsS3Fs` implementing the
+/// `AwsS3Fs::into_blocking` returns a `BlockingAwsS3Fs` implementing the
 /// blocking [`remotefs::RemoteFs`].
 #[derive(Debug)]
 pub struct AwsS3Fs {
@@ -270,7 +270,7 @@ impl AwsS3Fs {
 /// A blocking view of [`AwsS3Fs`] that implements [`remotefs::RemoteFs`].
 ///
 /// Every call blocks on the supplied Tokio handle and must not be made from
-/// inside an async context. Build one with [`AwsS3Fs::into_blocking`].
+/// inside an async context. Build one with `AwsS3Fs::into_blocking`.
 #[cfg(feature = "tokio")]
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio")))]
 pub type BlockingAwsS3Fs = remotefs::adapters::blocking::BlockOn<AwsS3Fs>;

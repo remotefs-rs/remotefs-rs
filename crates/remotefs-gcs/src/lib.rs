@@ -89,8 +89,8 @@
 //!
 //! ## Blocking usage
 //!
-//! Enable the `tokio` feature and call [`GoogleCloudStorageFs::into_blocking`]
-//! to get a [`BlockingGoogleCloudStorageFs`], which implements
+//! Enable the `tokio` feature and call `GoogleCloudStorageFs::into_blocking`
+//! to get a `BlockingGoogleCloudStorageFs`, which implements
 //! [`remotefs::RemoteFs`] and can be stored as `Box<dyn RemoteFs>`. It must
 //! not be called from inside an async context. The supplied handle must belong
 //! to a multi-thread Tokio runtime.
@@ -132,9 +132,6 @@
 //! [`GoogleCloudStorageFs::endpoint`]: client::GoogleCloudStorageFs::endpoint
 //! [`GoogleCloudStorageFs::control_endpoint`]:
 //!     client::GoogleCloudStorageFs::control_endpoint
-//! [`GoogleCloudStorageFs::into_blocking`]:
-//!     client::GoogleCloudStorageFs::into_blocking
-//! [`BlockingGoogleCloudStorageFs`]: client::BlockingGoogleCloudStorageFs
 //! [`GoogleCloudStorageCredentials::anonymous`]:
 //!     credentials::GoogleCloudStorageCredentials::anonymous
 //! [`GoogleCloudStorageCredentials::custom`]:

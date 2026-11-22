@@ -350,7 +350,7 @@ impl GoogleCloudStorageFs {
 ///
 /// Every call blocks on the supplied Tokio handle and must not be made from
 /// inside an async context. Build one with
-/// [`GoogleCloudStorageFs::into_blocking`].
+/// `GoogleCloudStorageFs::into_blocking`.
 #[cfg(feature = "tokio")]
 pub type BlockingGoogleCloudStorageFs = remotefs::adapters::blocking::BlockOn<GoogleCloudStorageFs>;
 
