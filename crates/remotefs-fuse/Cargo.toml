@@ -27,7 +27,6 @@ tokio = ["dep:futures-util", "dep:tokio", "remotefs/async"]
 futures-util = { workspace = true, features = ["io", "std"], optional = true }
 log = { workspace = true }
 remotefs = { workspace = true }
-seahash = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
@@ -40,6 +39,7 @@ dashmap = { workspace = true }
 dokan = { workspace = true }
 dokan-sys = { workspace = true }
 path-slash = { workspace = true }
+seahash = { workspace = true }
 widestring = { workspace = true }
 winapi = { workspace = true }
 
