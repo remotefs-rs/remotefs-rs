@@ -542,28 +542,18 @@ impl FtpFs {
         )
     }
 
-    /// Requests a native FTP restart marker, falling back to a local skip when refused.
+    /// Stores a native FTP restart marker for the next data command.
+    ///
+    /// The marker is sent as `REST` right before `RETR` (RFC 3659 §5.3), so a server
+    /// refusal surfaces from the transfer command and `open` retries without it.
+    /// Returns `false` when the offset cannot be expressed natively and must be skipped locally.
     fn request_offset(stream: &mut FtpStream, offset: u64) -> RemoteResult<bool> {
         let Ok(offset) = usize::try_from(offset) else {
             log::warn!("offset {offset} does not fit the REST command; skipping locally");
             return Ok(false);
         };
-        match stream.resume_transfer(offset) {
-            Ok(()) => Ok(true),
-            Err(FtpError::UnexpectedResponse(response))
-                if response.status != Status::NotAvailable =>
-            {
-                log::warn!(
-                    "server refused REST {offset} ({}); skipping locally",
-                    response.status
-                );
-                Ok(false)
-            }
-            Err(error) => {
-                log::error!("Failed to request offset {offset}: {error}");
-                Err(ftp_error(error))
-            }
-        }
+        stream.resume_transfer(offset).map_err(ftp_error)?;
+        Ok(true)
     }
 
     #[cfg(feature = "native-tls")]
@@ -1977,6 +1967,82 @@ mod tests {
     }
 
     #[test]
+    fn ranged_open_retries_without_rest_when_refused() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            let reply = |control: &mut BufReader<TcpStream>, response: &str| {
+                control.get_mut().write_all(response.as_bytes()).unwrap();
+            };
+            let command = |control: &mut BufReader<TcpStream>| {
+                let mut line = String::new();
+                control.read_line(&mut line).unwrap();
+                line
+            };
+            reply(&mut control, "220 ready\r\n");
+            assert_eq!(command(&mut control), "USER anonymous\r\n");
+            reply(&mut control, "331 password\r\n");
+            assert_eq!(command(&mut control), "PASS \r\n");
+            reply(&mut control, "230 logged in\r\n");
+            assert_eq!(command(&mut control), "TYPE I\r\n");
+            reply(&mut control, "200 binary\r\n");
+
+            // First attempt: the server refuses the restart marker.
+            let refused_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let refused_port = refused_listener.local_addr().unwrap().port();
+            assert_eq!(command(&mut control), "PASV\r\n");
+            reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    refused_port / 256,
+                    refused_port % 256
+                ),
+            );
+            assert_eq!(command(&mut control), "REST 2\r\n");
+            reply(&mut control, "554 restart not supported\r\n");
+
+            // Retry without the marker: the client skips the prefix locally.
+            let transfer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let transfer_port = transfer_listener.local_addr().unwrap().port();
+            assert_eq!(command(&mut control), "PASV\r\n");
+            reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    transfer_port / 256,
+                    transfer_port % 256
+                ),
+            );
+            assert_eq!(command(&mut control), "RETR /file\r\n");
+            reply(&mut control, "150 opening data\r\n");
+            let (mut transfer_data, _) = transfer_listener.accept().unwrap();
+            transfer_data.write_all(b"abcdef").unwrap();
+            drop(transfer_data);
+            reply(&mut control, "226 transfer complete\r\n");
+            assert_eq!(command(&mut control), "QUIT\r\n");
+            reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = FtpFs::new(control_address.ip().to_string(), control_address.port())
+            .passive_stream_builder(|address| {
+                TcpStream::connect(address).map_err(FtpError::ConnectionError)
+            });
+        client.connect().unwrap();
+        let mut reader = client
+            .open(Path::new("/file"), &ReadOptions::default().offset(2))
+            .unwrap();
+        let mut contents = Vec::new();
+        reader.read_to_end(&mut contents).unwrap();
+        reader.finish().unwrap();
+        assert_eq!(contents, b"cdef");
+        client.disconnect().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
     fn ranged_open_requests_rest_before_retr() {
         let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let control_address = control_listener.local_addr().unwrap();
@@ -1999,8 +2065,8 @@ mod tests {
             assert_eq!(command(&mut control), "TYPE I\r\n");
             reply(&mut control, "200 binary\r\n");
 
-            assert_eq!(command(&mut control), "REST 2\r\n");
-            reply(&mut control, "350 restart position accepted\r\n");
+            // RFC 3659 §5.3: REST must immediately precede the transfer command,
+            // so the data connection is negotiated first.
             let transfer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let transfer_port = transfer_listener.local_addr().unwrap().port();
             assert_eq!(command(&mut control), "PASV\r\n");
@@ -2012,6 +2078,8 @@ mod tests {
                     transfer_port % 256
                 ),
             );
+            assert_eq!(command(&mut control), "REST 2\r\n");
+            reply(&mut control, "350 restart position accepted\r\n");
             assert_eq!(command(&mut control), "RETR /file\r\n");
             reply(&mut control, "150 opening data\r\n");
             let (mut transfer_data, _) = transfer_listener.accept().unwrap();

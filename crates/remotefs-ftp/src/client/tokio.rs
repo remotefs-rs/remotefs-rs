@@ -1063,26 +1063,18 @@ impl AsyncRemoteFs for TokioFtpFs {
     }
 }
 
-/// Requests a native FTP restart marker, falling back to a local skip when refused.
+/// Stores a native FTP restart marker for the next data command.
+///
+/// The marker is sent as `REST` right before `RETR` (RFC 3659 §5.3), so a server
+/// refusal surfaces from the transfer command and `open` retries without it.
+/// Returns `false` when the offset cannot be expressed natively and must be skipped locally.
 async fn request_offset(stream: &mut AsyncFtpStream, offset: u64) -> RemoteResult<bool> {
     let Ok(offset) = usize::try_from(offset) else {
         warn!("offset {offset} does not fit the REST command; skipping locally");
         return Ok(false);
     };
-    match stream.resume_transfer(offset).await {
-        Ok(()) => Ok(true),
-        Err(FtpError::UnexpectedResponse(response)) if response.status != Status::NotAvailable => {
-            warn!(
-                "server refused REST {offset} ({}); skipping locally",
-                response.status
-            );
-            Ok(false)
-        }
-        Err(error) => {
-            error!("Failed to request offset {offset}: {error}");
-            Err(ftp_error(error))
-        }
-    }
+    stream.resume_transfer(offset).await.map_err(ftp_error)?;
+    Ok(true)
 }
 
 /// Reads raw `LIST` bytes and reports whether cleanup requires reconnecting.
@@ -1275,15 +1267,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ranged_open_requests_rest_before_retr() {
+    async fn ranged_open_retries_without_rest_when_refused() {
         let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let control_address = control_listener.local_addr().unwrap();
         let server = thread::spawn(move || {
             let (control, _) = control_listener.accept().unwrap();
             let mut control = BufReader::new(control);
             authenticate_scripted_connection(&mut control);
+
+            // First attempt: the server refuses the restart marker.
+            let refused_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let refused_port = refused_listener.local_addr().unwrap().port();
+            assert_eq!(read_scripted_command(&mut control), "PASV\r\n");
+            write_scripted_reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    refused_port / 256,
+                    refused_port % 256
+                ),
+            );
             assert_eq!(read_scripted_command(&mut control), "REST 2\r\n");
-            write_scripted_reply(&mut control, "350 restart position accepted\r\n");
+            write_scripted_reply(&mut control, "554 restart not supported\r\n");
+
+            // Retry without the marker: the client skips the prefix locally.
             let transfer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let transfer_port = transfer_listener.local_addr().unwrap().port();
             assert_eq!(read_scripted_command(&mut control), "PASV\r\n");
@@ -1295,6 +1302,57 @@ mod tests {
                     transfer_port % 256
                 ),
             );
+            assert_eq!(read_scripted_command(&mut control), "RETR /file\r\n");
+            write_scripted_reply(&mut control, "150 opening data\r\n");
+            let (mut transfer_data, _) = transfer_listener.accept().unwrap();
+            std::io::Write::write_all(&mut transfer_data, b"abcdef").unwrap();
+            drop(transfer_data);
+            write_scripted_reply(&mut control, "226 transfer complete\r\n");
+            assert_eq!(read_scripted_command(&mut control), "QUIT\r\n");
+            write_scripted_reply(&mut control, "221 bye\r\n");
+        });
+
+        let mut client = TokioFtpFs::new(control_address.ip().to_string(), control_address.port());
+        client.connect().await.unwrap();
+        let mut reader = client
+            .open(Path::new("/file"), &ReadOptions::default().offset(2))
+            .await
+            .unwrap();
+        let mut contents = Vec::new();
+        futures::AsyncReadExt::read_to_end(&mut reader, &mut contents)
+            .await
+            .unwrap();
+        reader.finish().await.unwrap();
+        assert_eq!(contents, b"cdef");
+        client.disconnect().await.unwrap();
+        tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn ranged_open_requests_rest_before_retr() {
+        let control_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let control_address = control_listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (control, _) = control_listener.accept().unwrap();
+            let mut control = BufReader::new(control);
+            authenticate_scripted_connection(&mut control);
+            // RFC 3659 §5.3: REST must immediately precede the transfer command,
+            // so the data connection is negotiated first.
+            let transfer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let transfer_port = transfer_listener.local_addr().unwrap().port();
+            assert_eq!(read_scripted_command(&mut control), "PASV\r\n");
+            write_scripted_reply(
+                &mut control,
+                &format!(
+                    "227 passive (127,0,0,1,{},{})\r\n",
+                    transfer_port / 256,
+                    transfer_port % 256
+                ),
+            );
+            assert_eq!(read_scripted_command(&mut control), "REST 2\r\n");
+            write_scripted_reply(&mut control, "350 restart position accepted\r\n");
             assert_eq!(read_scripted_command(&mut control), "RETR /file\r\n");
             write_scripted_reply(&mut control, "150 opening data\r\n");
             let (mut transfer_data, _) = transfer_listener.accept().unwrap();
