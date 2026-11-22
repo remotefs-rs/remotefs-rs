@@ -442,8 +442,8 @@ where
     }
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
+        remotefs::path::ensure_symlink_target(target)?;
         self.url_for(path, false)?;
-        self.url_for(target, false)?;
         Err(Self::unsupported())
     }
 
@@ -955,6 +955,20 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            fs.symlink(Path::new("/d/l"), Path::new("../relative"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            fs.symlink(Path::new("/d/l"), Path::new(""))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
         );
         assert_eq!(
             fs.exec("echo 5").await.unwrap_err().kind(),

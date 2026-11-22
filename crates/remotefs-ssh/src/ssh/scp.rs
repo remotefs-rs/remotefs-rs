@@ -398,9 +398,7 @@ where
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         let path = path_utils::remote_path(path)?;
         let path = path.as_ref();
-        let target = path_utils::remote_path(target)?;
-        let target = target.as_ref();
-        self.require_exists(target)?;
+        let target = remotefs::path::ensure_symlink_target(target)?;
         if self.exists(path)? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }

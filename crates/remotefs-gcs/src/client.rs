@@ -622,7 +622,7 @@ impl AsyncRemoteFs for GoogleCloudStorageFs {
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         key::object_name(path)?;
-        key::object_name(target)?;
+        remotefs::path::ensure_symlink_target(target)?;
         Err(Self::unsupported())
     }
 
@@ -888,6 +888,22 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            client
+                .symlink(Path::new("/link"), Path::new("../relative"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::UnsupportedFeature
+        );
+        assert_eq!(
+            client
+                .symlink(Path::new("/link"), Path::new(""))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
         );
         assert_eq!(
             client.exec("echo test").await.unwrap_err().kind(),

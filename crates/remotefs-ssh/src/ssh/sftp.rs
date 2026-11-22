@@ -312,17 +312,13 @@ where
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         let path = path_utils::remote_path(path)?;
         let path = path.as_ref();
-        let target = path_utils::remote_path(target)?;
-        let target = target.as_ref();
+        let target = remotefs::path::ensure_symlink_target(target)?;
         let sftp = self.sftp()?;
         debug!(
             "Creating symlink at {path} pointing to {target}",
             path = path.display(),
             target = target.display()
         );
-        if !self.exists(target)? {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
         sftp.symlink(target, path)
     }
 

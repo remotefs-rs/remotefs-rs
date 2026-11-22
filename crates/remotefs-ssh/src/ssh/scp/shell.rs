@@ -155,7 +155,7 @@ pub(crate) fn mkdir_command(path: &Path, mode: Option<UnixPex>) -> String {
 /// `ln -s` command creating `path` pointing at `target`.
 pub(crate) fn symlink_command(path: &Path, target: &Path) -> String {
     format!(
-        "ln -s {target} {path}",
+        "ln -s -- {target} {path}",
         target = quote(target),
         path = quote(path)
     )
@@ -455,7 +455,11 @@ mod tests {
         assert_eq!(stat_command(p, true), "ls -ld '/tmp/a b'");
         assert_eq!(
             symlink_command(Path::new("/l"), Path::new("/t")),
-            "ln -s '/t' '/l'"
+            "ln -s -- '/t' '/l'"
+        );
+        assert_eq!(
+            symlink_command(Path::new("/l"), Path::new("-f")),
+            "ln -s -- '-f' '/l'"
         );
         assert_eq!(
             rename_command(Path::new("/a"), Path::new("/b")),

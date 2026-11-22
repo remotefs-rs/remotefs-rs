@@ -34,6 +34,17 @@ static LS_RE: Lazy<Regex> = lazy_regex!(
 
 const WRITER_STDIN_BUF_SIZE: usize = 64 * 1024;
 
+/// `ln -s` command creating `path` pointing at `target`.
+///
+/// Options end before the operands because a relative target may start with `-`.
+fn symlink_command(path: &Path, target: &Path) -> String {
+    format!(
+        "ln -s -- {target} {path}",
+        target = path_utils::shell_quote(target),
+        path = path_utils::shell_quote(path)
+    )
+}
+
 fn writer_script(path: &Path, opts: &WriteOptions, redirect: &str) -> String {
     let quoted = path_utils::shell_quote(path);
     match opts.size_hint {
@@ -599,23 +610,18 @@ impl AsyncRemoteFs for KubeContainerFs {
 
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         let path = path_utils::ensure_posix_absolute(path)?;
-        let target = path_utils::ensure_posix_absolute(target)?;
+        let target = remotefs::path::ensure_symlink_target(target)?;
         let exec = self.runner()?;
         debug!(
             "Creating a symlink at {} pointing at {}",
             path.display(),
             target.display()
         );
-        self.require_exists(exec, target).await?;
         if self.exists_at(exec, path).await? {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));
         }
         exec.shell_ok(
-            &format!(
-                "ln -s {} {}",
-                path_utils::shell_quote(target),
-                path_utils::shell_quote(path)
-            ),
+            &symlink_command(path, target),
             RemoteErrorType::FileCreateDenied,
         )
         .await
@@ -760,6 +766,35 @@ mod test {
         assert!(caps.contains(Capabilities::EXEC));
         assert!(!caps.contains(Capabilities::SEEK_READ));
         assert!(!caps.contains(Capabilities::SEEK_WRITE));
+    }
+
+    #[test]
+    fn should_end_symlink_options_before_the_target() {
+        assert_eq!(
+            symlink_command(Path::new("/l"), Path::new("-f")),
+            "ln -s -- '-f' '/l'"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_validate_symlink_target_before_connection() {
+        let client = KubeContainerFs::new("test", "test");
+        assert_eq!(
+            client
+                .symlink(Path::new("/link"), Path::new("../target"))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::NotConnected
+        );
+        assert_eq!(
+            client
+                .symlink(Path::new("/link"), Path::new(""))
+                .await
+                .unwrap_err()
+                .kind(),
+            RemoteErrorType::InvalidPath
+        );
     }
 
     #[tokio::test]
@@ -1409,13 +1444,35 @@ mod test {
                 RemoteErrorType::AlreadyExists
             );
             assert!(client.remove_file(&symlink).await.is_ok());
+            finalize_client(pods, client).await;
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        #[serial]
+        async fn should_create_symlinks_with_absolute_and_relative_targets() {
+            let (pods, client, tempdir) = setup_client().await;
+            let dir = tempdir.join("dir");
+            let sibling = tempdir.join("sibling");
+            client.create_dir(&dir, None).await.unwrap();
+            client.create_dir(&sibling, None).await.unwrap();
+            let target = sibling.join("target.txt");
+            write(&client, &target, "data").await;
+            let missing = sibling.join("missing.txt");
+            for (name, link_target) in [
+                ("abs", target.as_path()),
+                ("abs-missing", missing.as_path()),
+                ("rel", Path::new("../sibling/target.txt")),
+                ("rel-missing", Path::new("../missing.txt")),
+            ] {
+                let link = dir.join(name);
+                client.symlink(&link, link_target).await.unwrap();
+                let entry = client.stat(&link).await.unwrap();
+                assert!(entry.is_symlink());
+                assert_eq!(entry.metadata().symlink.as_deref(), Some(link_target));
+            }
             assert_eq!(
-                client
-                    .symlink(&symlink, &tempdir.join("c.sh"))
-                    .await
-                    .unwrap_err()
-                    .kind(),
-                RemoteErrorType::NoSuchFileOrDirectory
+                read(&client, &dir.join("rel"), &ReadOptions::default()).await,
+                b"data"
             );
             finalize_client(pods, client).await;
         }

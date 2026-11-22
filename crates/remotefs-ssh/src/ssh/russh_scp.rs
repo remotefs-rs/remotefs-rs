@@ -316,9 +316,7 @@ where
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         let path = path_utils::remote_path(path)?;
         let path = path.as_ref();
-        let target = path_utils::remote_path(target)?;
-        let target = target.as_ref();
-        self.require_exists(target).await?;
+        let target = remotefs::path::ensure_symlink_target(target)?;
         self.assert_ok(
             &shell::symlink_command(path, target),
             RemoteErrorType::FileCreateDenied,

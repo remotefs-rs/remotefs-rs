@@ -258,11 +258,7 @@ where
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
         let path = path_utils::remote_path(path)?;
         let path = path.as_ref();
-        let target = path_utils::remote_path(target)?;
-        let target = target.as_ref();
-        if !self.exists(target).await? {
-            return Err(RemoteError::new(RemoteErrorType::NoSuchFileOrDirectory));
-        }
+        let target = remotefs::path::ensure_symlink_target(target)?;
         self.sftp()?.symlink(target, path).await
     }
 

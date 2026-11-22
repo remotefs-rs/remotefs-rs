@@ -67,7 +67,21 @@ pub trait AsyncRemoteFs: Send + Sync {
     /// Copies an absolute source path to an absolute destination path.
     async fn copy(&self, src: &Path, dest: &Path) -> RemoteResult<()>;
 
-    /// Creates a symbolic link at `path` pointing to an absolute `target`.
+    /// Creates a symbolic link at the absolute `path` whose content is `target`.
+    ///
+    /// `target` is stored verbatim. It may be absolute or relative; a relative
+    /// target is resolved by the remote host against the parent directory of
+    /// `path` when the link is followed. The target does not need to exist, so
+    /// dangling links can be created. Backends do not normalize, absolutize, or
+    /// check the target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::fs::RemoteErrorType::InvalidPath`] when `path` is not absolute or
+    /// `target` is empty, [`crate::fs::RemoteErrorType::AlreadyExists`] when backends can
+    /// detect an existing entry at `path`, and
+    /// [`crate::fs::RemoteErrorType::UnsupportedFeature`] when the backend cannot create
+    /// symlinks.
     async fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()>;
 
     /// Opens an absolute file path for a ranged read.

@@ -27,6 +27,12 @@ test args="":
         esac
       done
 
+# Run unit and documentation tests for one crate (see `test`).
+[group('test')]
+test_crate crate args="":
+  cargo test -p {{ crate }} --lib {{ args }}
+  cargo test -p {{ crate }} --doc {{ args }}
+
 # Test every crate with its default features (see `test`).
 [group('test')]
 test_features args="":

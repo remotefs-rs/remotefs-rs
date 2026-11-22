@@ -594,15 +594,13 @@ impl RemoteFs for MemoryFs {
     }
 
     fn symlink(&self, path: &Path, target: &Path) -> RemoteResult<()> {
-        self.validate_paths(&[path, target])?;
+        self.validate(path)?;
+        remotefs::path::ensure_symlink_target(target)?;
         debug!("symlink({path:?}, {target:?})");
         let path = path.to_path_buf();
         let parent_path = Self::parent_of(&path)?;
         let link = Inode::symlink((self.get_uid)(), (self.get_gid)(), target.to_path_buf());
         let mut tree = self.lock_tree()?;
-        if tree.root().query(&target.to_path_buf()).is_none() {
-            return Err(Self::missing());
-        }
         let parent = Self::directory_mut(&mut tree, &parent_path)?;
         if parent.children().iter().any(|child| *child.id() == path) {
             return Err(RemoteError::new(RemoteErrorType::AlreadyExists));

@@ -99,6 +99,43 @@ fn should_initialize_scp_filesystem() {
     not(feature = "with-containers"),
     ignore = "needs Docker, run with --features with-containers"
 )]
+fn should_create_symlinks_with_absolute_and_relative_targets() {
+    let ctx = setup();
+    let dir = ctx.path("dir");
+    let sibling = ctx.path("sibling");
+    ctx.client
+        .create_dir(&dir, Some(UnixPex::from(0o775)))
+        .unwrap();
+    ctx.client
+        .create_dir(&sibling, Some(UnixPex::from(0o775)))
+        .unwrap();
+    let target = sibling.join("target.txt");
+    write(&ctx.client, &target, b"data");
+    let missing = sibling.join("missing.txt");
+    for (name, link_target) in [
+        ("abs", target.as_path()),
+        ("abs-missing", missing.as_path()),
+        ("rel", Path::new("../sibling/target.txt")),
+        ("rel-missing", Path::new("../missing.txt")),
+    ] {
+        let link = dir.join(name);
+        ctx.client.symlink(&link, link_target).unwrap();
+        let entry = ctx.client.stat(&link).unwrap();
+        assert!(entry.is_symlink());
+        assert_eq!(entry.metadata().symlink.as_deref(), Some(link_target));
+    }
+    assert_eq!(
+        read(&ctx.client, &dir.join("rel"), &ReadOptions::default()),
+        b"data"
+    );
+    finalize(ctx);
+}
+
+#[test]
+#[cfg_attr(
+    not(feature = "with-containers"),
+    ignore = "needs Docker, run with --features with-containers"
+)]
 fn should_copy_and_read_with_ranges() {
     let ctx = setup();
     let source = ctx.path("a.txt");
