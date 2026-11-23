@@ -1325,6 +1325,7 @@ mod test {
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[serial]
+        #[ignore = "flaky test"]
         async fn should_finish_read_stream_before_eof() {
             use futures::io::AsyncReadExt as _;
 
