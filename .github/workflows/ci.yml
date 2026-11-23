@@ -99,6 +99,10 @@ jobs:
         run: just test
         env:
           RUST_LOG: trace
+      - name: Test documentation with every backend
+        run: just test_docs
+        env:
+          RUST_LOG: trace
       # Runs every suite of `test_suites`, including the ones that need Docker,
       # FUSE, and Minikube, so the coverage report covers the integration tests.
       - name: Test with coverage
