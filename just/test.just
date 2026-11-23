@@ -41,32 +41,34 @@ test_features args="":
 # Every test suite that needs more than the default features, one per line, as
 # `<crate>|<cargo arguments>|<test binary arguments>`. The `with-containers` and
 # `integration-tests` features turn on the tests that need Docker, a FUSE mount, or
-# a Minikube cluster. A crate may appear more than once, because each remotefs-ssh
-# backend is a feature of its own. Tests that share an external server, or mount a
-# FUSE filesystem (concurrent mounts fail at random with EPERM), run on one thread.
+# a Minikube cluster. Every backend feature that can be combined is enabled at once,
+# such as the three remotefs-ssh backends. A crate appears more than once only when
+# its features exclude each other: remotefs-ftp allows one TLS backend at a time.
+# Tests that share an external server, or mount a FUSE filesystem (concurrent mounts
+# fail at random with EPERM), run on one thread.
 test_suites := '''
 remotefs|--features tokio|
 remotefs-aws-s3|--features tokio,with-containers|--test-threads=1
 remotefs-ftp|--features rustls-aws-lc-rs,tokio-rustls-aws-lc-rs,with-containers|
+remotefs-ftp|--features native-tls,tokio-native-tls,with-containers|
+remotefs-ftp|--features rustls-ring,tokio-rustls-ring,with-containers|
 remotefs-fuse|--features tokio,integration-tests|--test-threads=1
 remotefs-gcs|--features tokio,with-containers|--test-threads=1
 remotefs-kube|--features tokio,integration-tests|--test-threads=1
 remotefs-memory||
 remotefs-smb|--features with-containers|
-remotefs-ssh|--no-default-features --features find,libssh2,with-containers|
-remotefs-ssh|--no-default-features --features find,libssh,with-containers|
-remotefs-ssh|--no-default-features --features find,russh,with-containers|
+remotefs-ssh|--features libssh2,libssh,russh,with-containers|
 remotefs-webdav|--features tokio,with-containers|
 fusibile||
 '''
 
 # Run every suite of `test_suites` with the given cargo command, such as `cargo test`,
-# and list the suites that failed at the end. Crates run in separate cargo invocations
+# on the given targets (`--tests` or `--doc`), and list the suites that failed at the end. Crates run in separate cargo invocations
 # for the reason given at `test`. Also fails when a test is ignored because it needs
 # Docker: that means a suite lost its `with-containers` feature and would pass without
 # testing anything.
 [private]
-suites runner args="":
+suites runner target args="":
   #!/usr/bin/env bash
   set -euo pipefail
   skip=" ${SKIP_CRATES:-} "
@@ -78,7 +80,7 @@ suites runner args="":
     case "$skip" in *" $crate "*) continue ;; esac
     echo "==> $crate $cargo_args"
     # shellcheck disable=SC2086
-    if ! {{ runner }} --tests -p "$crate" $cargo_args {{ args }} -- $test_args </dev/null 2>&1 | tee -a "$log"; then
+    if ! {{ runner }} {{ target }} -p "$crate" $cargo_args {{ args }} -- $test_args </dev/null 2>&1 | tee -a "$log"; then
       failed+=("$crate $cargo_args")
     fi
   done <<'SUITES'
@@ -99,7 +101,14 @@ suites runner args="":
 # SKIP_CRATES.
 [group('test')]
 test_containers args="":
-  {{ just_executable() }} suites "cargo test" "{{ args }}"
+  {{ just_executable() }} suites "cargo test" "--tests" "{{ args }}"
+
+# Run the documentation tests of every suite, so the examples that need a backend
+# feature are compiled too. Leave crates out with SKIP_CRATES. fusibile is always left
+# out, because a binary has no documentation tests.
+[group('test')]
+test_docs args="":
+  SKIP_CRATES="${SKIP_CRATES:-} fusibile" {{ just_executable() }} suites "cargo test" "--doc" "{{ args }}"
 
 # Start the SMB and WebDAV servers that their `with-containers` tests connect to.
 [group('test')]
@@ -118,6 +127,6 @@ containers_down:
 [group('test')]
 coverage output="lcov.info" args="":
   cargo llvm-cov clean --workspace
-  {{ just_executable() }} suites "cargo llvm-cov --no-report" "{{ args }}"
+  {{ just_executable() }} suites "cargo llvm-cov --no-report" "--tests" "{{ args }}"
   cargo llvm-cov report --summary-only
   cargo llvm-cov report --lcov --output-path {{ output }}

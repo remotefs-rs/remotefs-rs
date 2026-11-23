@@ -21,6 +21,7 @@ just test_features          # the same, with default features only
 just containers_up          # start the SMB and WebDAV servers their tests use
 just containers_down        # stop them
 just test_containers        # every suite, with the Docker, FUSE, and Minikube tests
+just test_docs              # doc tests of every suite, with all backends enabled
 just coverage               # the same suites under llvm-cov, writes lcov.info
 just fmt                    # dprint fmt (Markdown, Rust, TOML, YAML)
 just fmt_check              # dprint check
@@ -58,8 +59,9 @@ macOS, and Dokany on Windows, which the Windows CI job does not install.
 
 Tests that need a server are marked `ignore`, or compiled out, unless the
 `with-containers` or `integration-tests` feature is enabled. `test_suites` in
-`just/test.just` lists the features every crate runs with. `just test_containers`
-and `just coverage` run those suites, so the Linux CI job covers them. They need
+`just/test.just` lists the features every crate runs with, enabling every backend
+that can be combined. `just test_containers` and `just coverage` run those
+suites, so the Linux CI job covers them. They need
 a running Docker daemon, `just containers_up` for SMB and WebDAV, FUSE, and, for
 `remotefs-kube`, a Minikube cluster with `MINIKUBE_IP` set. Add a new feature
 combination to `test_suites`, not to a one-off CI step, or its tests never reach
