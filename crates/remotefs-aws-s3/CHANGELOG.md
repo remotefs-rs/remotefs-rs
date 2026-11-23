@@ -2,35 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## remotefs-aws-s3-v1.2.0
 
-### Build
-
-- **release:** bump every workspace crate version
-- unify crates in a cargo workspace at version 1.2.0
-
-> Every member crate shares version 1.2.0 and inherits its package metadata
-> from the workspace root. Every third-party dependency version now lives in
-> the root `[workspace.dependencies]` table, and members reference it with
-> `workspace = true`, keeping only their own features and optional flags.
->
-> The lockfile is committed so the workspace resolves the same versions
-> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
-> 1.100.0.
-
-## remotefs-aws-s3-v1.0.1
-
-Released on 2026-10-31
-
-### Build
-
-- bump `aws-smithy-types` `>=1`
-
-## remotefs-aws-s3-v1.0.0
-
-Released on 2026-09-15
+Released on 2026-11-23
 
 ### Breaking changes
+
+- use testcontainers for tests; rust edition 2024
+
+> use testcontainers for tests; rust edition 2024
+
+- **aws:** migrated to aws-sdk
+
+> migrated to aws-sdk
 
 - migrate to remotefs 1 (remotefs-rs/remotefs-rs-aws-s3#4)
 
@@ -65,84 +49,15 @@ instead, pinned to a current release. That image also moved its
 
 ### Added
 
-- Breaking: migrate to remotefs 1 (remotefs-rs/remotefs-rs-aws-s3#4)
-
-> - feat!: migrate to remotefs 1
-
-## remotefs-aws-s3-v0.4.4
-
-Released on 2026-08-29
-
-### Build
-
-- update dependencies. (remotefs-rs/remotefs-rs-aws-s3#3)
-
-> Increased MSRV to 1.94.1
-
-## remotefs-aws-s3-v0.4.3
-
-Released on 2025-12-20
-
-### Fixed
-
-- lint
-
-## remotefs-aws-s3-v0.4.2
-
-Released on 2025-03-23
-
-### Fixed
-
-- fixed `remove_file` which didn't removed files
-
-## remotefs-aws-s3-v0.4.1
-
-Released on 2025-03-16
-
-### Fixed
-
-- **upload:** fixed aws-s3 upload. It doesn't support offsets for write, but only multipart
-
-## remotefs-aws-s3-v0.4.0
-
-Released on 2025-03-16
-
-### Breaking changes
-
-- use testcontainers for tests; rust edition 2024
-
-> use testcontainers for tests; rust edition 2024
-
-- **aws:** migrated to aws-sdk
-
-> migrated to aws-sdk
-
-### Added
-
+- remotefs 0.3.0
 - Breaking: use testcontainers for tests; rust edition 2024
 - Breaking: **aws:** migrated to aws-sdk
 
 > I've finally with like 3 years of delay **migrated** to the **official AWS SDK for Rust**.
 
-### Fixed
+- Breaking: migrate to remotefs 1 (remotefs-rs/remotefs-rs-aws-s3#4)
 
-- test is sync and send
-
-## remotefs-aws-s3-v0.3.1
-
-Released on 2024-10-07
-
-### Fixed
-
-- removed users dep
-
-## remotefs-aws-s3-v0.3.0
-
-Released on 2024-09-30
-
-### Added
-
-- remotefs 0.3.0
+> - feat!: migrate to remotefs 1
 
 ### Fixed
 
@@ -151,7 +66,40 @@ Released on 2024-09-30
 - lint
 - windows build
 - version
+- removed users dep
+- test is sync and send
+- **upload:** fixed aws-s3 upload. It doesn't support offsets for write, but only multipart
+- fixed `remove_file` which didn't removed files
+- lint
 
-## remotefs-aws-s3-v0.1.0
+### Build
 
-Released on 2022-01-04
+- update dependencies. (remotefs-rs/remotefs-rs-aws-s3#3)
+
+> Increased MSRV to 1.94.1
+
+- bump `aws-smithy-types` `>=1`
+- **release:** bump every workspace crate version
+- unify crates in a cargo workspace at version 1.2.0
+
+> Every member crate shares version 1.2.0 and inherits its package metadata
+> from the workspace root. Every third-party dependency version now lives in
+> the root `[workspace.dependencies]` table, and members reference it with
+> `workspace = true`, keeping only their own features and optional flags.
+>
+> The lockfile is committed so the workspace resolves the same versions
+> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
+> 1.100.0.
+
+- **msrv:** bump msrv to 1.98
+- inherit the workspace lints in every crate
+
+> Eight crates lacked a [lints] table, so the workspace lint rules were
+> never applied to them and cargo warned about the missing inheritance.
+>
+> Enabling them surfaced the findings they had been hiding:
+>
+> - remove imports already provided by the prelude or a glob import
+> - implement Debug for the public clients and SSH options; secrets such
+>   as passwords and key storage are left out of the output
+> - use expect_err in a remotefs-smb test now that its Ok type is Debug

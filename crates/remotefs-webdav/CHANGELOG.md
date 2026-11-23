@@ -2,45 +2,9 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## remotefs-webdav-v1.2.0
 
-### Build
-
-- **release:** bump every workspace crate version
-- unify crates in a cargo workspace at version 1.2.0
-
-> Every member crate shares version 1.2.0 and inherits its package metadata
-> from the workspace root. Every third-party dependency version now lives in
-> the root `[workspace.dependencies]` table, and members reference it with
-> `workspace = true`, keeping only their own features and optional flags.
->
-> The lockfile is committed so the workspace resolves the same versions
-> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
-> 1.100.0.
-
-## remotefs-webdav-v1.0.0
-
-Released on 2026-09-15
-
-### Breaking changes
-
-- migrate to remotefs 1 (remotefs-rs/remotefs-rs-webdav#4)
-
-> WebDAVFs implements AsyncRemoteFs, uses absolute paths, returns a RemoteResult from new, drops pwd and change_dir, replaces open_file/create_file/mov/setstat with read_file/write_file/rename/set_metadata, and releases as 1.0.0.
-
-- chore: release 1
-
-### Added
-
-- Breaking: migrate to remotefs 1 (remotefs-rs/remotefs-rs-webdav#4)
-
-> - feat!: migrate to remotefs 1
->
-> Implement remotefs::AsyncRemoteFs natively over dav-xml-client with owned transfer streams, HTTP range reads, WebDAV COPY support, typed error sources, and a BlockOn-based blocking wrapper behind the tokio feature.
-
-## remotefs-webdav-v0.3.0
-
-Released on 2026-09-08
+Released on 2026-11-23
 
 ### Breaking changes
 
@@ -52,8 +16,16 @@ Released on 2026-09-08
 
 - chore: release 0.3.0
 
+* migrate to remotefs 1 (remotefs-rs/remotefs-rs-webdav#4)
+
+> WebDAVFs implements AsyncRemoteFs, uses absolute paths, returns a RemoteResult from new, drops pwd and change_dir, replaces open_file/create_file/mov/setstat with read_file/write_file/rename/set_metadata, and releases as 1.0.0.
+
+- chore: release 1
+
 ### Added
 
+- lib implementation
+- remotefs 0.3
 - Breaking: **auth:** accept a generic Auth method in WebDAVFs::new (remotefs-rs/remotefs-rs-webdav#3)
 
 > - feat(auth)!: accept a generic Auth method in WebDAVFs::new
@@ -67,20 +39,15 @@ Released on 2026-09-08
 > configured credentials instead of the placeholder ones shared with the plain
 > unit tests.
 
-## remotefs-webdav-v0.2.2
+- Breaking: migrate to remotefs 1 (remotefs-rs/remotefs-rs-webdav#4)
 
-Released on 2026-09-07
+> - feat!: migrate to remotefs 1
+>
+> Implement remotefs::AsyncRemoteFs natively over dav-xml-client with owned transfer streams, HTTP range reads, WebDAV COPY support, typed error sources, and a BlockOn-based blocking wrapper behind the tokio feature.
 
-### Build
+- allow relative and dangling symlink targets (#41)
 
-- migrate webdav client to `dav-xml` and `dav-xml-client` crates. (remotefs-rs/remotefs-rs-webdav#2)
-
-> - build: migrate webdav client to `dav-xml` and `dav-xml-client` crates.
-> - fix: ignore self-dir when listing entries
-
-## remotefs-webdav-v0.2.1
-
-Released on 2026-09-07
+> symlink(path, target) no longer requires an absolute, existing target. The target is stored verbatim on every backend, so relative and dangling links can be created; only an empty target is rejected, with InvalidPath. The new remotefs::path::ensure_symlink_target helper implements that check. KubeMultiPodFs writes relative targets inside the link's container and keeps translating absolute targets within the same container.
 
 ### Changed
 
@@ -115,6 +82,11 @@ Released on 2026-09-07
 
 ### Fixed
 
+- ci and docs
+- unused tempfile
+- docs
+- temporarly included webdav-xml into project to fix parsing issues
+- badge
 - test is sync and send
 
 ### Build
@@ -134,23 +106,37 @@ Released on 2026-09-07
 >
 > Drop the unused `github-actions` feature and declare docs.rs metadata.
 
+- migrate webdav client to `dav-xml` and `dav-xml-client` crates. (remotefs-rs/remotefs-rs-webdav#2)
+
+> - build: migrate webdav client to `dav-xml` and `dav-xml-client` crates.
+> - fix: ignore self-dir when listing entries
+
+- **release:** bump every workspace crate version
+- unify crates in a cargo workspace at version 1.2.0
+
+> Every member crate shares version 1.2.0 and inherits its package metadata
+> from the workspace root. Every third-party dependency version now lives in
+> the root `[workspace.dependencies]` table, and members reference it with
+> `workspace = true`, keeping only their own features and optional flags.
+>
+> The lockfile is committed so the workspace resolves the same versions
+> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
+> 1.100.0.
+
+- make `seahash` and `futures` unix-only dependencies
+- **msrv:** bump msrv to 1.98
+- inherit the workspace lints in every crate
+
+> Eight crates lacked a [lints] table, so the workspace lint rules were
+> never applied to them and cargo warned about the missing inheritance.
+>
+> Enabling them surfaced the findings they had been hiding:
+>
+> - remove imports already provided by the prelude or a glob import
+> - implement Debug for the public clients and SSH options; secrets such
+>   as passwords and key storage are left out of the output
+> - use expect_err in a remotefs-smb test now that its Ok type is Debug
+
 ### Style
 
 - format the tree with dprint
-
-## remotefs-webdav-v0.2.0
-
-Released on 2024-09-30
-
-### Added
-
-- lib implementation
-- remotefs 0.3
-
-### Fixed
-
-- ci and docs
-- unused tempfile
-- docs
-- temporarly included webdav-xml into project to fix parsing issues
-- badge

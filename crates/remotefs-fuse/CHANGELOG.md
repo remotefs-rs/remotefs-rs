@@ -2,39 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## remotefs-fuse-v1.2.0
 
-### Build
-
-- **release:** bump every workspace crate version
-- unify crates in a cargo workspace at version 1.2.0
-
-> Every member crate shares version 1.2.0 and inherits its package metadata
-> from the workspace root. Every third-party dependency version now lives in
-> the root `[workspace.dependencies]` table, and members reference it with
-> `workspace = true`, keeping only their own features and optional flags.
->
-> The lockfile is committed so the workspace resolves the same versions
-> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
-> 1.100.0.
-
-## fusibile-v1.0.1
-
-Released on 2026-09-22
-
-### Fixed
-
-- apply uid and gid overrides to file attributes (remotefs-rs/remotefs-rs-fuse#13)
-
-> - test: correct uid and gid fixture callbacks
-> - fix: apply uid and gid overrides to file attributes
-> - chore: release 1.0.1
-
-## fusibile-v1.0.0
-
-Released on 2026-09-16
+Released on 2026-11-23
 
 ### Breaking changes
+
+- **fusibile:** rename `remotefs-fuse-cli` to `fusibile` (remotefs-rs/remotefs-rs-fuse#6)
+
+> the CLI package has changed from `remotefs-fuse-cli` to `fusibile`
 
 - migrate to remotefs 1
 
@@ -42,6 +18,24 @@ Released on 2026-09-16
 
 ### Added
 
+- CLI tool
+- wip
+- wip
+- file handlers and read
+- file handlers by pid
+- implemented fuse
+- memory fs in cli tool
+- unix is kinda working
+- new mount
+- gid and uid mount options
+- default mode option
+- windows base; use Generic instead of Boxes
+- working on windows
+- working on windows driver
+- dokany impl
+- add Google Cloud Storage client (remotefs-rs/remotefs-rs-fuse#5)
+- Breaking: **fusibile:** rename `remotefs-fuse-cli` to `fusibile` (remotefs-rs/remotefs-rs-fuse#6)
+- **remotefs-fuse:** add optional libfuse feature and ship LICENSE in published crates
 - Breaking: migrate to remotefs 1
 
 > Migrate remotefs-fuse's synchronous drivers to remotefs 1 and extract shared transfer and platform state modules used by native async Unix and Windows drivers.
@@ -58,26 +52,43 @@ Released on 2026-09-16
 
 ### Fixed
 
-- show better error for macfuse issues
-
-## fusibile-v0.2.0
-
-Released on 2026-09-04
-
-### Breaking changes
-
-- **fusibile:** rename `remotefs-fuse-cli` to `fusibile` (remotefs-rs/remotefs-rs-fuse#6)
-
-> the CLI package has changed from `remotefs-fuse-cli` to `fusibile`
-
-### Added
-
-- add Google Cloud Storage client (remotefs-rs/remotefs-rs-fuse#5)
-- Breaking: **fusibile:** rename `remotefs-fuse-cli` to `fusibile` (remotefs-rs/remotefs-rs-fuse#6)
-- **remotefs-fuse:** add optional libfuse feature and ship LICENSE in published crates
-
-### Fixed
-
+- initial commit
+- readme
+- workspace with -cli
+- wip
+- macos
+- fmt
+- test mount
+- macos ci
+- tests
+- test
+- setup tests
+- setup fuse
+- test check access
+- use nix
+- macos
+- test
+- min rust version
+- integration tests
+- windows build
+- windows build
+- set mount option on mount
+- don't expose Driver
+- generic remoteFs
+- import
+- linux
+- docs
+- test
+- linux
+- windows recursion issue
+- should list only direct children
+- fuser 0.15
+- integration tests for windows
+- tests
+- cargo toml
+- gran coglioni
+- umount
+- lint
 - fix data-loss, collision, and credential-leak bugs found in review (remotefs-rs/remotefs-rs-fuse#8)
 
 > - chore: update fundings
@@ -165,71 +176,41 @@ Released on 2026-09-04
 > lookup, readdir, ...), flooding logs at the default info level.
 > Lifecycle events (mount, unmount, connect, disconnect) stay at info.
 
+- show better error for macfuse issues
+- apply uid and gid overrides to file attributes (remotefs-rs/remotefs-rs-fuse#13)
+
+> - test: correct uid and gid fixture callbacks
+> - fix: apply uid and gid overrides to file attributes
+> - chore: release 1.0.1
+
 ### Build
 
 - bump fuser to 0.18 and nix to 0.31
 - bump remotefs-smb to 0.5
 - bump remotefs-ssh to 0.9
 - add remotefs-smb windows compatibility
+- **release:** bump every workspace crate version
+- unify crates in a cargo workspace at version 1.2.0
 
-## fusibile-v0.1.0
+> Every member crate shares version 1.2.0 and inherits its package metadata
+> from the workspace root. Every third-party dependency version now lives in
+> the root `[workspace.dependencies]` table, and members reference it with
+> `workspace = true`, keeping only their own features and optional flags.
+>
+> The lockfile is committed so the workspace resolves the same versions
+> everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
+> 1.100.0.
 
-Released on 2024-12-19
+- make `seahash` and `futures` unix-only dependencies
+- **msrv:** bump msrv to 1.98
+- **deps:** upgrade suppaftp, nix, kube, k8s-openapi and fuser
 
-### Added
-
-- CLI tool
-- wip
-- wip
-- file handlers and read
-- file handlers by pid
-- implemented fuse
-- memory fs in cli tool
-- unix is kinda working
-- new mount
-- gid and uid mount options
-- default mode option
-- windows base; use Generic instead of Boxes
-- working on windows
-- working on windows driver
-- dokany impl
-
-### Fixed
-
-- initial commit
-- readme
-- workspace with -cli
-- wip
-- macos
-- fmt
-- test mount
-- macos ci
-- tests
-- test
-- setup tests
-- setup fuse
-- test check access
-- use nix
-- macos
-- test
-- min rust version
-- integration tests
-- windows build
-- windows build
-- set mount option on mount
-- don't expose Driver
-- generic remoteFs
-- import
-- linux
-- docs
-- test
-- linux
-- windows recursion issue
-- should list only direct children
-- fuser 0.15
-- integration tests for windows
-- tests
-- cargo toml
-- gran coglioni
-- umount
-- lint
+> Move to suppaftp 13, nix 0.32, kube 5, k8s-openapi 0.29 and fuser 0.19.
+>
+> k8s-openapi 0.29 drops the v1_32 feature, so remotefs-kube now selects v1_37.
+>
+> fuser 0.19 adds owner and kill_suid_gid arguments to several Filesystem
+> methods and makes the request uid and gid optional. The sync and async
+> FUSE drivers follow the new signatures, and a caller without ids is
+> treated as an unknown user that only gets the permissions granted to
+> everyone.

@@ -2,7 +2,36 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## remotefs-gcs-v1.2.0
+
+Released on 2026-11-23
+
+### Breaking changes
+
+- migrate to remotefs 1 (remotefs-rs/remotefs-rs-gcs#2)
+
+> GoogleCloudStorageFs now uses absolute paths, exposes AsyncRemoteFs, removes the runtime constructor parameter, and releases as 1.0.0.
+
+- chore: update release date
+
+- chore: windows lint
+
+### Added
+
+- add Google Cloud Storage client
+- Breaking: migrate to remotefs 1 (remotefs-rs/remotefs-rs-gcs#2)
+
+> - feat!: migrate to remotefs 1
+>
+> Migrate Google Cloud Storage to the native AsyncRemoteFs contract with owned transfer streams and blocking adapter support.
+
+- allow relative and dangling symlink targets (#41)
+
+> symlink(path, target) no longer requires an absolute, existing target. The target is stored verbatim on every backend, so relative and dangling links can be created; only an empty target is rejected, with InvalidPath. The new remotefs::path::ensure_symlink_target helper implements that check. KubeMultiPodFs writes relative targets inside the link's container and keeps translating absolute targets within the same container.
+
+### Changed
+
+- remove useless mod visibility
 
 ### Build
 
@@ -18,36 +47,4 @@ All notable changes to this project are documented in this file.
 > everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
 > 1.100.0.
 
-## remotefs-gcs-v1.0.0
-
-Released on 2026-09-15
-
-### Breaking changes
-
-- migrate to remotefs 1 (remotefs-rs/remotefs-rs-gcs#2)
-
-> GoogleCloudStorageFs now uses absolute paths, exposes AsyncRemoteFs, removes the runtime constructor parameter, and releases as 1.0.0.
-
-- chore: update release date
-
-- chore: windows lint
-
-### Added
-
-- Breaking: migrate to remotefs 1 (remotefs-rs/remotefs-rs-gcs#2)
-
-> - feat!: migrate to remotefs 1
->
-> Migrate Google Cloud Storage to the native AsyncRemoteFs contract with owned transfer streams and blocking adapter support.
-
-## remotefs-gcs-v0.1.0
-
-Released on 2026-08-29
-
-### Added
-
-- add Google Cloud Storage client
-
-### Changed
-
-- remove useless mod visibility
+- **msrv:** bump msrv to 1.98

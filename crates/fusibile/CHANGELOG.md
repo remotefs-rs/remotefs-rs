@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## fusibile-v1.2.0
+
+Released on 2026-11-23
 
 ### Breaking changes
 
@@ -171,3 +173,5 @@ All notable changes to this project are documented in this file.
 > The lockfile is committed so the workspace resolves the same versions
 > everywhere. Cargo.lock is no longer ignored, and the toolchain is pinned to
 > 1.100.0.
+
+- **msrv:** bump msrv to 1.98
