@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## remotefs-smb-v1.2.0
+## 1.2.0
 
 Released on 2026-11-23
 

@@ -2065,7 +2065,7 @@ dependencies = [
 
 [[package]]
 name = "fusibile"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4800,7 +4800,7 @@ checksum = "d902046e6a28a1e4c3cab97258a0ce11e994903f01c2d97a9447a0b3df85f4f6"
 
 [[package]]
 name = "remotefs"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "async-trait",
  "env_logger",
@@ -4816,7 +4816,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-aws-s3"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -4837,7 +4837,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-ftp"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "env_logger",
  "futures",
@@ -4856,7 +4856,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-fuse"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -4882,7 +4882,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-gcs"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "bytes",
  "env_logger",
@@ -4902,7 +4902,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-kube"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "env_logger",
  "futures",
@@ -4922,7 +4922,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-memory"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "log",
  "orange-trees",
@@ -4932,7 +4932,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-smb"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "anyhow",
  "argh",
@@ -4953,7 +4953,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-ssh"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "criterion",
  "env_logger",
@@ -4981,7 +4981,7 @@ dependencies = [
 
 [[package]]
 name = "remotefs-webdav"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "dav-xml-client",
  "env_logger",
