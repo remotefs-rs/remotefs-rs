@@ -118,14 +118,14 @@ function Get-LatestFusibileVersion {
         Write-Warn "If you believe this is a bug, please report an issue at <$IssuesUrl>"
         exit 1
     }
-    # Only fusibile-v* tags count: the monorepo also publishes a tag per crate.
-    $release = $releases | Where-Object { $_.tag_name -like "fusibile-v*" } | Select-Object -First 1
+    # Only v* tags count: older fusibile-v* and per-crate tags are ignored.
+    $release = $releases | Where-Object { $_.tag_name -like "v*" } | Select-Object -First 1
     if (-not $release) {
         Write-Err "Could not find a fusibile release in the GitHub API response."
         Write-Warn "Pass a version explicitly with '-Version X.Y.Z', or report an issue at <$IssuesUrl>"
         exit 1
     }
-    return $release.tag_name.Substring("fusibile-v".Length)
+    return $release.tag_name.Substring("v".Length)
 }
 
 # -- Dokany detection ---------------------------------------------------------
@@ -159,7 +159,7 @@ function Install-Fusibile {
     )
 
     $asset = "fusibile-v$InstallVersion-$Target.zip"
-    $url = "https://github.com/$GithubRepo/releases/download/fusibile-v$InstallVersion/$asset"
+    $url = "https://github.com/$GithubRepo/releases/download/v$InstallVersion/$asset"
 
     Write-Host ""
     Write-Host "  fusibile configuration"

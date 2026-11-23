@@ -285,25 +285,21 @@ jobs:
           path: out/*
           retention-days: 3
 
-      # One tag per crate, all on the prepared commit. fusibile's tag is the one the
-      # install scripts and the Homebrew formula download from.
-      - name: Tag every crate
+      # One tag for the whole release, on the prepared commit. The install scripts
+      # and the Homebrew formula download from it.
+      - name: Tag the release
         if: ${{ !inputs.dry_run }}
         run: |
-          cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name' > crates.txt
-          while read -r crate; do
-            git tag "${crate}-v$VERSION"
-          done < crates.txt
-          sed "s/\$/-v$VERSION/" crates.txt | xargs git push origin
-          rm crates.txt
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
 
       - name: Create GitHub release
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
-          gh release create "fusibile-v$VERSION" out/* \
-            --title "fusibile v$VERSION" \
+          gh release create "v$VERSION" out/* \
+            --title "remotefs v$VERSION" \
             --notes-file notes/RELEASE_NOTES.md \
             --verify-tag
 
@@ -374,7 +370,7 @@ jobs:
           SHA_MAC_X64=$(cat dl/x86_64-apple-darwin.sha256)
           SHA_LIN_ARM=$(cat dl/aarch64-unknown-linux-musl.sha256)
           SHA_LIN_X64=$(cat dl/x86_64-unknown-linux-musl.sha256)
-          BASE="https://github.com/veeso/remotefs-rs/releases/download/fusibile-v$VERSION"
+          BASE="https://github.com/veeso/remotefs-rs/releases/download/v$VERSION"
           mkdir -p tap/Formula
           cat > tap/Formula/fusibile.rb <<EOF
           class Fusibile < Formula
