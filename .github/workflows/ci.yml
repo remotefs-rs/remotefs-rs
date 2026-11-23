@@ -77,6 +77,8 @@ jobs:
           key: ${{ runner.os }}-cargo-linux-${{ hashFiles('**/Cargo.toml') }}
       - name: Install system libraries
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libsmbclient-dev libssl-dev pkg-config
+      - name: Allow FUSE mounts for other users
+        run: echo user_allow_other | sudo tee -a /etc/fuse.conf
       - name: Install just
         uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
         with:
@@ -85,14 +87,24 @@ jobs:
         uses: taiki-e/install-action@d438492cf8a250514fa2d34b30bc3c0dc37c65ff # v2.87.8
         with:
           tool: cargo-llvm-cov
+      - name: Install Minikube
+        uses: medyagh/setup-minikube@e3c7f79eb1e997eabccc536a6cf318a2b0fe19d9 # v0.0.20
+      - name: Export Minikube IP
+        run: echo "MINIKUBE_IP=$(minikube ip)" >> "$GITHUB_ENV"
+      - name: Start SMB and WebDAV containers
+        run: just containers_up
       - name: Build
         run: just build "--workspace"
+      - name: Test default features and documentation
+        run: just test
+        env:
+          RUST_LOG: trace
+      # Runs every suite of `test_suites`, including the ones that need Docker,
+      # FUSE, and Minikube, so the coverage report covers the integration tests.
       - name: Test with coverage
         run: just coverage
         env:
           RUST_LOG: trace
-      - name: Test with Docker containers
-        run: just test_containers
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
