@@ -15,32 +15,32 @@ fail() {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# A releases list where the monorepo's crate tags sit next to the fusibile tags.
+# A releases list where the older fusibile and crate tags sit next to the release tags.
 cat > "$WORK/mixed.json" <<'JSON'
 [
   {
-    "tag_name": "remotefs-v1.3.0"
+    "tag_name": "remotefs-ssh-v1.3.0"
   },
   {
-    "tag_name": "v1.0.1"
-  },
-  {
-    "tag_name": "fusibile-v1.2.0"
+    "tag_name": "v1.2.0"
   },
   {
     "tag_name": "fusibile-v1.1.0"
+  },
+  {
+    "tag_name": "v1.0.1"
   }
 ]
 JSON
 
-# A releases list with no fusibile release at all.
+# A releases list with no v* release at all.
 cat > "$WORK/no-fusibile.json" <<'JSON'
 [
   {
-    "tag_name": "remotefs-v1.3.0"
+    "tag_name": "remotefs-ssh-v1.3.0"
   },
   {
-    "tag_name": "v1.0.1"
+    "tag_name": "fusibile-v1.1.0"
   }
 ]
 JSON
@@ -55,16 +55,16 @@ run_latest() {
     )
 }
 
-# -- picks the newest fusibile tag and ignores the other tags ----------------
+# -- picks the newest v* tag and ignores the other tags ----------------------
 if ! version="$(run_latest "$WORK/mixed.json")"; then
     fail "latest_fusibile_version failed on a mixed releases list"
 elif [ "$version" != "1.2.0" ]; then
     fail "expected 1.2.0, got '$version'"
 fi
 
-# -- fails when no fusibile release exists -----------------------------------
+# -- fails when no v* release exists -----------------------------------------
 if run_latest "$WORK/no-fusibile.json" > /dev/null 2>&1; then
-    fail "expected failure when no fusibile tag exists"
+    fail "expected failure when no v* tag exists"
 fi
 
 if [ "$FAILURES" -eq 0 ]; then

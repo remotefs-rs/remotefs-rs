@@ -146,8 +146,9 @@ examples.
   `[workspace.package]` and mirrored in `[workspace.dependencies]` by
   `dist/release/bump_version.sh`. Commits follow Conventional Commits, and
   `cliff.toml` builds each crate's `CHANGELOG.md` from the commits under its
-  directory, bounded by its own tags. The Release workflow tags every crate,
-  publishes the `fusibile` binaries, and runs `just publish_all`. See
+  directory, bounded by the release tags. The Release workflow pushes one `vX.Y.Z`
+  tag, creates the `remotefs vX.Y.Z` GitHub release with the `fusibile` binaries,
+  and runs `just publish_all`. See
   `docs/release.md`.
 - **Supply-chain policy.** `deny.toml` is strict: license allowlist,
   `yanked = "deny"`, `unmaintained = "all"`, wildcard versions denied, and

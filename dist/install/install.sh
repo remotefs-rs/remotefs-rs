@@ -163,10 +163,10 @@ unsupported() {
     exit 1
 }
 
-# Prints the newest fusibile version found in a GitHub releases list. Only the
-# fusibile-v* tags count, because the monorepo also publishes a tag per crate.
+# Prints the newest version found in a GitHub releases list. Only the v* tags
+# count; the older fusibile-v* and per-crate tags are ignored.
 latest_fusibile_version() {
-    version="$(sed -n 's/.*"tag_name":[[:space:]]*"fusibile-v\([^"]*\)".*/\1/p' "$1" | head -n 1)"
+    version="$(sed -n 's/.*"tag_name":[[:space:]]*"v\([^"]*\)".*/\1/p' "$1" | head -n 1)"
     [ -n "${version}" ] || return 1
     printf '%s\n' "${version}"
 }
@@ -267,7 +267,7 @@ install_from_release() {
     esac
 
     asset="fusibile-v${VERSION}-${target}.tar.gz"
-    url="${GITHUB_URL}/releases/download/fusibile-v${VERSION}/${asset}"
+    url="${GITHUB_URL}/releases/download/v${VERSION}/${asset}"
     archive="${TMP_DIR}/${asset}"
 
     info "Downloading ${GREEN}fusibile v${VERSION}${NO_COLOR} from ${url} …"

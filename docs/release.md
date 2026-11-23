@@ -18,14 +18,13 @@ in the root `Cargo.toml`. Path dependencies between crates use the same version 
 `[workspace.dependencies]`. `dist/release/bump_version.sh` rewrites those entries,
 and the README dependency snippets, in one pass.
 
-Each crate is tagged with its own name, so its history stays easy to read:
+A release has a single git tag, `v<version>`, and a single GitHub release titled
+`remotefs v<version>`. Crates do not get their own tags. Older releases used a tag
+per crate, such as `remotefs-ssh-v1.1.2`, and `just changelog_all` still reads them
+to build the history of each crate.
 
-- `remotefs-v<version>` for the core library.
-- `remotefs-ssh-v<version>`, `remotefs-smb-v<version>`, and so on for the backends.
-- `fusibile-v<version>` for the command line program.
-
-The install scripts and the Homebrew formula download the `fusibile-v<version>`
-release, so that tag must exist for every fusibile release.
+The install scripts and the Homebrew formula download the `v<version>` release,
+so that tag must exist for every release.
 
 ## Running a release
 
@@ -43,7 +42,7 @@ A real run does these steps, in order:
 3. Checks that `Cargo.lock` changed only in the workspace member versions.
 4. Commits `chore: release v<version>` and pushes it to `main`.
 5. Builds `fusibile` for Linux (musl), macOS, and Windows.
-6. Tags every crate, creates the `fusibile-v<version>` GitHub release with the
+6. Tags the commit `v<version>`, creates the `remotefs v<version>` GitHub release with the
    binaries, the checksums, and both install scripts.
 7. Publishes every crate with `just publish_all`.
 8. Updates the Homebrew formula in the tap.
